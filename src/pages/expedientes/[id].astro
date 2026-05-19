@@ -1,0 +1,595 @@
+---
+import AppLayout from '../../layouts/AppLayout.astro'
+import { supabase, getSupabase } from '../../lib/supabase'
+
+const token = Astro.cookies.get('sb-access-token')?.value ?? ''
+const { data: { user } } = await supabase.auth.getUser(token)
+const uid = user?.id ?? ''
+const db = getSupabase(token)
+const { id } = Astro.params
+
+// Cargar expediente
+const { data: exp } = await db
+  .from('expedientes')
+  .select('*')
+  .eq('id', id).eq('user_id', uid)
+  .single()
+
+if (!exp) return Astro.redirect('/expedientes')
+
+// Cargar datos relacionados en paralelo
+const [
+  { data: inmueble },
+  { data: expComitentes },
+  { data: expTestigos },
+  { data: poligono },
+  { data: linderos },
+  { data: documentos },
+  { data: comitentesAll },
+  { data: testigosAll },
+] = await Promise.all([
+  db.from('inmuebles').select('*').eq('expediente_id', id).maybeSingle(),
+  db.from('exp_comitentes').select('*, comitentes(*)').eq('expediente_id', id),
+  db.from('exp_testigos').select('*, testigos(*)').eq('expediente_id', id),
+  db.from('poligono').select('*, lados(*), angulos(*)').eq('expediente_id', id).maybeSingle(),
+  db.from('linderos').select('*').eq('expediente_id', id).maybeSingle(),
+  db.from('documentos_generados').select('*').eq('expediente_id', id).order('generado_at', { ascending: false }),
+  db.from('comitentes').select('id,nombre,apellido,dni').eq('user_id', uid).order('apellido'),
+  db.from('testigos').select('id,nombre,apellido,dni').eq('user_id', uid).order('apellido'),
+])
+
+let successMsg = ''
+let errorMsg = ''
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  const action = form.get('_action') as string
+
+  if (action === 'guardar_inmueble') {
+    const payload = {
+      expediente_id: id,
+      departamento: form.get('departamento'),
+      localidad: form.get('localidad'),
+      circunscripcion: form.get('circunscripcion'),
+      seccion: form.get('seccion'),
+      fraccion: form.get('fraccion'),
+      manzana: form.get('manzana'),
+      parcela: form.get('parcela'),
+      subparcela: form.get('subparcela'),
+      matricula_catastral: form.get('matricula_catastral'),
+      matricula_registro: form.get('matricula_registro'),
+      tipo_inmueble: form.get('tipo_inmueble'),
+    }
+    const { error } = inmueble
+      ? await db.from('inmuebles').update(payload).eq('expediente_id', id)
+      : await db.from('inmuebles').insert(payload)
+    if (error) errorMsg = error.message
+    else successMsg = 'Inmueble guardado.'
+  }
+
+  if (action === 'guardar_mensura') {
+    await db.from('expedientes').update({
+      tipo_mensura: form.get('tipo_mensura'),
+      numero_expediente: form.get('numero_expediente'),
+      fecha_inicio: form.get('fecha_mensura') || null,
+    }).eq('id', id)
+
+    const polPayload = {
+      expediente_id: id,
+      superficie_m2: parseFloat(form.get('superficie_m2') as string) || null,
+      superficie_letras: form.get('superficie_letras'),
+      cantidad_lados: parseInt(form.get('cantidad_lados') as string) || 0,
+      cantidad_angulos: parseInt(form.get('cantidad_angulos') as string) || 0,
+    }
+    if (poligono) await db.from('poligono').update(polPayload).eq('expediente_id', id)
+    else await db.from('poligono').insert(polPayload)
+    successMsg = 'Mensura guardada.'
+  }
+
+  if (action === 'guardar_linderos') {
+    const lPayload = {
+      expediente_id: id,
+      norte_mensura: form.get('norte_mensura'),
+      sur_mensura: form.get('sur_mensura'),
+      este_mensura: form.get('este_mensura'),
+      oeste_mensura: form.get('oeste_mensura'),
+      linderos_iguales: form.get('linderos_iguales') === 'on',
+      norte_citacion: form.get('norte_citacion') || null,
+      sur_citacion: form.get('sur_citacion') || null,
+      este_citacion: form.get('este_citacion') || null,
+      oeste_citacion: form.get('oeste_citacion') || null,
+    }
+    if (linderos) await db.from('linderos').update(lPayload).eq('expediente_id', id)
+    else await db.from('linderos').insert(lPayload)
+    successMsg = 'Linderos guardados.'
+  }
+
+  if (action === 'agregar_comitente') {
+    const comitenteId = form.get('comitente_id') as string
+    const rol = form.get('rol') as string
+    if (comitenteId) {
+      await db.from('exp_comitentes').insert({
+        expediente_id: id, comitente_id: comitenteId, rol, orden: (expComitentes?.length ?? 0) + 1
+      })
+      successMsg = 'Comitente agregado.'
+    }
+  }
+
+  if (action === 'crear_comitente') {
+    const { data: newC } = await db.from('comitentes').insert({
+      user_id: uid,
+      nombre: form.get('c_nombre'),
+      apellido: form.get('c_apellido'),
+      dni: form.get('c_dni'),
+      domicilio: form.get('c_domicilio'),
+      telefono: form.get('c_telefono'),
+      email: form.get('c_email'),
+    }).select('id').single()
+    if (newC) {
+      await db.from('exp_comitentes').insert({
+        expediente_id: id, comitente_id: newC.id, rol: form.get('c_rol'), orden: (expComitentes?.length ?? 0) + 1
+      })
+      successMsg = 'Comitente creado y agregado.'
+    }
+  }
+
+  if (action === 'quitar_comitente') {
+    await db.from('exp_comitentes').delete().eq('id', form.get('exp_comitente_id'))
+    successMsg = 'Comitente quitado.'
+  }
+
+  if (action === 'agregar_testigo') {
+    const testigoId = form.get('testigo_id') as string
+    if (testigoId) {
+      await db.from('exp_testigos').insert({ expediente_id: id, testigo_id: testigoId })
+      successMsg = 'Testigo agregado.'
+    }
+  }
+
+  if (action === 'crear_testigo') {
+    const { data: newT } = await db.from('testigos').insert({
+      user_id: uid,
+      nombre: form.get('t_nombre'),
+      apellido: form.get('t_apellido'),
+      dni: form.get('t_dni'),
+      domicilio: form.get('t_domicilio'),
+    }).select('id').single()
+    if (newT) {
+      await db.from('exp_testigos').insert({ expediente_id: id, testigo_id: newT.id })
+      successMsg = 'Testigo creado y agregado.'
+    }
+  }
+
+  if (action === 'cambiar_estado') {
+    const nuevoEstado = form.get('nuevo_estado') as string
+    await db.from('expedientes').update({ estado: nuevoEstado }).eq('id', id)
+    successMsg = 'Estado actualizado.'
+  }
+
+  return Astro.redirect(`/expedientes/${id}?tab=${form.get('_tab') ?? 'comitente'}&ok=1`)
+}
+
+const activeTab  = Astro.url.searchParams.get('tab') ?? 'comitente'
+const ok         = Astro.url.searchParams.get('ok')
+const warn       = Astro.url.searchParams.get('warn')
+
+const DEPARTAMENTOS = [
+  'Capital','Bella Vista','Berón de Astrada','Concepción','Curuzú Cuatiá',
+  'Empedrado','Esquina','General Alvear','General Paz','Goya','Itatí',
+  'Ituzaingó','Lavalle','Mburucuyá','Mercedes','Monte Caseros','Paso de los Libres',
+  'Saladas','San Cosme','San Luis del Palmar','San Martín','San Miguel',
+  'San Roque','Santo Tomé','Sauce'
+]
+const TIPOS_MENSURA = ['División','Unificación','Simple','Relevamiento','Subdivisión','Otro']
+---
+<AppLayout title={`Expediente ${exp.numero_expediente ?? ''}`}>
+  <div class="page-header">
+    <div>
+      <a href="/expedientes" class="back-link">← Expedientes</a>
+      <h2>
+        {exp.numero_expediente ? `Expediente ${exp.numero_expediente}` : 'Sin número'}
+        <span class={`badge badge-${exp.estado}`} style="margin-left:0.5rem">{exp.estado}</span>
+      </h2>
+    </div>
+    <form method="POST">
+      <input type="hidden" name="_action" value="cambiar_estado" />
+      <input type="hidden" name="_tab" value={activeTab} />
+      <select name="nuevo_estado" class="input" style="max-width:160px;display:inline-block">
+        {['borrador','en_proceso','finalizado'].map(e => (
+          <option value={e} selected={exp.estado === e}>{e.replace('_',' ')}</option>
+        ))}
+      </select>
+      <button type="submit" class="btn btn-secondary btn-sm">Cambiar estado</button>
+    </form>
+  </div>
+
+  {ok      && <div class="alert alert-success" style="margin-bottom:1rem">Guardado correctamente.</div>}
+  {warn === 'sin_seleccion' && <div class="alert alert-error" style="margin-bottom:1rem">Seleccioná al menos un documento para generar.</div>}
+  {errorMsg && <div class="alert alert-error" style="margin-bottom:1rem">{errorMsg}</div>}
+
+  <div class="card">
+    <div class="tabs-nav">
+      {[
+        { key: 'comitente', label: '1. Comitente' },
+        { key: 'inmueble',  label: '2. Inmueble' },
+        { key: 'mensura',   label: '3. Mensura' },
+        { key: 'testigos',  label: '4. Testigos' },
+        { key: 'documentos',label: '5. Documentos' },
+      ].map(t => (
+        <a href={`/expedientes/${id}?tab=${t.key}`} class={`tab-btn ${activeTab === t.key ? 'active' : ''}`}>
+          {t.label}
+        </a>
+      ))}
+    </div>
+
+    <!-- TAB 1: COMITENTE -->
+    {activeTab === 'comitente' && (
+      <div>
+        <h3 style="margin-bottom:1rem">Comitentes del expediente</h3>
+        {(expComitentes ?? []).length > 0 && (
+          <div style="margin-bottom:1.5rem">
+            <table>
+              <thead><tr><th>Nombre</th><th>DNI</th><th>Rol</th><th></th></tr></thead>
+              <tbody>
+                {expComitentes!.map((ec: any) => (
+                  <tr>
+                    <td>{ec.comitentes?.apellido}, {ec.comitentes?.nombre}</td>
+                    <td>{ec.comitentes?.dni}</td>
+                    <td>{ec.rol}</td>
+                    <td>
+                      <form method="POST" style="display:inline">
+                        <input type="hidden" name="_action" value="quitar_comitente" />
+                        <input type="hidden" name="_tab" value="comitente" />
+                        <input type="hidden" name="exp_comitente_id" value={ec.id} />
+                        <button type="submit" class="btn btn-danger btn-sm">Quitar</button>
+                      </form>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <details class="form-section">
+          <summary>Buscar comitente existente</summary>
+          <form method="POST" style="margin-top:1rem">
+            <input type="hidden" name="_action" value="agregar_comitente" />
+            <input type="hidden" name="_tab" value="comitente" />
+            <div class="form-grid form-grid-2">
+              <div class="field">
+                <label>Comitente</label>
+                <select class="input" name="comitente_id">
+                  <option value="">Seleccionar...</option>
+                  {(comitentesAll ?? []).map((c: any) => (
+                    <option value={c.id}>{c.apellido}, {c.nombre} — DNI {c.dni}</option>
+                  ))}
+                </select>
+              </div>
+              <div class="field">
+                <label>Rol</label>
+                <select class="input" name="rol">
+                  <option value="titular">Titular</option>
+                  <option value="apoderado">Apoderado</option>
+                  <option value="heredero">Heredero</option>
+                </select>
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary" style="margin-top:0.75rem">Agregar comitente</button>
+          </form>
+        </details>
+
+        <details class="form-section" style="margin-top:1rem">
+          <summary>Crear nuevo comitente</summary>
+          <form method="POST" style="margin-top:1rem">
+            <input type="hidden" name="_action" value="crear_comitente" />
+            <input type="hidden" name="_tab" value="comitente" />
+            <div class="form-grid form-grid-2">
+              <div class="field"><label>Nombre</label><input class="input" name="c_nombre" required /></div>
+              <div class="field"><label>Apellido</label><input class="input" name="c_apellido" required /></div>
+              <div class="field"><label>DNI</label><input class="input" name="c_dni" /></div>
+              <div class="field"><label>Teléfono</label><input class="input" name="c_telefono" /></div>
+              <div class="field"><label>Email</label><input class="input" name="c_email" type="email" /></div>
+              <div class="field">
+                <label>Rol</label>
+                <select class="input" name="c_rol">
+                  <option value="titular">Titular</option>
+                  <option value="apoderado">Apoderado</option>
+                  <option value="heredero">Heredero</option>
+                </select>
+              </div>
+            </div>
+            <div class="field" style="margin-top:0.75rem"><label>Domicilio</label><input class="input" name="c_domicilio" /></div>
+            <button type="submit" class="btn btn-primary" style="margin-top:0.75rem">Crear y agregar</button>
+          </form>
+        </details>
+      </div>
+    )}
+
+    <!-- TAB 2: INMUEBLE -->
+    {activeTab === 'inmueble' && (
+      <form method="POST">
+        <input type="hidden" name="_action" value="guardar_inmueble" />
+        <input type="hidden" name="_tab" value="inmueble" />
+
+        <div class="form-grid form-grid-2" style="margin-bottom:1rem">
+          <div class="field">
+            <label>Departamento</label>
+            <select class="input" name="departamento">
+              <option value="">Seleccionar...</option>
+              {DEPARTAMENTOS.map(d => (
+                <option value={d} selected={inmueble?.departamento === d}>{d}</option>
+              ))}
+            </select>
+          </div>
+          <div class="field">
+            <label>Localidad</label>
+            <input class="input" name="localidad" value={inmueble?.localidad ?? ''} />
+          </div>
+          <div class="field">
+            <label>Circunscripción</label>
+            <input class="input" name="circunscripcion" value={inmueble?.circunscripcion ?? ''} />
+          </div>
+          <div class="field">
+            <label>Sección</label>
+            <input class="input" name="seccion" value={inmueble?.seccion ?? ''} />
+          </div>
+          <div class="field">
+            <label>Fracción</label>
+            <input class="input" name="fraccion" value={inmueble?.fraccion ?? ''} />
+          </div>
+          <div class="field">
+            <label>Manzana</label>
+            <input class="input" name="manzana" value={inmueble?.manzana ?? ''} />
+          </div>
+          <div class="field">
+            <label>Parcela</label>
+            <input class="input" name="parcela" value={inmueble?.parcela ?? ''} />
+          </div>
+          <div class="field">
+            <label>Subparcela</label>
+            <input class="input" name="subparcela" value={inmueble?.subparcela ?? ''} />
+          </div>
+          <div class="field">
+            <label>Matrícula catastral</label>
+            <input class="input" name="matricula_catastral" value={inmueble?.matricula_catastral ?? ''} />
+          </div>
+          <div class="field">
+            <label>Matrícula registro</label>
+            <input class="input" name="matricula_registro" value={inmueble?.matricula_registro ?? ''} />
+          </div>
+        </div>
+
+        <div class="field" style="margin-bottom:1.5rem">
+          <label>Tipo de inmueble</label>
+          <div style="display:flex;gap:1.5rem;margin-top:4px">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400">
+              <input type="radio" name="tipo_inmueble" value="urbano" checked={inmueble?.tipo_inmueble === 'urbano'} /> Urbano
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400">
+              <input type="radio" name="tipo_inmueble" value="rural" checked={inmueble?.tipo_inmueble === 'rural'} /> Rural
+            </label>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Guardar inmueble</button>
+      </form>
+    )}
+
+    <!-- TAB 3: MENSURA -->
+    {activeTab === 'mensura' && (
+      <div>
+        <form method="POST">
+          <input type="hidden" name="_action" value="guardar_mensura" />
+          <input type="hidden" name="_tab" value="mensura" />
+
+          <div class="section-label">Datos generales</div>
+          <div class="form-grid form-grid-2" style="margin-bottom:1.25rem">
+            <div class="field">
+              <label>Tipo de mensura</label>
+              <select class="input" name="tipo_mensura">
+                {TIPOS_MENSURA.map(t => (
+                  <option value={t} selected={exp.tipo_mensura === t}>{t}</option>
+                ))}
+              </select>
+            </div>
+            <div class="field">
+              <label>Nº Expediente</label>
+              <input class="input" name="numero_expediente" value={exp.numero_expediente ?? ''} />
+            </div>
+            <div class="field">
+              <label>Fecha de mensura</label>
+              <input class="input" type="date" name="fecha_mensura" value={exp.fecha_inicio ?? ''} />
+            </div>
+          </div>
+
+          <div class="section-label">Polígono</div>
+          <div class="form-grid form-grid-2" style="margin-bottom:1rem">
+            <div class="field">
+              <label>Superficie total (m²)</label>
+              <input class="input" type="number" step="0.0001" name="superficie_m2" value={poligono?.superficie_m2 ?? ''} />
+            </div>
+            <div class="field">
+              <label>Superficie en letras</label>
+              <input class="input" name="superficie_letras" value={poligono?.superficie_letras ?? ''} />
+            </div>
+            <div class="field">
+              <label>Cantidad de lados</label>
+              <input class="input" type="number" name="cantidad_lados" id="cant_lados" value={poligono?.cantidad_lados ?? ''} min="0" />
+            </div>
+            <div class="field">
+              <label>Cantidad de ángulos</label>
+              <input class="input" type="number" name="cantidad_angulos" id="cant_angulos" value={poligono?.cantidad_angulos ?? ''} min="0" />
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary" style="margin-bottom:1.5rem">Guardar mensura</button>
+        </form>
+
+        <form method="POST">
+          <input type="hidden" name="_action" value="guardar_linderos" />
+          <input type="hidden" name="_tab" value="mensura" />
+
+          <div class="section-label">Linderos mensura</div>
+          <div class="form-grid form-grid-2" style="margin-bottom:1rem">
+            <div class="field"><label>Norte</label><input class="input" name="norte_mensura" value={linderos?.norte_mensura ?? ''} /></div>
+            <div class="field"><label>Sur</label><input class="input" name="sur_mensura" value={linderos?.sur_mensura ?? ''} /></div>
+            <div class="field"><label>Este</label><input class="input" name="este_mensura" value={linderos?.este_mensura ?? ''} /></div>
+            <div class="field"><label>Oeste</label><input class="input" name="oeste_mensura" value={linderos?.oeste_mensura ?? ''} /></div>
+          </div>
+
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:1rem;font-weight:400">
+            <input type="checkbox" name="linderos_iguales" id="lind_iguales" checked={linderos?.linderos_iguales} />
+            Linderos de citación iguales a mensura
+          </label>
+
+          <div id="linderos_citacion" style={linderos?.linderos_iguales ? 'display:none' : ''}>
+            <div class="section-label">Linderos citación</div>
+            <div class="form-grid form-grid-2" style="margin-bottom:1rem">
+              <div class="field"><label>Norte</label><input class="input" name="norte_citacion" value={linderos?.norte_citacion ?? ''} /></div>
+              <div class="field"><label>Sur</label><input class="input" name="sur_citacion" value={linderos?.sur_citacion ?? ''} /></div>
+              <div class="field"><label>Este</label><input class="input" name="este_citacion" value={linderos?.este_citacion ?? ''} /></div>
+              <div class="field"><label>Oeste</label><input class="input" name="oeste_citacion" value={linderos?.oeste_citacion ?? ''} /></div>
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Guardar linderos</button>
+        </form>
+      </div>
+    )}
+
+    <!-- TAB 4: TESTIGOS -->
+    {activeTab === 'testigos' && (
+      <div>
+        <h3 style="margin-bottom:1rem">Testigos del expediente</h3>
+        {(expTestigos ?? []).length > 0 && (
+          <div style="margin-bottom:1.5rem">
+            <table>
+              <thead><tr><th>Nombre</th><th>DNI</th><th>Domicilio</th></tr></thead>
+              <tbody>
+                {expTestigos!.map((et: any) => (
+                  <tr>
+                    <td>{et.testigos?.apellido}, {et.testigos?.nombre}</td>
+                    <td>{et.testigos?.dni}</td>
+                    <td>{et.testigos?.domicilio}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <details class="form-section">
+          <summary>Buscar testigo existente</summary>
+          <form method="POST" style="margin-top:1rem">
+            <input type="hidden" name="_action" value="agregar_testigo" />
+            <input type="hidden" name="_tab" value="testigos" />
+            <div class="field" style="max-width:360px">
+              <label>Testigo</label>
+              <select class="input" name="testigo_id">
+                <option value="">Seleccionar...</option>
+                {(testigosAll ?? []).map((t: any) => (
+                  <option value={t.id}>{t.apellido}, {t.nombre} — DNI {t.dni}</option>
+                ))}
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary" style="margin-top:0.75rem">Agregar testigo</button>
+          </form>
+        </details>
+
+        <details class="form-section" style="margin-top:1rem">
+          <summary>Crear nuevo testigo</summary>
+          <form method="POST" style="margin-top:1rem">
+            <input type="hidden" name="_action" value="crear_testigo" />
+            <input type="hidden" name="_tab" value="testigos" />
+            <div class="form-grid form-grid-2">
+              <div class="field"><label>Nombre</label><input class="input" name="t_nombre" required /></div>
+              <div class="field"><label>Apellido</label><input class="input" name="t_apellido" required /></div>
+              <div class="field"><label>DNI</label><input class="input" name="t_dni" /></div>
+              <div class="field"><label>Domicilio</label><input class="input" name="t_domicilio" /></div>
+            </div>
+            <button type="submit" class="btn btn-primary" style="margin-top:0.75rem">Crear y agregar</button>
+          </form>
+        </details>
+      </div>
+    )}
+
+    <!-- TAB 5: DOCUMENTOS -->
+    {activeTab === 'documentos' && (
+      <div>
+        <h3 style="margin-bottom:0.25rem">Generar documentos</h3>
+        <p style="font-size:0.875rem;color:var(--color-text-secondary);margin-bottom:1.5rem">
+          Seleccioná los documentos a generar para este expediente.
+        </p>
+
+        <form method="POST" action="/api/documentos/generar">
+          <input type="hidden" name="expediente_id" value={id} />
+          <div style="display:flex;flex-direction:column;gap:0.75rem;margin-bottom:1.5rem">
+            {[
+              { value: 'nota_elevacion',      label: 'Nota de Elevación' },
+              { value: 'capitulo_ubicacion',   label: 'Capítulo Ubicación / Extensión / Límites' },
+              { value: 'acta_mensura',         label: 'Acta de Mensura y Amojonamiento' },
+              { value: 'citacion_linderos',    label: 'Citación a Linderos' },
+            ].map(doc => (
+              <label style="display:flex;align-items:center;gap:10px;font-weight:400;cursor:pointer">
+                <input type="checkbox" name="tipos[]" value={doc.value} />
+                {doc.label}
+              </label>
+            ))}
+          </div>
+          <button type="submit" class="btn btn-primary">Generar seleccionados</button>
+        </form>
+
+        {(documentos ?? []).length > 0 && (
+          <div style="margin-top:2rem">
+            <h4 style="margin-bottom:0.75rem">Documentos generados</h4>
+            <table>
+              <thead><tr><th>Tipo</th><th>Fecha</th><th>Estado</th><th>Descarga</th></tr></thead>
+              <tbody>
+                {documentos!.map((doc: any) => (
+                  <tr>
+                    <td style="text-transform:capitalize">{doc.tipo_documento.replace(/_/g,' ')}</td>
+                    <td>{new Date(doc.generado_at).toLocaleDateString('es-AR')}</td>
+                    <td>
+                      {doc.estado === 'error_storage'
+                        ? <span class="badge badge-borrador">sin archivo</span>
+                        : <span class="badge badge-finalizado">generado</span>
+                      }
+                    </td>
+                    <td>
+                      {doc.storage_path
+                        ? <a href={`/api/documentos/descargar?path=${doc.storage_path}`} class="btn btn-secondary btn-sm">Descargar</a>
+                        : <span style="color:var(--color-muted);font-size:0.8125rem">No disponible</span>
+                      }
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    )}
+  </div>
+</AppLayout>
+
+<script>
+  const chk = document.getElementById('lind_iguales') as HTMLInputElement
+  const div = document.getElementById('linderos_citacion')
+  if (chk && div) {
+    chk.addEventListener('change', () => {
+      div.style.display = chk.checked ? 'none' : ''
+    })
+  }
+</script>
+
+<style>
+.page-header { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:1.5rem; gap:1rem; flex-wrap:wrap; }
+.back-link { font-size:0.875rem; color:var(--color-text-secondary); display:block; margin-bottom:0.25rem; text-decoration:none; }
+.back-link:hover { color:var(--color-primary); }
+.page-header h2 { font-size:1.5rem; display:flex; align-items:center; }
+.section-label { font-weight:600; font-size:0.8125rem; color:var(--color-primary); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:0.75rem; margin-top:0.5rem; }
+.form-section { border:1px solid var(--color-border); border-radius:var(--radius-md); padding:0.875rem 1rem; }
+.form-section summary { cursor:pointer; font-weight:500; color:var(--color-primary); font-size:0.9rem; }
+.tab-btn { text-decoration:none; }
+</style>

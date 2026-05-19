@@ -1,0 +1,80 @@
+---
+import AppLayout from '../../layouts/AppLayout.astro'
+import { supabase, getSupabase } from '../../lib/supabase'
+
+const token = Astro.cookies.get('sb-access-token')?.value ?? ''
+const { data: { user } } = await supabase.auth.getUser(token)
+const uid = user?.id ?? ''
+const db = getSupabase(token)
+
+const busqueda = Astro.url.searchParams.get('q') ?? ''
+
+let query = db
+  .from('comitentes')
+  .select('id, nombre, apellido, dni, telefono, email')
+  .eq('user_id', uid)
+  .order('apellido')
+
+if (busqueda) {
+  query = query.or(`nombre.ilike.%${busqueda}%,apellido.ilike.%${busqueda}%,dni.ilike.%${busqueda}%`)
+}
+
+const { data: comitentes } = await query
+---
+<AppLayout title="Comitentes">
+  <div class="page-header">
+    <h2>Comitentes</h2>
+  </div>
+
+  <div class="card" style="margin-bottom:1rem">
+    <form class="filters" method="GET">
+      <input
+        class="input"
+        name="q"
+        type="search"
+        placeholder="Buscar por nombre, apellido o DNI..."
+        value={busqueda}
+        style="max-width:320px"
+      />
+      <button type="submit" class="btn btn-secondary">Buscar</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Apellido y nombre</th>
+            <th>DNI</th>
+            <th>Teléfono</th>
+            <th>Email</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(comitentes ?? []).length === 0 && (
+            <tr>
+              <td colspan="4" style="text-align:center;color:var(--color-text-secondary);padding:2rem">
+                {busqueda ? 'Sin resultados para la búsqueda.' : 'No hay comitentes registrados aún.'}
+              </td>
+            </tr>
+          )}
+          {(comitentes ?? []).map(c => (
+            <tr>
+              <td><strong>{c.apellido}, {c.nombre}</strong></td>
+              <td>{c.dni ?? '—'}</td>
+              <td>{c.telefono ?? '—'}</td>
+              <td>{c.email ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</AppLayout>
+
+<style>
+.page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
+.page-header h2 { font-size:1.5rem; }
+.filters { display:flex; gap:0.75rem; align-items:center; }
+</style>

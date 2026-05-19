@@ -1,0 +1,43 @@
+---
+import '../styles/global.css'
+import Sidebar from '../components/sidebar/Sidebar.astro'
+
+interface Props { title?: string }
+const { title = 'NICA' } = Astro.props
+
+const { cookies, redirect } = Astro
+const accessToken = cookies.get('sb-access-token')
+const refreshToken = cookies.get('sb-refresh-token')
+if (!accessToken || !refreshToken) {
+  return redirect('/login')
+}
+---
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title} — NICA</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+</head>
+<body>
+  <div class="app-shell">
+    <Sidebar />
+    <main class="app-main">
+      <slot />
+    </main>
+  </div>
+</body>
+</html>
+
+<style>
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+.app-main {
+  flex: 1;
+  padding: 2rem;
+  overflow-y: auto;
+}
+</style>

@@ -1,0 +1,113 @@
+---
+import AppLayout from '../../layouts/AppLayout.astro'
+import { supabase, getSupabase } from '../../lib/supabase'
+
+const token = Astro.cookies.get('sb-access-token')?.value ?? ''
+const { data: { user } } = await supabase.auth.getUser(token)
+const uid = user?.id ?? ''
+const db = getSupabase(token)
+
+const estado   = Astro.url.searchParams.get('estado') ?? 'todos'
+const busqueda = Astro.url.searchParams.get('q') ?? ''
+
+let query = db
+  .from('expedientes')
+  .select(`
+    id, numero_expediente, tipo_mensura, estado, fecha_inicio,
+    exp_comitentes ( orden, comitentes ( nombre, apellido ) )
+  `)
+  .eq('user_id', uid)
+  .order('created_at', { ascending: false })
+
+if (estado !== 'todos') query = query.eq('estado', estado)
+if (busqueda)           query = query.ilike('numero_expediente', `%${busqueda}%`)
+
+const { data: expedientes } = await query
+
+// Función helper para obtener el comitente principal (menor orden)
+function comitentePrincipal(exp: any): string {
+  const lista = exp.exp_comitentes ?? []
+  if (!lista.length) return '—'
+  const principal = lista.sort((a: any, b: any) => a.orden - b.orden)[0]
+  const c = principal?.comitentes
+  return c ? `${c.apellido}, ${c.nombre}` : '—'
+}
+---
+<AppLayout title="Expedientes">
+  <div class="page-header">
+    <h2>Expedientes</h2>
+    <a href="/expedientes/nuevo" class="btn btn-primary">+ Nuevo expediente</a>
+  </div>
+
+  <div class="card" style="margin-bottom:1rem">
+    <form class="filters" method="GET">
+      <input
+        class="input"
+        name="q"
+        type="search"
+        placeholder="Buscar por nº expediente..."
+        value={busqueda}
+        style="max-width:280px"
+      />
+      <select class="input" name="estado" style="max-width:180px">
+        {['todos','borrador','en_proceso','finalizado'].map(e => (
+          <option value={e} selected={estado === e}>
+            {e === 'todos' ? 'Todos los estados' : e.replace('_', ' ')}
+          </option>
+        ))}
+      </select>
+      <button type="submit" class="btn btn-secondary">Filtrar</button>
+      {(estado !== 'todos' || busqueda) && (
+        <a href="/expedientes" class="btn btn-secondary">Limpiar</a>
+      )}
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Nº Expediente</th>
+            <th>Tipo mensura</th>
+            <th>Comitente principal</th>
+            <th>Estado</th>
+            <th>Fecha inicio</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(expedientes ?? []).length === 0 && (
+            <tr>
+              <td colspan="6" style="text-align:center;color:var(--color-text-secondary);padding:2rem">
+                {busqueda || estado !== 'todos' ? 'Sin resultados para el filtro aplicado.' : 'No hay expedientes creados aún.'}
+              </td>
+            </tr>
+          )}
+          {(expedientes ?? []).map(exp => (
+            <tr>
+              <td><strong>{exp.numero_expediente ?? '—'}</strong></td>
+              <td>{exp.tipo_mensura ?? '—'}</td>
+              <td>{comitentePrincipal(exp)}</td>
+              <td>
+                <span class={`badge badge-${exp.estado ?? 'borrador'}`}>
+                  {(exp.estado ?? 'borrador').replace('_', ' ')}
+                </span>
+              </td>
+              <td>{exp.fecha_inicio ? new Date(exp.fecha_inicio).toLocaleDateString('es-AR') : '—'}</td>
+              <td>
+                <a href={`/expedientes/${exp.id}`} class="btn btn-secondary btn-sm">Ver / Editar</a>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</AppLayout>
+
+<style>
+.page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
+.page-header h2 { font-size:1.5rem; }
+.filters { display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; }
+</style>

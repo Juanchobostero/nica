@@ -1,0 +1,78 @@
+---
+import AppLayout from '../../layouts/AppLayout.astro'
+import { supabase, getSupabase } from '../../lib/supabase'
+
+const token = Astro.cookies.get('sb-access-token')?.value ?? ''
+const { data: { user } } = await supabase.auth.getUser(token)
+const uid = user?.id ?? ''
+const db = getSupabase(token)
+
+let errorMsg = ''
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  const { data, error } = await db.from('expedientes').insert({
+    user_id: uid,
+    numero_expediente: form.get('numero_expediente') || null,
+    tipo_mensura: form.get('tipo_mensura') || null,
+    estado: 'borrador',
+    fecha_inicio: form.get('fecha_inicio') || null,
+    observaciones: form.get('observaciones') || null,
+  }).select('id').single()
+
+  if (error) { errorMsg = error.message }
+  else { return Astro.redirect(`/expedientes/${data.id}`) }
+}
+
+const TIPOS_MENSURA = ['División', 'Unificación', 'Simple', 'Relevamiento', 'Subdivisión', 'Otro']
+---
+<AppLayout title="Nuevo expediente">
+  <div class="page-header">
+    <div>
+      <a href="/expedientes" class="back-link">← Expedientes</a>
+      <h2>Nuevo expediente</h2>
+    </div>
+  </div>
+
+  {errorMsg && <div class="alert alert-error" style="margin-bottom:1rem">{errorMsg}</div>}
+
+  <div class="card" style="max-width:700px">
+    <p style="color:var(--color-text-secondary);font-size:0.875rem;margin-bottom:1.5rem">
+      Completá los datos del expediente. Podés guardar y continuar luego.
+    </p>
+    <form method="POST">
+      <div class="form-grid form-grid-2" style="margin-bottom:1rem">
+        <div class="field">
+          <label for="numero_expediente">Nº Expediente</label>
+          <input class="input" id="numero_expediente" name="numero_expediente" type="text" placeholder="Ej: 2024-001" />
+        </div>
+        <div class="field">
+          <label for="tipo_mensura">Tipo de mensura</label>
+          <select class="input" id="tipo_mensura" name="tipo_mensura">
+            <option value="">Seleccionar...</option>
+            {TIPOS_MENSURA.map(t => <option value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div class="field">
+          <label for="fecha_inicio">Fecha de inicio</label>
+          <input class="input" id="fecha_inicio" name="fecha_inicio" type="date" />
+        </div>
+      </div>
+      <div class="field" style="margin-bottom:1.5rem">
+        <label for="observaciones">Observaciones</label>
+        <textarea class="input" id="observaciones" name="observaciones" rows="3" style="resize:vertical"></textarea>
+      </div>
+      <div style="display:flex;gap:0.75rem;justify-content:flex-end">
+        <a href="/expedientes" class="btn btn-secondary">Cancelar</a>
+        <button type="submit" class="btn btn-primary">Crear y continuar →</button>
+      </div>
+    </form>
+  </div>
+</AppLayout>
+
+<style>
+.page-header { margin-bottom:1.5rem; }
+.back-link { font-size:0.875rem; color:var(--color-text-secondary); display:block; margin-bottom:0.25rem; text-decoration:none; }
+.back-link:hover { color:var(--color-primary); text-decoration:none; }
+.page-header h2 { font-size:1.5rem; }
+</style>

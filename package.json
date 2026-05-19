@@ -12,6 +12,9 @@
     "astro": "astro"
   },
   "dependencies": {
-    "astro": "^6.2.1"
+    "@astrojs/node": "^10.1.0",
+    "@supabase/supabase-js": "^2.105.4",
+    "astro": "^6.2.1",
+    "pdf-lib": "^1.17.1"
   }
 }

@@ -1,0 +1,88 @@
+---
+import AppLayout from '../layouts/AppLayout.astro'
+import { supabase, getSupabase } from '../lib/supabase'
+
+const token = Astro.cookies.get('sb-access-token')?.value ?? ''
+const { data: { user } } = await supabase.auth.getUser(token)
+const uid = user?.id ?? ''
+const db = getSupabase(token)
+
+const [{ count: total }, { count: enProceso }, { count: finalizado }, { count: docs }] = await Promise.all([
+  db.from('expedientes').select('*', { count: 'exact', head: true }).eq('user_id', uid),
+  db.from('expedientes').select('*', { count: 'exact', head: true }).eq('user_id', uid).eq('estado', 'en_proceso'),
+  db.from('expedientes').select('*', { count: 'exact', head: true }).eq('user_id', uid).eq('estado', 'finalizado'),
+  db.from('documentos_generados').select('*', { count: 'exact', head: true }),
+])
+
+const { data: ultimos } = await db
+  .from('expedientes')
+  .select('id, numero_expediente, tipo_mensura, estado, fecha_inicio')
+  .eq('user_id', uid)
+  .order('created_at', { ascending: false })
+  .limit(5)
+---
+<AppLayout title="Dashboard">
+  <div class="page-header">
+    <h2>Dashboard</h2>
+    <span class="user-chip">{user?.email}</span>
+  </div>
+
+  <div class="stats-grid">
+    {[
+      { label: 'Total expedientes', value: total ?? 0, color: 'var(--color-primary)' },
+      { label: 'En proceso',        value: enProceso ?? 0, color: 'var(--color-warning)' },
+      { label: 'Finalizados',       value: finalizado ?? 0, color: 'var(--color-success)' },
+      { label: 'Docs generados',    value: docs ?? 0, color: 'var(--color-accent)' },
+    ].map(s => (
+      <div class="stat-card card">
+        <span class="stat-value" style={`color:${s.color}`}>{s.value}</span>
+        <span class="stat-label">{s.label}</span>
+      </div>
+    ))}
+  </div>
+
+  <div class="card" style="margin-top:1.5rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+      <h3>Últimos expedientes</h3>
+      <a href="/expedientes/nuevo" class="btn btn-primary btn-sm">+ Nuevo</a>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Nº Expediente</th>
+            <th>Tipo</th>
+            <th>Estado</th>
+            <th>Fecha</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {(ultimos ?? []).length === 0 && (
+            <tr><td colspan="5" style="text-align:center;color:var(--color-text-secondary);padding:2rem">No hay expedientes aún</td></tr>
+          )}
+          {(ultimos ?? []).map(exp => (
+            <tr>
+              <td><strong>{exp.numero_expediente ?? '—'}</strong></td>
+              <td>{exp.tipo_mensura ?? '—'}</td>
+              <td><span class={`badge badge-${exp.estado}`}>{exp.estado}</span></td>
+              <td>{exp.fecha_inicio ? new Date(exp.fecha_inicio).toLocaleDateString('es-AR') : '—'}</td>
+              <td><a href={`/expedientes/${exp.id}`} class="btn btn-secondary btn-sm">Ver</a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</AppLayout>
+
+<style>
+.page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
+.page-header h2 { font-size:1.5rem; }
+.user-chip { background:var(--color-surface); border:1px solid var(--color-border); border-radius:999px; padding:4px 14px; font-size:0.875rem; color:var(--color-text-secondary); }
+.stats-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:1rem; }
+@media (max-width:768px) { .stats-grid { grid-template-columns:1fr 1fr; } }
+.stat-card { text-align:center; }
+.stat-value { display:block; font-family:var(--font-display); font-size:2.25rem; font-weight:700; }
+.stat-label { font-size:0.8125rem; color:var(--color-text-secondary); }
+</style>

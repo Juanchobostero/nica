@@ -1,0 +1,82 @@
+---
+import AppLayout from '../layouts/AppLayout.astro'
+import { supabase, getSupabase } from '../lib/supabase'
+
+const token = Astro.cookies.get('sb-access-token')?.value ?? ''
+const { data: { user } } = await supabase.auth.getUser(token)
+const uid = user?.id ?? ''
+const db = getSupabase(token)
+
+let successMsg = ''
+let errorMsg = ''
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  const payload = {
+    id: uid,
+    nombre: form.get('nombre'),
+    apellido: form.get('apellido'),
+    matricula: form.get('matricula'),
+    telefono: form.get('telefono'),
+    email: form.get('email'),
+    domicilio: form.get('domicilio'),
+  }
+  const { error } = await db.from('profiles').upsert(payload)
+  if (error) errorMsg = error.message
+  else successMsg = 'Perfil actualizado correctamente.'
+}
+
+const { data: profile } = await db
+  .from('profiles')
+  .select('*')
+  .eq('id', uid)
+  .maybeSingle()
+---
+<AppLayout title="Perfil">
+  <div class="page-header">
+    <h2>Mi perfil</h2>
+  </div>
+
+  {successMsg && <div class="alert alert-success" style="margin-bottom:1rem">{successMsg}</div>}
+  {errorMsg && <div class="alert alert-error" style="margin-bottom:1rem">{errorMsg}</div>}
+
+  <div class="card" style="max-width:600px">
+    <p style="font-size:0.875rem;color:var(--color-text-secondary);margin-bottom:1.5rem">
+      Estos datos se usan en la generación de documentos PDF.
+    </p>
+    <form method="POST">
+      <div class="form-grid form-grid-2">
+        <div class="field">
+          <label for="nombre">Nombre</label>
+          <input class="input" id="nombre" name="nombre" value={profile?.nombre ?? ''} required />
+        </div>
+        <div class="field">
+          <label for="apellido">Apellido</label>
+          <input class="input" id="apellido" name="apellido" value={profile?.apellido ?? ''} required />
+        </div>
+        <div class="field">
+          <label for="matricula">Matrícula profesional</label>
+          <input class="input" id="matricula" name="matricula" value={profile?.matricula ?? ''} />
+        </div>
+        <div class="field">
+          <label for="telefono">Teléfono</label>
+          <input class="input" id="telefono" name="telefono" value={profile?.telefono ?? ''} />
+        </div>
+        <div class="field">
+          <label for="email">Email</label>
+          <input class="input" id="email" name="email" type="email" value={profile?.email ?? user?.email ?? ''} />
+        </div>
+      </div>
+      <div class="field" style="margin-top:0.75rem">
+        <label for="domicilio">Domicilio profesional</label>
+        <input class="input" id="domicilio" name="domicilio" value={profile?.domicilio ?? ''} />
+      </div>
+      <button type="submit" class="btn btn-primary" style="margin-top:1.5rem">Guardar cambios</button>
+    </form>
+  </div>
+</AppLayout>
+
+<style>
+.page-header { margin-bottom:1.5rem; }
+.page-header h2 { font-size:1.5rem; }
+</style>

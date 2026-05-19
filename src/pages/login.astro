@@ -1,0 +1,90 @@
+---
+import AuthLayout from '../layouts/AuthLayout.astro'
+import { supabase } from '../lib/supabase'
+
+let error = ''
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  const email = form.get('email') as string
+  const password = form.get('password') as string
+
+  const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password })
+
+  if (authError || !data.session) {
+    error = 'Email o contraseña incorrectos.'
+  } else {
+    const { access_token, refresh_token } = data.session
+    Astro.cookies.set('sb-access-token', access_token, { path: '/', httpOnly: true, secure: true, sameSite: 'lax' })
+    Astro.cookies.set('sb-refresh-token', refresh_token, { path: '/', httpOnly: true, secure: true, sameSite: 'lax' })
+    return Astro.redirect('/dashboard')
+  }
+}
+---
+<AuthLayout title="Ingresar">
+  <div class="login-card">
+    <div class="login-logo">
+      <span class="logo-icon">⊙</span>
+      <h1>NICA</h1>
+      <p>Sistema de Gestión de Mensuras</p>
+    </div>
+
+    {error && <div class="alert alert-error">{error}</div>}
+
+    <form method="POST" class="login-form">
+      <div class="field">
+        <label for="email">Email</label>
+        <input class="input" id="email" name="email" type="email" placeholder="correo@ejemplo.com" required />
+      </div>
+      <div class="field">
+        <label for="password">Contraseña</label>
+        <input class="input" id="password" name="password" type="password" placeholder="••••••••" required />
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:0.5rem">
+        Ingresar
+      </button>
+    </form>
+
+    <a href="/login?magic=1" class="magic-link">¿Olvidaste tu contraseña? Iniciar sin contraseña</a>
+  </div>
+</AuthLayout>
+
+<style>
+.login-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: 2.5rem 2rem;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.login-logo {
+  text-align: center;
+}
+.logo-icon {
+  font-size: 2.5rem;
+  color: var(--color-primary);
+  display: block;
+}
+.login-logo h1 {
+  font-family: var(--font-display);
+  font-size: 2rem;
+  color: var(--color-primary);
+  letter-spacing: 0.08em;
+  margin: 0.25rem 0 0.125rem;
+}
+.login-logo p {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}
+.login-form { display: flex; flex-direction: column; gap: 1rem; }
+.magic-link {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+.magic-link:hover { color: var(--color-accent); }
+</style>
