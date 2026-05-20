@@ -28,3 +28,6 @@ pnpm-debug.log*
 
 # ejecutables
 *.exe
+
+# Vercel build output
+.vercel/
