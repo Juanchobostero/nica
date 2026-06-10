@@ -226,17 +226,32 @@ const TIPOS_MENSURA = ['División','Unificación','Simple','Relevamiento','Subdi
     {activeTab === 'comitente' && (
       <div>
         <h3 style="margin-bottom:1rem">Comitentes del expediente</h3>
+        {warn === 'archivo_requerido' && <div class="alert alert-error" style="margin-bottom:1rem">Seleccioná un archivo para subir.</div>}
+        {warn === 'formato_invalido'  && <div class="alert alert-error" style="margin-bottom:1rem">Formato no válido. Usá JPG, PNG o PDF.</div>}
+
         {(expComitentes ?? []).length > 0 && (
           <div style="margin-bottom:1.5rem">
             <table>
-              <thead><tr><th>Nombre</th><th>DNI</th><th>Rol</th><th></th></tr></thead>
+              <thead><tr><th>Nombre</th><th>DNI</th><th>Rol</th><th>Escaneado DNI</th><th></th></tr></thead>
               <tbody>
                 {expComitentes!.map((ec: any) => (
                   <tr>
                     <td>{ec.comitentes?.apellido}, {ec.comitentes?.nombre}</td>
-                    <td>{ec.comitentes?.dni}</td>
+                    <td>{ec.comitentes?.dni ?? '—'}</td>
                     <td>{ec.rol}</td>
                     <td>
+                      {ec.comitentes?.dni_scan_path
+                        ? <a href={`/api/documentos/descargar?path=${ec.comitentes.dni_scan_path}`} class="badge badge-finalizado" style="text-decoration:none">Ver DNI</a>
+                        : <span class="badge badge-borrador">Sin escaneado</span>
+                      }
+                    </td>
+                    <td style="display:flex;gap:0.5rem;align-items:center">
+                      <form method="POST" action="/api/comitentes/upload-dni" enctype="multipart/form-data" style="display:flex;gap:0.4rem;align-items:center">
+                        <input type="hidden" name="comitente_id" value={ec.comitentes?.id} />
+                        <input type="hidden" name="expediente_id" value={id} />
+                        <input type="file" name="archivo" accept=".jpg,.jpeg,.png,.pdf" class="input-file" required />
+                        <button type="submit" class="btn btn-secondary btn-sm">Subir DNI</button>
+                      </form>
                       <form method="POST" style="display:inline">
                         <input type="hidden" name="_action" value="quitar_comitente" />
                         <input type="hidden" name="_tab" value="comitente" />
@@ -524,12 +539,19 @@ const TIPOS_MENSURA = ['División','Unificación','Simple','Relevamiento','Subdi
 
         <form method="POST" action="/api/documentos/generar">
           <input type="hidden" name="expediente_id" value={id} />
-          <div style="display:flex;flex-direction:column;gap:0.75rem;margin-bottom:1.5rem">
+
+          <div class="section-label" style="margin-top:0">Contenido básico del expediente</div>
+          <div style="display:flex;flex-direction:column;gap:0.625rem;margin-bottom:1.25rem">
             {[
-              { value: 'nota_elevacion',      label: 'Nota de Elevación' },
-              { value: 'capitulo_ubicacion',   label: 'Capítulo Ubicación / Extensión / Límites' },
-              { value: 'acta_mensura',         label: 'Acta de Mensura y Amojonamiento' },
-              { value: 'citacion_linderos',    label: 'Citación a Linderos' },
+              { value: 'caratula',               label: 'Carátula' },
+              { value: 'nota_elevacion',          label: 'Nota de Elevación a la Directora' },
+              { value: 'capitulo_ubicacion',      label: 'Capítulo de Extensión, Límites e Inscripciones' },
+              { value: 'citacion_linderos',       label: 'Notificación a Linderos y Autoridades' },
+              { value: 'acta_mensura',            label: 'Acta de Mensura y Amojonamiento' },
+              { value: 'acta_ausencia_linderos',  label: 'Acta de Ausencia de Linderos y Autoridades' },
+              { value: 'acta_ausencia_judicial',  label: 'Acta de Ausencia de Autoridad Judicial' },
+              { value: 'memoria_mensura',         label: 'Memoria de Mensura' },
+              { value: 'planilla_calculos',       label: 'Planilla de Cálculos' },
             ].map(doc => (
               <label style="display:flex;align-items:center;gap:10px;font-weight:400;cursor:pointer">
                 <input type="checkbox" name="tipos[]" value={doc.value} />
@@ -537,6 +559,21 @@ const TIPOS_MENSURA = ['División','Unificación','Simple','Relevamiento','Subdi
               </label>
             ))}
           </div>
+
+          <div class="section-label">Declaraciones juradas por parcela</div>
+          <div style="display:flex;flex-direction:column;gap:0.625rem;margin-bottom:1.5rem">
+            {[
+              { value: 'formulario_u',   label: 'Formulario "U" — Inmueble urbano' },
+              { value: 'formulario_sor', label: 'Formulario "SOR" — Suburbano o rural' },
+              { value: 'formulario_e1',  label: 'Formulario "E1" — Con construcciones' },
+            ].map(doc => (
+              <label style="display:flex;align-items:center;gap:10px;font-weight:400;cursor:pointer">
+                <input type="checkbox" name="tipos[]" value={doc.value} />
+                {doc.label}
+              </label>
+            ))}
+          </div>
+
           <button type="submit" class="btn btn-primary">Generar seleccionados</button>
         </form>
 
@@ -592,4 +629,5 @@ const TIPOS_MENSURA = ['División','Unificación','Simple','Relevamiento','Subdi
 .form-section { border:1px solid var(--color-border); border-radius:var(--radius-md); padding:0.875rem 1rem; }
 .form-section summary { cursor:pointer; font-weight:500; color:var(--color-primary); font-size:0.9rem; }
 .tab-btn { text-decoration:none; }
+.input-file { font-size:0.8rem; color:var(--color-text-secondary); max-width:180px; }
 </style>

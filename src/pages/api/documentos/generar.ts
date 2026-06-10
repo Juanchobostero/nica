@@ -3,10 +3,20 @@ import { supabase, getSupabase } from '../../../lib/supabase'
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 
 const DOC_LABELS: Record<string, string> = {
-  nota_elevacion:    'Nota de Elevación',
-  capitulo_ubicacion: 'Capítulo Ubicación / Extensión / Límites',
-  acta_mensura:      'Acta de Mensura y Amojonamiento',
-  citacion_linderos: 'Citación a Linderos',
+  // Contenido básico
+  caratula:                 'Carátula',
+  nota_elevacion:           'Nota de Elevación a la Directora',
+  capitulo_ubicacion:       'Capítulo de Extensión, Límites e Inscripciones',
+  citacion_linderos:        'Notificación a Linderos y Autoridades',
+  acta_mensura:             'Acta de Mensura y Amojonamiento',
+  acta_ausencia_linderos:   'Acta de Ausencia de Linderos y Autoridades',
+  acta_ausencia_judicial:   'Acta de Ausencia de Autoridad Judicial',
+  memoria_mensura:          'Memoria de Mensura',
+  planilla_calculos:        'Planilla de Cálculos',
+  // Declaraciones juradas
+  formulario_u:             'Formulario "U" — Declaración Jurada (Urbano)',
+  formulario_sor:           'Formulario "SOR" — Declaración Jurada (Suburbano/Rural)',
+  formulario_e1:            'Formulario "E1" — Declaración Jurada (Con Construcciones)',
 }
 
 export const POST: APIRoute = async ({ request, cookies, redirect }) => {
