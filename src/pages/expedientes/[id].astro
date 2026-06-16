@@ -70,19 +70,66 @@ if (Astro.request.method === 'POST') {
   if (action === 'guardar_mensura') {
     await db.from('expedientes').update({
       tipo_mensura: form.get('tipo_mensura'),
-      numero_expediente: form.get('numero_expediente'),
+      numero_expediente: form.get('numero_expediente') || null,
       fecha_inicio: form.get('fecha_mensura') || null,
     }).eq('id', id)
+
+    const cantLados   = parseInt(form.get('cantidad_lados') as string) || 0
+    const cantAngulos = parseInt(form.get('cantidad_angulos') as string) || 0
 
     const polPayload = {
       expediente_id: id,
       superficie_m2: parseFloat(form.get('superficie_m2') as string) || null,
-      superficie_letras: form.get('superficie_letras'),
-      cantidad_lados: parseInt(form.get('cantidad_lados') as string) || 0,
-      cantidad_angulos: parseInt(form.get('cantidad_angulos') as string) || 0,
+      superficie_letras: form.get('superficie_letras') || null,
+      cantidad_lados: cantLados,
+      cantidad_angulos: cantAngulos,
     }
-    if (poligono) await db.from('poligono').update(polPayload).eq('expediente_id', id)
-    else await db.from('poligono').insert(polPayload)
+
+    let polId: string | null = poligono?.id ?? null
+    if (poligono) {
+      await db.from('poligono').update(polPayload).eq('expediente_id', id)
+    } else {
+      const { data: newPol } = await db.from('poligono').insert(polPayload).select('id').single()
+      polId = newPol?.id ?? null
+    }
+
+    // Guardar lados si se enviaron
+    if (polId && cantLados > 0) {
+      await db.from('lados').delete().eq('poligono_id', polId)
+      for (let i = 1; i <= cantLados; i++) {
+        const vm = form.get(`lado_${i}_valor_m`) as string
+        const vl = form.get(`lado_${i}_valor_letras`) as string
+        if (vm || vl) {
+          await db.from('lados').insert({
+            poligono_id: polId,
+            orden: i,
+            valor_m:      parseFloat(vm) || null,
+            valor_letras: vl || null,
+          })
+        }
+      }
+    }
+
+    // Guardar ángulos si se enviaron
+    if (polId && cantAngulos > 0) {
+      await db.from('angulos').delete().eq('poligono_id', polId)
+      for (let i = 1; i <= cantAngulos; i++) {
+        const va = form.get(`angulo_${i}_valor`) as string
+        const vl = form.get(`angulo_${i}_valor_letras`) as string
+        if (va || vl) {
+          const [gradosPart, decimalPart = ''] = (va || '').split('.')
+          const decStr = decimalPart.padEnd(4, '0')
+          await db.from('angulos').insert({
+            poligono_id:  polId,
+            orden:        i,
+            grados:       parseInt(gradosPart) || null,
+            minutos:      parseInt(decStr.substring(0, 2)) || null,
+            segundos:     parseInt(decStr.substring(2, 4)) || null,
+            valor_letras: vl || null,
+          })
+        }
+      }
+    }
     successMsg = 'Mensura guardada.'
   }
 
@@ -181,13 +228,21 @@ const DEPARTAMENTOS = [
   'San Roque','Santo Tomé','Sauce'
 ]
 const TIPOS_MENSURA = ['División','Unificación','Simple','Relevamiento','Subdivisión','Otro']
+
+// Identificador: número oficial si existe, sino nombre del primer comitente
+const primerComitente = (expComitentes ?? [])[0]?.comitentes as any
+const identificador = exp.numero_expediente
+  ?? (primerComitente ? `${primerComitente.apellido}, ${primerComitente.nombre}` : null)
+  ?? 'Nuevo expediente'
+const tienNumero = !!exp.numero_expediente
 ---
-<AppLayout title={`Expediente ${exp.numero_expediente ?? ''}`}>
+<AppLayout title={identificador}>
   <div class="page-header">
     <div>
       <a href="/expedientes" class="back-link">← Expedientes</a>
       <h2>
-        {exp.numero_expediente ? `Expediente ${exp.numero_expediente}` : 'Sin número'}
+        {tienNumero ? `Expediente ${exp.numero_expediente}` : identificador}
+        {!tienNumero && <span style="font-size:0.75rem;color:var(--color-muted);font-weight:400;margin-left:0.5rem">(sin nº asignado)</span>}
         <span class={`badge badge-${exp.estado}`} style="margin-left:0.5rem">{exp.estado}</span>
       </h2>
     </div>
@@ -366,11 +421,11 @@ const TIPOS_MENSURA = ['División','Unificación','Simple','Relevamiento','Subdi
             <input class="input" name="subparcela" value={inmueble?.subparcela ?? ''} />
           </div>
           <div class="field">
-            <label>Matrícula catastral</label>
+            <label>Partida Inmobiliaria</label>
             <input class="input" name="matricula_catastral" value={inmueble?.matricula_catastral ?? ''} />
           </div>
           <div class="field">
-            <label>Matrícula registro</label>
+            <label>Matrícula Registro de la Propiedad</label>
             <input class="input" name="matricula_registro" value={inmueble?.matricula_registro ?? ''} />
           </div>
         </div>
@@ -438,7 +493,27 @@ const TIPOS_MENSURA = ['División','Unificación','Simple','Relevamiento','Subdi
             </div>
           </div>
 
-          <button type="submit" class="btn btn-primary" style="margin-bottom:1.5rem">Guardar mensura</button>
+          <div id="lados_section" style="margin-top:1rem;display:none">
+            <div class="section-label">Lados del polígono</div>
+            <div class="lados-header">
+              <span>Lado</span><span>Longitud (m)</span><span>En letras</span>
+            </div>
+            <div id="lados_rows"></div>
+            {poligono?.cantidad_lados > 0 && (
+              <p class="lados-suma" id="lados_suma"></p>
+            )}
+          </div>
+
+          <div id="angulos_section" style="margin-top:1.25rem;display:none">
+            <div class="section-label">Ángulos del polígono</div>
+            <div class="lados-header">
+              <span>Ángulo</span><span>Valor (GG.MMSS)</span><span>En letras</span>
+            </div>
+            <div id="angulos_rows"></div>
+            <div id="angulos_visor" style="display:none;margin-top:0.75rem"></div>
+          </div>
+
+          <button type="submit" class="btn btn-primary" style="margin-bottom:1.5rem;margin-top:1.25rem">Guardar mensura</button>
         </form>
 
         <form method="POST">
@@ -610,13 +685,264 @@ const TIPOS_MENSURA = ['División','Unificación','Simple','Relevamiento','Subdi
   </div>
 </AppLayout>
 
-<script>
-  const chk = document.getElementById('lind_iguales') as HTMLInputElement
-  const div = document.getElementById('linderos_citacion')
-  if (chk && div) {
-    chk.addEventListener('change', () => {
-      div.style.display = chk.checked ? 'none' : ''
+<script define:vars={{
+  ladosExistentes:    poligono?.lados    ?? [],
+  cantLadosInicial:   poligono?.cantidad_lados   ?? 0,
+  angulosExistentes:  poligono?.angulos  ?? [],
+  cantAngulosInicial: poligono?.cantidad_angulos ?? 0,
+}}>
+  // Linderos checkbox
+  const chk = document.getElementById('lind_iguales')
+  const divCit = document.getElementById('linderos_citacion')
+  if (chk && divCit) {
+    chk.addEventListener('change', () => { divCit.style.display = chk.checked ? 'none' : '' })
+  }
+
+  // ── Helpers compartidos de conversión numérica ──────────────────────────
+  const UNIDADES = ['', 'UN', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE',
+    'DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISÉIS', 'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE',
+    'VEINTE', 'VEINTIÚN', 'VEINTIDÓS', 'VEINTITRÉS', 'VEINTICUATRO', 'VEINTICINCO', 'VEINTISÉIS',
+    'VEINTISIETE', 'VEINTIOCHO', 'VEINTINUEVE']
+  const DECENAS  = ['', 'DIEZ', 'VEINTE', 'TREINTA', 'CUARENTA', 'CINCUENTA', 'SESENTA', 'SETENTA', 'OCHENTA', 'NOVENTA']
+  const CENTENAS = ['', 'CIENTO', 'DOSCIENTOS', 'TRESCIENTOS', 'CUATROCIENTOS', 'QUINIENTOS',
+    'SEISCIENTOS', 'SETECIENTOS', 'OCHOCIENTOS', 'NOVECIENTOS']
+
+  function menorMil(n) {
+    if (n === 0) return ''
+    if (n === 100) return 'CIEN'
+    let r = ''
+    if (n >= 100) { r = CENTENAS[Math.floor(n / 100)]; n %= 100 }
+    if (n >= 30) {
+      r += (r ? ' ' : '') + DECENAS[Math.floor(n / 10)]
+      if (n % 10) r += ' Y ' + UNIDADES[n % 10]
+    } else if (n > 0) {
+      r += (r ? ' ' : '') + UNIDADES[n]
+    }
+    return r
+  }
+
+  function convertir(n) {
+    if (n === 0) return 'CERO'
+    if (n >= 1000) {
+      const miles = Math.floor(n / 1000)
+      let r = miles === 1 ? 'MIL' : menorMil(miles) + ' MIL'
+      const resto = n % 1000
+      if (resto) r += ' ' + menorMil(resto)
+      return r
+    }
+    return menorMil(n)
+  }
+
+  // ── Conversión metros → letras ──────────────────────────────────────────
+  function numeroALetras(valor) {
+    if (valor === '' || valor === null || isNaN(parseFloat(valor))) return ''
+    const num = parseFloat(valor)
+    const metros = Math.floor(num)
+    const centimetros = Math.round((num - metros) * 100)
+    let texto = convertir(metros) + (metros === 1 ? ' METRO' : ' METROS')
+    if (centimetros > 0)
+      texto += ' CON ' + convertir(centimetros) + (centimetros === 1 ? ' CENTÍMETRO' : ' CENTÍMETROS')
+    return texto
+  }
+
+  // ── Conversión GG.MMSS → partes y letras ───────────────────────────────
+  function parsearAngulo(valor) {
+    if (!valor) return null
+    const [gradosPart, decimalPart = ''] = String(valor).split('.')
+    const decStr = decimalPart.padEnd(4, '0')
+    return {
+      grados:   parseInt(gradosPart)              || 0,
+      minutos:  parseInt(decStr.substring(0, 2))  || 0,
+      segundos: parseInt(decStr.substring(2, 4))  || 0,
+    }
+  }
+
+  function anguloALetras(valor) {
+    const p = parsearAngulo(valor)
+    if (!p) return ''
+    let texto = convertir(p.grados) + (p.grados === 1 ? ' GRADO' : ' GRADOS')
+    texto += ' ' + convertir(p.minutos) + (p.minutos === 1 ? ' MINUTO' : ' MINUTOS')
+    if (p.segundos > 0)
+      texto += ' ' + convertir(p.segundos) + (p.segundos === 1 ? ' SEGUNDO' : ' SEGUNDOS')
+    return texto
+  }
+
+  function formatearValorAngulo(g, m, s) {
+    if (g == null) return ''
+    const mm = String(parseInt(m ?? 0)).padStart(2, '0')
+    const ss = String(parseInt(s ?? 0)).padStart(2, '0')
+    return `${g}.${mm}${ss}`
+  }
+
+  // ── Lados ───────────────────────────────────────────────────────────────
+  const cantInput    = document.getElementById('cant_lados')
+  const ladosSection = document.getElementById('lados_section')
+  const ladosRows    = document.getElementById('lados_rows')
+  const ladosSuma    = document.getElementById('lados_suma')
+
+  function actualizarSuma() {
+    const inputs = document.querySelectorAll('[data-lado-m]')
+    let suma = 0
+    inputs.forEach(inp => { suma += parseFloat(inp.value) || 0 })
+    if (ladosSuma) ladosSuma.textContent = `Suma total: ${suma.toFixed(4)} m`
+  }
+
+  function generarFilas(cantidad) {
+    if (!ladosRows) return
+    ladosRows.innerHTML = ''
+    for (let i = 1; i <= cantidad; i++) {
+      const exist = ladosExistentes.find(l => l.orden === i) || {}
+      const fila = document.createElement('div')
+      fila.className = 'lado-fila'
+      fila.innerHTML = `
+        <span class="lado-num">L${i}</span>
+        <input class="input" type="number" step="0.0001" name="lado_${i}_valor_m"
+          value="${exist.valor_m ?? ''}" placeholder="0.0000" data-lado-m />
+        <input class="input" name="lado_${i}_valor_letras"
+          value="${exist.valor_letras ?? ''}" placeholder="En letras" data-lado-letras
+          style="color:var(--color-primary);font-weight:600" />
+      `
+      ladosRows.appendChild(fila)
+    }
+    document.querySelectorAll('[data-lado-m]').forEach(inp => {
+      inp.addEventListener('input', actualizarSuma)
+      inp.addEventListener('input', function() {
+        const letrasInput = this.closest('.lado-fila')?.querySelector('[data-lado-letras]')
+        if (letrasInput) letrasInput.value = numeroALetras(this.value)
+      })
     })
+    actualizarSuma()
+    if (ladosSection) ladosSection.style.display = cantidad > 0 ? 'block' : 'none'
+    if (ladosSuma)    ladosSuma.style.display    = cantidad > 0 ? 'block' : 'none'
+  }
+
+  if (cantInput) {
+    cantInput.addEventListener('input', () => generarFilas(parseInt(cantInput.value) || 0))
+    if (cantLadosInicial > 0) generarFilas(cantLadosInicial)
+  }
+
+  // ── Ángulos ─────────────────────────────────────────────────────────────
+  const cantAngulosInput  = document.getElementById('cant_angulos')
+  const angulosSection    = document.getElementById('angulos_section')
+  const angulosRows       = document.getElementById('angulos_rows')
+  const angulosVisor      = document.getElementById('angulos_visor')
+
+  function svgAngulos(datos, totalSeg) {
+    if (!datos.length || totalSeg === 0) return ''
+    const SZ = 124, CX = 62, OY = 108, RAY = 58
+    const COLS = ['#1B2E5E','#253E80','#2E4EA1','#3B5EC3','#4A72D9','#5A86E8']
+    const toR  = d => d * Math.PI / 180
+    const px   = a => CX + RAY * Math.cos(toR(a))
+    const py   = a => OY - RAY * Math.sin(toR(a))
+
+    const totalDeg = totalSeg / 3600
+    // Scale so visual span = min(actual, 130°), but min 30° so it's always visible
+    const visDeg = Math.max(30, Math.min(totalDeg, 130))
+    const sc     = visDeg / totalDeg
+    const start  = 90 + visDeg / 2   // leftmost ray in math degrees (CCW from +x)
+
+    let sectors = '', rays = '', labels = '', cum = 0
+
+    datos.forEach((d, i) => {
+      const deg = (d.grados * 3600 + d.minutos * 60 + d.segundos) / 3600
+      const vis = deg * sc
+      const a1 = start - cum, a2 = start - cum - vis
+      const x1 = px(a1), y1 = py(a1), x2 = px(a2), y2 = py(a2)
+      const lg = vis > 180 ? 1 : 0
+      // Sector: origin → outer arc → close
+      sectors += `<path d="M${CX},${OY} L${x1},${y1} A${RAY},${RAY},0,${lg},1,${x2},${y2} Z" fill="${COLS[i%COLS.length]}"/>`
+      // Right boundary ray (separator)
+      rays += `<line x1="${CX}" y1="${OY}" x2="${x2}" y2="${y2}" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/>`
+      // Label centered in sector
+      if (vis > 8) {
+        const mA = a1 - vis / 2
+        const lr = RAY * 0.6
+        labels += `<text x="${CX + lr*Math.cos(toR(mA))}" y="${OY - lr*Math.sin(toR(mA))}" text-anchor="middle" dominant-baseline="middle" fill="white" font-size="10" font-weight="bold" font-family="system-ui,sans-serif">A${d.num}</text>`
+      }
+      cum += vis
+    })
+    // Left boundary ray
+    rays += `<line x1="${CX}" y1="${OY}" x2="${px(start)}" y2="${py(start)}" stroke="white" stroke-width="1.5" stroke-linecap="round" opacity="0.8"/>`
+    // Inner arc indicator
+    const ar = 13, lgA = cum > 180 ? 1 : 0
+    const arcPath = `M${CX+ar*Math.cos(toR(start))},${OY-ar*Math.sin(toR(start))} A${ar},${ar},0,${lgA},1,${CX+ar*Math.cos(toR(start-cum))},${OY-ar*Math.sin(toR(start-cum))}`
+    // Origin dot
+    const dot = `<circle cx="${CX}" cy="${OY}" r="3.5" fill="white" stroke="#1B2E5E" stroke-width="1.5"/>`
+    const arc = `<path d="${arcPath}" fill="none" stroke="rgba(255,255,255,0.55)" stroke-width="1.5"/>`
+
+    return `<svg width="${SZ}" height="${SZ}" viewBox="0 0 ${SZ} ${SZ}" style="flex-shrink:0;filter:drop-shadow(0 2px 8px rgba(27,46,94,.2))">${sectors}${rays}${arc}${labels}${dot}</svg>`
+  }
+
+  function actualizarVisor() {
+    if (!angulosVisor) return
+    const entradas = document.querySelectorAll('[data-angulo-valor]')
+    const datos = []
+    entradas.forEach((inp, idx) => {
+      const p = parsearAngulo(inp.value)
+      if (p && (p.grados || p.minutos || p.segundos)) datos.push({ num: idx + 1, ...p })
+    })
+    if (!datos.length) { angulosVisor.style.display = 'none'; return }
+
+    let totalSeg = 0
+    datos.forEach(d => { totalSeg += d.grados * 3600 + d.minutos * 60 + d.segundos })
+    const sumG = Math.floor(totalSeg / 3600)
+    const sumM = Math.floor((totalSeg % 3600) / 60)
+    const sumS = totalSeg % 60
+    const pad  = n => String(n).padStart(2, '0')
+
+    const listaHtml = datos.map(d =>
+      `<div style="display:flex;align-items:center;gap:0.45rem">
+        <span style="font-weight:700;color:#1B2E5E;font-size:0.78rem;min-width:22px">A${d.num}</span>
+        <span style="font-family:monospace;font-size:0.85rem;color:#1A1A2E">${d.grados}° ${pad(d.minutos)}' ${pad(d.segundos)}"</span>
+      </div>`
+    ).join('')
+
+    angulosVisor.innerHTML = `
+      <div style="background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:0.875rem 1rem;box-shadow:0 1px 4px rgba(27,46,94,.07)">
+        <div style="display:flex;align-items:center;gap:1.25rem">
+          <div>
+            <div style="font-size:0.7rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.45rem">Resumen de ángulos</div>
+            <div style="display:flex;flex-direction:column;gap:0.2rem;margin-bottom:0.45rem">${listaHtml}</div>
+            <div style="font-size:0.82rem;font-weight:600;color:#1B2E5E;border-top:1px solid #E2E8F0;padding-top:0.375rem">∑ = ${sumG}° ${pad(sumM)}' ${pad(sumS)}"</div>
+          </div>
+          ${svgAngulos(datos, totalSeg)}
+        </div>
+      </div>`
+    angulosVisor.style.display = 'block'
+  }
+
+  function generarFilasAngulos(cantidad) {
+    if (!angulosRows) return
+    angulosRows.innerHTML = ''
+    for (let i = 1; i <= cantidad; i++) {
+      const exist = angulosExistentes.find(a => a.orden === i) || {}
+      const valorDisplay = formatearValorAngulo(exist.grados, exist.minutos, exist.segundos)
+      const fila = document.createElement('div')
+      fila.className = 'lado-fila'
+      fila.innerHTML = `
+        <span class="lado-num">A${i}</span>
+        <input class="input" name="angulo_${i}_valor"
+          value="${valorDisplay}" placeholder="Ej: 90.3010" data-angulo-valor />
+        <input class="input" name="angulo_${i}_valor_letras"
+          value="${exist.valor_letras ?? ''}" placeholder="En letras" data-angulo-letras
+          style="color:var(--color-primary);font-weight:600" />
+      `
+      angulosRows.appendChild(fila)
+    }
+    document.querySelectorAll('[data-angulo-valor]').forEach(inp => {
+      inp.addEventListener('input', function() {
+        const letrasInput = this.closest('.lado-fila')?.querySelector('[data-angulo-letras]')
+        if (letrasInput) letrasInput.value = anguloALetras(this.value)
+        actualizarVisor()
+      })
+    })
+    actualizarVisor()
+    if (angulosSection) angulosSection.style.display = cantidad > 0 ? 'block' : 'none'
+  }
+
+  if (cantAngulosInput) {
+    cantAngulosInput.addEventListener('input', () => generarFilasAngulos(parseInt(cantAngulosInput.value) || 0))
+    if (cantAngulosInicial > 0) generarFilasAngulos(cantAngulosInicial)
   }
 </script>
 
@@ -630,4 +956,16 @@ const TIPOS_MENSURA = ['División','Unificación','Simple','Relevamiento','Subdi
 .form-section summary { cursor:pointer; font-weight:500; color:var(--color-primary); font-size:0.9rem; }
 .tab-btn { text-decoration:none; }
 .input-file { font-size:0.8rem; color:var(--color-text-secondary); max-width:180px; }
+.lados-header { display:grid; grid-template-columns:48px 1fr 1fr; gap:0.5rem; padding:0.25rem 0; font-size:0.75rem; font-weight:600; color:var(--color-text-secondary); text-transform:uppercase; letter-spacing:0.04em; }
+.lado-fila { display:grid; grid-template-columns:48px 1fr 1fr; gap:0.5rem; margin-bottom:0.5rem; align-items:center; }
+.lado-num { font-weight:700; color:var(--color-primary); font-size:0.875rem; }
+.lados-suma { font-size:0.875rem; font-weight:600; color:var(--color-primary); margin-top:0.5rem; padding:0.5rem 0.75rem; background:var(--color-bg); border-radius:var(--radius-sm); display:inline-block; }
+.visor-angulos { background:var(--color-surface); border:1px solid var(--color-border); border-radius:var(--radius-md); padding:0.875rem 1.125rem; box-shadow:0 1px 4px rgba(27,46,94,.07); }
+.visor-inner { display:flex; align-items:center; gap:1.25rem; }
+.visor-titulo { font-size:0.7rem; font-weight:700; color:var(--color-text-secondary); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:0.5rem; }
+.visor-lista { display:flex; flex-direction:column; gap:0.2rem; margin-bottom:0.5rem; }
+.visor-fila { display:flex; align-items:center; gap:0.5rem; }
+.visor-num { font-weight:700; color:var(--color-primary); font-size:0.78rem; min-width:22px; }
+.visor-dms { font-family:monospace; font-size:0.85rem; color:var(--color-text); }
+.visor-suma { font-size:0.82rem; font-weight:600; color:var(--color-primary); border-top:1px solid var(--color-border); padding-top:0.375rem; margin-top:0.25rem; }
 </style>

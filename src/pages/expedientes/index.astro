@@ -86,7 +86,12 @@ function comitentePrincipal(exp: any): string {
           )}
           {(expedientes ?? []).map(exp => (
             <tr>
-              <td><strong>{exp.numero_expediente ?? '—'}</strong></td>
+              <td>
+                {exp.numero_expediente
+                  ? <strong>{exp.numero_expediente}</strong>
+                  : <span style="color:var(--color-text-secondary);font-style:italic">{comitentePrincipal(exp) !== '—' ? comitentePrincipal(exp) : 'Sin número'}</span>
+                }
+              </td>
               <td>{exp.tipo_mensura ?? '—'}</td>
               <td>{comitentePrincipal(exp)}</td>
               <td>
