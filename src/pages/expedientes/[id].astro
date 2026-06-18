@@ -58,6 +58,7 @@ if (Astro.request.method === 'POST') {
       subparcela: form.get('subparcela'),
       matricula_catastral: form.get('matricula_catastral'),
       matricula_registro: form.get('matricula_registro'),
+      matricula_municipal: form.get('matricula_municipal') || null,
       tipo_inmueble: form.get('tipo_inmueble'),
     }
     const { error } = inmueble
@@ -68,14 +69,39 @@ if (Astro.request.method === 'POST') {
   }
 
   if (action === 'guardar_mensura') {
+    const cantLados   = parseInt(form.get('cantidad_lados') as string) || 0
+    const cantAngulos = parseInt(form.get('cantidad_angulos') as string) || 0
+
+    // Validar sumatoria angular antes de guardar
+    // (en un polígono cerrado, la cantidad de ángulos = cantidad de vértices = cantidad de lados)
+    if (cantAngulos >= 3) {
+      let sumSeg = 0
+      for (let i = 1; i <= cantAngulos; i++) {
+        const va = (form.get(`angulo_${i}_valor`) as string) || ''
+        if (va) {
+          const [gp, dp = ''] = va.split('.')
+          const dec = dp.padEnd(4, '0')
+          sumSeg += (parseInt(gp)||0)*3600 + (parseInt(dec.substring(0,2))||0)*60 + (parseInt(dec.substring(2,4))||0)
+        }
+      }
+      if (sumSeg > 0) {
+        const expectedSeg = (cantAngulos - 2) * 180 * 3600
+        if (sumSeg !== expectedSeg) {
+          const fmt = (s: number) =>
+            `${Math.floor(s/3600)}° ${String(Math.floor((s%3600)/60)).padStart(2,'0')}' ${String(s%60).padStart(2,'0')}"`
+          const diff = sumSeg - expectedSeg
+          const sign = diff > 0 ? '+' : '-'
+          errorMsg = `Sumatoria angular incorrecta — Actual: ${fmt(sumSeg)} · Esperado: ${fmt(expectedSeg)} (${cantAngulos} ángulos → ${(cantAngulos-2)*180}°) · Diferencia: ${sign}${fmt(Math.abs(diff))}`
+        }
+      }
+    }
+
+    if (!errorMsg) {
     await db.from('expedientes').update({
       tipo_mensura: form.get('tipo_mensura'),
       numero_expediente: form.get('numero_expediente') || null,
       fecha_inicio: form.get('fecha_mensura') || null,
     }).eq('id', id)
-
-    const cantLados   = parseInt(form.get('cantidad_lados') as string) || 0
-    const cantAngulos = parseInt(form.get('cantidad_angulos') as string) || 0
 
     const polPayload = {
       expediente_id: id,
@@ -130,7 +156,8 @@ if (Astro.request.method === 'POST') {
         }
       }
     }
-    successMsg = 'Mensura guardada.'
+    if (!errorMsg) successMsg = 'Mensura guardada.'
+    } // fin if (!errorMsg)
   }
 
   if (action === 'guardar_linderos') {
@@ -430,6 +457,20 @@ const tienNumero = !!exp.numero_expediente
           </div>
         </div>
 
+        <div style="margin-bottom:1rem">
+          <label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer">
+            <input type="checkbox" id="chk_sin_inscripcion" style="width:16px;height:16px;accent-color:var(--color-primary)" />
+            Sin inscripción municipal
+          </label>
+          <p style="font-size:0.8rem;color:var(--color-text-secondary);margin:0.25rem 0 0.5rem 24px">
+            Marcar cuando el inmueble no tiene matrícula municipal asignada.
+          </p>
+          <div id="campo_inscripcion_municipal" class="field" style="margin-top:0.5rem;margin-bottom:0">
+            <label>Inscripción Municipal</label>
+            <input class="input" id="input_inscripcion_municipal" name="matricula_municipal" value={inmueble?.matricula_municipal ?? ''} />
+          </div>
+        </div>
+
         <div class="field" style="margin-bottom:1.5rem">
           <label>Tipo de inmueble</label>
           <div style="display:flex;gap:1.5rem;margin-top:4px">
@@ -513,7 +554,8 @@ const tienNumero = !!exp.numero_expediente
             <div id="angulos_visor" style="display:none;margin-top:0.75rem"></div>
           </div>
 
-          <button type="submit" class="btn btn-primary" style="margin-bottom:1.5rem;margin-top:1.25rem">Guardar mensura</button>
+          <div id="error_sumatoria" style="display:none;color:#EF4444;font-size:0.85rem;font-weight:500;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:0.6rem 0.875rem;margin-top:1rem"></div>
+          <button type="submit" class="btn btn-primary" style="margin-bottom:1.5rem;margin-top:0.75rem">Guardar mensura</button>
         </form>
 
         <form method="POST">
@@ -686,10 +728,11 @@ const tienNumero = !!exp.numero_expediente
 </AppLayout>
 
 <script define:vars={{
-  ladosExistentes:    poligono?.lados    ?? [],
-  cantLadosInicial:   poligono?.cantidad_lados   ?? 0,
-  angulosExistentes:  poligono?.angulos  ?? [],
-  cantAngulosInicial: poligono?.cantidad_angulos ?? 0,
+  ladosExistentes:       poligono?.lados    ?? [],
+  cantLadosInicial:      poligono?.cantidad_lados   ?? 0,
+  angulosExistentes:     poligono?.angulos  ?? [],
+  cantAngulosInicial:    poligono?.cantidad_angulos ?? 0,
+  sinInscripcionInicial: !(inmueble as any)?.matricula_municipal,
 }}>
   // Linderos checkbox
   const chk = document.getElementById('lind_iguales')
@@ -943,6 +986,56 @@ const tienNumero = !!exp.numero_expediente
   if (cantAngulosInput) {
     cantAngulosInput.addEventListener('input', () => generarFilasAngulos(parseInt(cantAngulosInput.value) || 0))
     if (cantAngulosInicial > 0) generarFilasAngulos(cantAngulosInicial)
+  }
+
+  // ── Validación sumatoria angular al submit ──────────────────────────────
+  const mensuraForm = document.querySelector('input[name="_action"][value="guardar_mensura"]')?.closest('form')
+  const errorSumatoria = document.getElementById('error_sumatoria')
+
+  if (mensuraForm) {
+    mensuraForm.addEventListener('submit', function(e) {
+      if (!errorSumatoria) return
+      const nAngulos = parseInt(cantAngulosInput?.value || '0') || 0
+      if (nAngulos < 3) { errorSumatoria.style.display = 'none'; return }
+
+      let sumSeg = 0
+      document.querySelectorAll('[data-angulo-valor]').forEach(function(inp) {
+        const p = parsearAngulo(inp.value)
+        if (p) sumSeg += p.grados * 3600 + p.minutos * 60 + p.segundos
+      })
+      if (sumSeg === 0) { errorSumatoria.style.display = 'none'; return }
+
+      const expectedSeg = (nAngulos - 2) * 180 * 3600
+      if (sumSeg === expectedSeg) { errorSumatoria.style.display = 'none'; return }
+
+      e.preventDefault()
+      function fmt(s) {
+        return Math.floor(s/3600) + '° ' + String(Math.floor((s%3600)/60)).padStart(2,'0') + "' " + String(s%60).padStart(2,'0') + '"'
+      }
+      const diff = sumSeg - expectedSeg
+      const sign = diff > 0 ? '+' : '-'
+      errorSumatoria.textContent =
+        `La suma de ángulos no coincide con el polígono de ${nAngulos} ángulos.  ` +
+        `Actual: ${fmt(sumSeg)}  ·  Esperado: ${fmt(expectedSeg)}  ·  Diferencia: ${sign}${fmt(Math.abs(diff))}`
+      errorSumatoria.style.display = 'block'
+      errorSumatoria.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }
+
+  // ── Checkbox "Sin inscripción municipal" ───────────────────────────────
+  const chkInscripcion   = document.getElementById('chk_sin_inscripcion')
+  const campoInscripcion = document.getElementById('campo_inscripcion_municipal')
+  const inputInscripcion = document.getElementById('input_inscripcion_municipal')
+
+  if (chkInscripcion && campoInscripcion && inputInscripcion) {
+    function aplicarInscripcion(sinInscripcion) {
+      campoInscripcion.style.opacity = sinInscripcion ? '0.5' : '1'
+      inputInscripcion.disabled = sinInscripcion
+      if (sinInscripcion) inputInscripcion.value = ''
+    }
+    chkInscripcion.checked = sinInscripcionInicial
+    aplicarInscripcion(sinInscripcionInicial)
+    chkInscripcion.addEventListener('change', function() { aplicarInscripcion(chkInscripcion.checked) })
   }
 </script>
 

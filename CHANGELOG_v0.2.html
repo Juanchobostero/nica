@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>NICA — Changelog v0.2</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; color: #1A1A2E; background: #fff; font-size: 13px; line-height: 1.6; }
+
+    /* ── Header ── */
+    .header { background: #1B2E5E; color: #fff; padding: 2rem 2.5rem 1.5rem; }
+    .header-top { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 0.75rem; }
+    .logo { font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; }
+    .logo span { font-size: 0.85rem; font-weight: 400; opacity: 0.7; margin-left: 0.5rem; letter-spacing: 0; vertical-align: middle; }
+    .version-badge { background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); border-radius: 6px; padding: 0.25rem 0.75rem; font-size: 0.8rem; font-weight: 600; }
+    .header-subtitle { font-size: 0.9rem; opacity: 0.75; }
+    .header-meta { display: flex; gap: 2rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.15); font-size: 0.8rem; opacity: 0.7; }
+
+    /* ── Layout ── */
+    .container { max-width: 800px; margin: 0 auto; padding: 2rem 2.5rem; }
+    .section { margin-bottom: 2rem; }
+    h2 { font-size: 1rem; font-weight: 700; color: #1B2E5E; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 2px solid #1B2E5E; padding-bottom: 0.4rem; margin-bottom: 1rem; }
+    h3 { font-size: 0.9rem; font-weight: 700; color: #1B2E5E; margin: 1rem 0 0.4rem; }
+    p { margin-bottom: 0.6rem; color: #374151; }
+
+    /* ── Change cards ── */
+    .change { border: 1px solid #E2E8F0; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+    .change-header { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.6rem; }
+    .change-num { background: #1B2E5E; color: #fff; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 700; flex-shrink: 0; }
+    .change-title { font-weight: 700; font-size: 0.9rem; color: #1B2E5E; }
+    .change-tag { font-size: 0.7rem; font-weight: 600; padding: 0.1rem 0.5rem; border-radius: 4px; margin-left: auto; }
+    .tag-feat { background: #DBEAFE; color: #1D4ED8; }
+    .tag-fix  { background: #D1FAE5; color: #065F46; }
+    .tag-ux   { background: #FEF3C7; color: #92400E; }
+
+    /* ── Tables ── */
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin: 0.6rem 0; }
+    th { background: #F4F6FA; color: #1B2E5E; font-weight: 700; text-align: left; padding: 0.45rem 0.75rem; border: 1px solid #E2E8F0; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    td { padding: 0.4rem 0.75rem; border: 1px solid #E2E8F0; color: #374151; vertical-align: top; }
+    tr:nth-child(even) td { background: #F9FAFB; }
+
+    /* ── Code ── */
+    code { font-family: 'Consolas', 'Courier New', monospace; background: #F4F6FA; border: 1px solid #E2E8F0; border-radius: 4px; padding: 0.1rem 0.35rem; font-size: 0.82rem; color: #1B2E5E; }
+    .example { background: #F4F6FA; border-left: 3px solid #1B2E5E; border-radius: 0 6px 6px 0; padding: 0.6rem 1rem; margin: 0.5rem 0; font-family: 'Consolas', monospace; font-size: 0.82rem; color: #1A1A2E; }
+    .example .arrow { color: #6B7280; }
+
+    /* ── Feature list ── */
+    ul { padding-left: 1.25rem; color: #374151; }
+    li { margin-bottom: 0.3rem; }
+    li::marker { color: #1B2E5E; }
+
+    /* ── SVG diagram description box ── */
+    .diagram-desc { display: flex; gap: 1rem; align-items: flex-start; background: #F4F6FA; border-radius: 8px; padding: 0.875rem 1rem; }
+    .diagram-icon { font-size: 2.5rem; flex-shrink: 0; }
+    .diagram-text h4 { font-size: 0.85rem; font-weight: 700; color: #1B2E5E; margin-bottom: 0.25rem; }
+    .diagram-text p { font-size: 0.82rem; margin: 0; }
+
+    /* ── Stack info ── */
+    .stack-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+    .stack-item { background: #F4F6FA; border-radius: 6px; padding: 0.5rem 0.75rem; }
+    .stack-label { font-size: 0.7rem; font-weight: 700; color: #6B7280; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stack-value { font-size: 0.82rem; color: #1A1A2E; font-weight: 500; }
+
+    /* ── Footer ── */
+    .footer { text-align: center; padding: 1.5rem; color: #9CA3AF; font-size: 0.75rem; border-top: 1px solid #E2E8F0; margin-top: 1rem; }
+
+    /* ── Print ── */
+    @media print {
+      body { font-size: 11px; }
+      .header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .change-num { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .change { break-inside: avoid; }
+      .container { padding: 1.5rem 2rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="header-top">
+      <div>
+        <div class="logo">NICA <span>Sistema de Gestión de Mensuras</span></div>
+      </div>
+      <div class="version-badge">v0.2 — Junio 2026</div>
+    </div>
+    <div class="header-subtitle">Resumen de cambios y funcionalidades incorporadas</div>
+    <div class="header-meta">
+      <span>Agrimensor: Franco Arturo Nigro Carriere</span>
+      <span>Corrientes, Argentina</span>
+      <span>Sesión: 15 de junio de 2026</span>
+    </div>
+  </div>
+
+  <div class="container">
+
+    <!-- RESUMEN EJECUTIVO -->
+    <div class="section">
+      <h2>Resumen de la sesión</h2>
+      <p>En esta sesión se incorporaron las funcionalidades de carga de <strong>lados y ángulos del polígono</strong> con conversión automática a texto en español, junto con un <strong>visor gráfico de ángulos en tiempo real</strong>. También se realizaron ajustes de etiquetas y la identificación provisional de expedientes sin número.</p>
+      <p>Todos los cambios están disponibles en la versión desplegada en <strong>Vercel</strong>.</p>
+    </div>
+
+    <!-- CAMBIOS -->
+    <div class="section">
+      <h2>Cambios incorporados</h2>
+
+      <!-- 1 -->
+      <div class="change">
+        <div class="change-header">
+          <div class="change-num">1</div>
+          <div class="change-title">Renombrado de campos — Tab 2 Inmueble</div>
+          <span class="change-tag tag-fix">Corrección de label</span>
+        </div>
+        <p>Se actualizaron los nombres visibles de dos campos del formulario de inmueble. El nombre interno en base de datos no fue modificado.</p>
+        <table>
+          <thead><tr><th>Campo BD</th><th>Label anterior</th><th>Label nuevo</th></tr></thead>
+          <tbody>
+            <tr><td><code>matricula_catastral</code></td><td>Matrícula catastral</td><td><strong>Partida Inmobiliaria</strong></td></tr>
+            <tr><td><code>matricula_registro</code></td><td>Matrícula registro</td><td><strong>Matrícula Registro de la Propiedad</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 2 -->
+      <div class="change">
+        <div class="change-header">
+          <div class="change-num">2</div>
+          <div class="change-title">Identificador provisional de expediente</div>
+          <span class="change-tag tag-ux">UX</span>
+        </div>
+        <p>Dado que el número de expediente lo asigna Catastro con posterioridad, el sistema ahora muestra el nombre del primer comitente como identificador visual mientras el número no está disponible.</p>
+        <ul>
+          <li>En el <strong>listado de expedientes</strong>: muestra apellido y nombre en cursiva cuando no hay número asignado</li>
+          <li>En el <strong>encabezado del expediente</strong>: muestra el nombre con la aclaración <em>"(sin nº asignado)"</em></li>
+          <li>Una vez ingresado el número real, se muestra el número en su lugar</li>
+        </ul>
+      </div>
+
+      <!-- 3 -->
+      <div class="change">
+        <div class="change-header">
+          <div class="change-num">3</div>
+          <div class="change-title">Lados del polígono — campos dinámicos</div>
+          <span class="change-tag tag-feat">Nueva funcionalidad</span>
+        </div>
+        <p>Al ingresar la <strong>Cantidad de lados</strong> en Tab 3 Mensura, el sistema genera dinámicamente N filas de carga, una por cada lado del polígono.</p>
+        <table>
+          <thead><tr><th>Campo</th><th>Descripción</th><th>Columna BD</th></tr></thead>
+          <tbody>
+            <tr><td>Longitud (m)</td><td>Valor numérico con 4 decimales</td><td><code>lados.valor_m</code></td></tr>
+            <tr><td>En letras</td><td>Texto auto-generado al ingresar el valor</td><td><code>lados.valor_letras</code></td></tr>
+          </tbody>
+        </table>
+        <h3>Conversión automática a texto</h3>
+        <p>Al escribir en el campo de longitud, el campo "En letras" se completa automáticamente:</p>
+        <div class="example">
+          40.15 <span class="arrow">→</span> CUARENTA METROS CON QUINCE CENTÍMETROS<br>
+          100 &nbsp; <span class="arrow">→</span> CIEN METROS<br>
+          1525.50 <span class="arrow">→</span> MIL QUINIENTOS VEINTICINCO METROS CON CINCUENTA CENTÍMETROS<br>
+          1 &nbsp;&nbsp;&nbsp;&nbsp; <span class="arrow">→</span> UN METRO
+        </div>
+        <p>Se muestra la <strong>suma acumulada</strong> de todos los lados en tiempo real al pie de la tabla. Los datos se guardan en la tabla <code>lados</code> al presionar <em>Guardar mensura</em>.</p>
+      </div>
+
+      <!-- 4 -->
+      <div class="change">
+        <div class="change-header">
+          <div class="change-num">4</div>
+          <div class="change-title">Ángulos del polígono — campos dinámicos con visor</div>
+          <span class="change-tag tag-feat">Nueva funcionalidad</span>
+        </div>
+        <p>Al ingresar la <strong>Cantidad de ángulos</strong>, se generan dinámicamente N filas para la carga de ángulos interiores del polígono.</p>
+
+        <h3>Formato de entrada</h3>
+        <p>Se usa un único campo en formato <code>GG.MMSS</code> (grados, minutos y segundos en el decimal):</p>
+        <table>
+          <thead><tr><th>Valor ingresado</th><th>Interpretación</th></tr></thead>
+          <tbody>
+            <tr><td><code>90.3010</code></td><td>90° 30' 10"</td></tr>
+            <tr><td><code>45.0000</code></td><td>45° 00' 00"</td></tr>
+            <tr><td><code>180.1530</code></td><td>180° 15' 30"</td></tr>
+            <tr><td><code>30.3000</code></td><td>30° 30' 00"</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Conversión automática a texto</h3>
+        <div class="example">
+          90.3010 <span class="arrow">→</span> NOVENTA GRADOS TREINTA MINUTOS DIEZ SEGUNDOS<br>
+          45.0000 <span class="arrow">→</span> CUARENTA Y CINCO GRADOS CERO MINUTOS<br>
+          180.0000 <span class="arrow">→</span> CIENTO OCHENTA GRADOS CERO MINUTOS
+        </div>
+
+        <h3>Almacenamiento en base de datos</h3>
+        <table>
+          <thead><tr><th>Columna BD</th><th>Tipo</th><th>Contenido</th></tr></thead>
+          <tbody>
+            <tr><td><code>angulos.grados</code></td><td>int</td><td>Parte entera del valor</td></tr>
+            <tr><td><code>angulos.minutos</code></td><td>int</td><td>Primeros 2 decimales del formato GG.MMSS</td></tr>
+            <tr><td><code>angulos.segundos</code></td><td>numeric(5,2)</td><td>Últimos 2 decimales del formato GG.MMSS</td></tr>
+            <tr><td><code>angulos.valor_letras</code></td><td>text</td><td>Texto auto-generado en español</td></tr>
+          </tbody>
+        </table>
+        <p style="margin-top:0.5rem">Al reabrir el expediente, los valores se reconstruyen automáticamente al formato <code>GG.MMSS</code> y se precargan en los campos.</p>
+
+        <h3>Visor gráfico de ángulos</h3>
+        <div class="diagram-desc">
+          <div class="diagram-icon">📐</div>
+          <div class="diagram-text">
+            <h4>Figura geométrica en tiempo real</h4>
+            <p>Mientras se cargan los ángulos, aparece un visor con la representación geométrica: rayos desde un vértice, cada sector coloreado en degradé azul, con etiqueta A1, A2, A3... Incluye tabla resumen en notación DMS (grados° minutos' segundos") y sumatoria total ∑. Se actualiza en tiempo real al escribir.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- STACK TÉCNICO -->
+    <div class="section">
+      <h2>Stack técnico</h2>
+      <div class="stack-grid">
+        <div class="stack-item"><div class="stack-label">Frontend / Backend</div><div class="stack-value">Astro 6 SSR con @astrojs/vercel</div></div>
+        <div class="stack-item"><div class="stack-label">Base de datos</div><div class="stack-value">Supabase PostgreSQL + RLS</div></div>
+        <div class="stack-item"><div class="stack-label">Autenticación</div><div class="stack-value">Supabase Auth (email + password)</div></div>
+        <div class="stack-item"><div class="stack-label">Storage PDFs</div><div class="stack-value">Supabase Storage (bucket documentos)</div></div>
+        <div class="stack-item"><div class="stack-label">Generación PDF</div><div class="stack-value">pdf-lib 1.17</div></div>
+        <div class="stack-item"><div class="stack-label">Deploy</div><div class="stack-value">Vercel (build automático desde main)</div></div>
+      </div>
+    </div>
+
+    <!-- PENDIENTES -->
+    <div class="section">
+      <h2>Próximos pasos</h2>
+      <table>
+        <thead><tr><th>Prioridad</th><th>Tarea</th></tr></thead>
+        <tbody>
+          <tr><td>Alta</td><td>Implementar contenido real en los 12 tipos de PDFs usando las plantillas de Franco</td></tr>
+          <tr><td>Alta</td><td>Definir campos obligatorios por tipo de documento para habilitar la generación</td></tr>
+          <tr><td>Media</td><td>Validación de campos requeridos por tab con indicador visual de progreso</td></tr>
+          <tr><td>Media</td><td>Edición de comitentes y testigos existentes desde el expediente</td></tr>
+          <tr><td>Baja</td><td>Paginación en listado · Búsqueda por comitente · Regenerar documentos sin duplicados</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    NICA Sistema de Gestión de Mensuras · Franco Arturo Nigro Carriere · Corrientes, Argentina · Junio 2026
+  </div>
+
+</body>
+</html>
