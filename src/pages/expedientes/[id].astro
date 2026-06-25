@@ -59,6 +59,7 @@ if (Astro.request.method === 'POST') {
       matricula_catastral: form.get('matricula_catastral'),
       matricula_registro: form.get('matricula_registro'),
       matricula_municipal: form.get('matricula_municipal') || null,
+      antecedentes_tecnicos: form.get('antecedentes_tecnicos') || null,
       tipo_inmueble: form.get('tipo_inmueble'),
     }
     const { error } = inmueble
@@ -101,6 +102,7 @@ if (Astro.request.method === 'POST') {
       tipo_mensura: form.get('tipo_mensura'),
       numero_expediente: form.get('numero_expediente') || null,
       fecha_inicio: form.get('fecha_mensura') || null,
+      area_catastro: form.get('area_catastro') || null,
     }).eq('id', id)
 
     const polPayload = {
@@ -234,6 +236,21 @@ if (Astro.request.method === 'POST') {
     }
   }
 
+  if (action === 'editar_testigo') {
+    await db.from('testigos').update({
+      nombre: form.get('t_nombre'),
+      apellido: form.get('t_apellido'),
+      dni: form.get('t_dni'),
+      domicilio: form.get('t_domicilio'),
+    }).eq('id', form.get('testigo_id'))
+    successMsg = 'Testigo actualizado.'
+  }
+
+  if (action === 'quitar_testigo') {
+    await db.from('exp_testigos').delete().eq('id', form.get('exp_testigo_id'))
+    successMsg = 'Testigo quitado.'
+  }
+
   if (action === 'cambiar_estado') {
     const nuevoEstado = form.get('nuevo_estado') as string
     await db.from('expedientes').update({ estado: nuevoEstado }).eq('id', id)
@@ -254,7 +271,7 @@ const DEPARTAMENTOS = [
   'Saladas','San Cosme','San Luis del Palmar','San Martín','San Miguel',
   'San Roque','Santo Tomé','Sauce'
 ]
-const TIPOS_MENSURA = ['División','Unificación','Simple','Relevamiento','Subdivisión','Otro']
+const TIPOS_MENSURA = ['División','Unificación','Simple','Relevamiento','Subdivisión','Prescripción Adquisitiva','Otro']
 
 // Identificador: número oficial si existe, sino nombre del primer comitente
 const primerComitente = (expComitentes ?? [])[0]?.comitentes as any
@@ -314,34 +331,71 @@ const tienNumero = !!exp.numero_expediente
         {(expComitentes ?? []).length > 0 && (
           <div style="margin-bottom:1.5rem">
             <table>
-              <thead><tr><th>Nombre</th><th>DNI</th><th>Rol</th><th>Escaneado DNI</th><th></th></tr></thead>
+              <thead><tr><th>Nombre</th><th>DNI</th><th>Rol</th><th></th></tr></thead>
               <tbody>
                 {expComitentes!.map((ec: any) => (
-                  <tr>
-                    <td>{ec.comitentes?.apellido}, {ec.comitentes?.nombre}</td>
-                    <td>{ec.comitentes?.dni ?? '—'}</td>
-                    <td>{ec.rol}</td>
-                    <td>
-                      {ec.comitentes?.dni_scan_path
-                        ? <a href={`/api/documentos/descargar?path=${ec.comitentes.dni_scan_path}`} class="badge badge-finalizado" style="text-decoration:none">Ver DNI</a>
-                        : <span class="badge badge-borrador">Sin escaneado</span>
-                      }
-                    </td>
-                    <td style="display:flex;gap:0.5rem;align-items:center">
-                      <form method="POST" action="/api/comitentes/upload-dni" enctype="multipart/form-data" style="display:flex;gap:0.4rem;align-items:center">
-                        <input type="hidden" name="comitente_id" value={ec.comitentes?.id} />
-                        <input type="hidden" name="expediente_id" value={id} />
-                        <input type="file" name="archivo" accept=".jpg,.jpeg,.png,.pdf" class="input-file" required />
-                        <button type="submit" class="btn btn-secondary btn-sm">Subir DNI</button>
-                      </form>
-                      <form method="POST" style="display:inline">
-                        <input type="hidden" name="_action" value="quitar_comitente" />
-                        <input type="hidden" name="_tab" value="comitente" />
-                        <input type="hidden" name="exp_comitente_id" value={ec.id} />
-                        <button type="submit" class="btn btn-danger btn-sm">Quitar</button>
-                      </form>
-                    </td>
-                  </tr>
+                  <>
+                    <tr>
+                      <td>{ec.comitentes?.apellido}, {ec.comitentes?.nombre}</td>
+                      <td>{ec.comitentes?.dni ?? '—'}</td>
+                      <td>{ec.rol}</td>
+                      <td>
+                        <form method="POST" style="display:inline">
+                          <input type="hidden" name="_action" value="quitar_comitente" />
+                          <input type="hidden" name="_tab" value="comitente" />
+                          <input type="hidden" name="exp_comitente_id" value={ec.id} />
+                          <button type="submit" class="btn btn-danger btn-sm">Quitar</button>
+                        </form>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td colspan="4" style="background:var(--color-bg);padding:0.875rem 1rem">
+                        <div style="display:flex;gap:2rem;flex-wrap:wrap">
+                          {(['frente','dorso'] as const).map(lado => {
+                            const path = lado === 'frente' ? ec.comitentes?.dni_scan_path : ec.comitentes?.dni_scan_path_dorso
+                            const esImagen = path && /\.(jpg|jpeg|png)$/i.test(path)
+                            return (
+                              <div style="display:flex;flex-direction:column;gap:0.5rem">
+                                <span style="font-size:0.75rem;font-weight:700;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.04em">
+                                  DNI {lado === 'frente' ? 'Frente' : 'Dorso'}
+                                </span>
+                                <div class="dni-preview-wrap" data-comitente-id={ec.comitentes?.id} data-lado={lado}>
+                                  {path ? (
+                                    <div class="dni-preview-inner" style="position:relative;width:140px;height:92px;border-radius:8px;overflow:hidden;border:1px solid var(--color-border);background:var(--color-surface)">
+                                      {esImagen ? (
+                                        <a href={`/api/documentos/descargar?path=${path}`} target="_blank" style="display:block;width:100%;height:100%">
+                                          <img src={`/api/documentos/descargar?path=${path}`} alt={`DNI ${lado}`} class="dni-img"
+                                            style="width:100%;height:100%;object-fit:cover;display:block" />
+                                        </a>
+                                      ) : (
+                                        <a href={`/api/documentos/descargar?path=${path}`} class="badge badge-finalizado" style="text-decoration:none">Ver PDF</a>
+                                      )}
+                                      <button type="button" class="dni-remove-btn" data-comitente-id={ec.comitentes?.id} data-lado={lado} title="Quitar imagen">✕</button>
+                                    </div>
+                                  ) : (
+                                    <div class="dni-preview-inner" style="width:140px;height:92px;border-radius:8px;overflow:hidden;border:1px dashed var(--color-border);background:var(--color-bg)">
+                                      <div class="dni-placeholder" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:0.72rem;color:var(--color-text-secondary)">Sin cargar</div>
+                                    </div>
+                                  )}
+                                </div>
+                                <form method="POST" action="/api/comitentes/upload-dni" enctype="multipart/form-data" class="dni-upload-form" style="display:flex;flex-direction:column;gap:0.4rem">
+                                  <input type="hidden" name="comitente_id" value={ec.comitentes?.id} />
+                                  <input type="hidden" name="expediente_id" value={id} />
+                                  <input type="hidden" name="lado" value={lado} />
+                                  <label class="file-btn">
+                                    Seleccionar imagen
+                                    <input type="file" name="archivo" accept=".jpg,.jpeg,.png,.pdf" class="dni-file-input" hidden required />
+                                  </label>
+                                  <span class="file-name">Sin archivo seleccionado</span>
+                                  <button type="submit" class="btn btn-primary btn-sm dni-submit-btn">Subir</button>
+                                </form>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  </>
                 ))}
               </tbody>
             </table>
@@ -369,6 +423,7 @@ const tienNumero = !!exp.numero_expediente
                   <option value="titular">Titular</option>
                   <option value="apoderado">Apoderado</option>
                   <option value="heredero">Heredero</option>
+                  <option value="poseedor">Poseedor</option>
                 </select>
               </div>
             </div>
@@ -393,6 +448,7 @@ const tienNumero = !!exp.numero_expediente
                   <option value="titular">Titular</option>
                   <option value="apoderado">Apoderado</option>
                   <option value="heredero">Heredero</option>
+                  <option value="poseedor">Poseedor</option>
                 </select>
               </div>
             </div>
@@ -449,7 +505,8 @@ const tienNumero = !!exp.numero_expediente
           </div>
           <div class="field">
             <label>Partida Inmobiliaria</label>
-            <input class="input" name="matricula_catastral" value={inmueble?.matricula_catastral ?? ''} />
+            <input class="input" name="matricula_catastral" value={inmueble?.matricula_catastral ?? ''}
+              style="text-transform:uppercase" oninput="this.value = this.value.toUpperCase()" />
           </div>
           <div class="field">
             <label>Matrícula Registro de la Propiedad</label>
@@ -469,6 +526,11 @@ const tienNumero = !!exp.numero_expediente
             <label>Inscripción Municipal</label>
             <input class="input" id="input_inscripcion_municipal" name="matricula_municipal" value={inmueble?.matricula_municipal ?? ''} />
           </div>
+        </div>
+
+        <div class="field" style="margin-bottom:1.5rem">
+          <label>Antecedentes Técnicos</label>
+          <textarea class="input" name="antecedentes_tecnicos" rows="5" placeholder="Ej: En el Registro de la Propiedad Inmueble se halla...">{(inmueble as any)?.antecedentes_tecnicos ?? ''}</textarea>
         </div>
 
         <div class="field" style="margin-bottom:1.5rem">
@@ -511,6 +573,10 @@ const tienNumero = !!exp.numero_expediente
             <div class="field">
               <label>Fecha de mensura</label>
               <input class="input" type="date" name="fecha_mensura" value={exp.fecha_inicio ?? ''} />
+            </div>
+            <div class="field">
+              <label>Área de Catastro (ubicación actual del expediente)</label>
+              <input class="input" name="area_catastro" value={(exp as any).area_catastro ?? ''} placeholder="Ej: Dirección General de Catastro - Mesa de entradas" />
             </div>
           </div>
 
@@ -597,14 +663,39 @@ const tienNumero = !!exp.numero_expediente
         {(expTestigos ?? []).length > 0 && (
           <div style="margin-bottom:1.5rem">
             <table>
-              <thead><tr><th>Nombre</th><th>DNI</th><th>Domicilio</th></tr></thead>
+              <thead><tr><th>Nombre</th><th>DNI</th><th>Domicilio</th><th></th></tr></thead>
               <tbody>
                 {expTestigos!.map((et: any) => (
-                  <tr>
-                    <td>{et.testigos?.apellido}, {et.testigos?.nombre}</td>
-                    <td>{et.testigos?.dni}</td>
-                    <td>{et.testigos?.domicilio}</td>
-                  </tr>
+                  <>
+                    <tr>
+                      <td>{et.testigos?.apellido}, {et.testigos?.nombre}</td>
+                      <td>{et.testigos?.dni}</td>
+                      <td>{et.testigos?.domicilio}</td>
+                      <td style="display:flex;gap:0.5rem">
+                        <details>
+                          <summary class="btn btn-secondary btn-sm" style="display:inline-block;cursor:pointer">Editar</summary>
+                          <form method="POST" style="margin-top:0.75rem;min-width:340px">
+                            <input type="hidden" name="_action" value="editar_testigo" />
+                            <input type="hidden" name="_tab" value="testigos" />
+                            <input type="hidden" name="testigo_id" value={et.testigos?.id} />
+                            <div class="form-grid form-grid-2">
+                              <div class="field"><label>Nombre</label><input class="input" name="t_nombre" value={et.testigos?.nombre ?? ''} required /></div>
+                              <div class="field"><label>Apellido</label><input class="input" name="t_apellido" value={et.testigos?.apellido ?? ''} required /></div>
+                              <div class="field"><label>DNI</label><input class="input" name="t_dni" value={et.testigos?.dni ?? ''} /></div>
+                              <div class="field"><label>Domicilio</label><input class="input" name="t_domicilio" value={et.testigos?.domicilio ?? ''} /></div>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-sm" style="margin-top:0.6rem">Guardar cambios</button>
+                          </form>
+                        </details>
+                        <form method="POST" style="display:inline">
+                          <input type="hidden" name="_action" value="quitar_testigo" />
+                          <input type="hidden" name="_tab" value="testigos" />
+                          <input type="hidden" name="exp_testigo_id" value={et.id} />
+                          <button type="submit" class="btn btn-danger btn-sm">Quitar</button>
+                        </form>
+                      </td>
+                    </tr>
+                  </>
                 ))}
               </tbody>
             </table>
@@ -662,6 +753,7 @@ const tienNumero = !!exp.numero_expediente
             {[
               { value: 'caratula',               label: 'Carátula' },
               { value: 'nota_elevacion',          label: 'Nota de Elevación a la Directora' },
+              { value: 'documento_identidad',     label: 'Fotocopia del DNI del/los Comitente/s' },
               { value: 'capitulo_ubicacion',      label: 'Capítulo de Extensión, Límites e Inscripciones' },
               { value: 'citacion_linderos',       label: 'Notificación a Linderos y Autoridades' },
               { value: 'acta_mensura',            label: 'Acta de Mensura y Amojonamiento' },
@@ -724,6 +816,25 @@ const tienNumero = !!exp.numero_expediente
         )}
       </div>
     )}
+  </div>
+
+  <div id="modal-overlay-dni" class="modal-overlay" hidden>
+    <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="modal-dni-title">
+      <div class="modal-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+          <line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" />
+        </svg>
+      </div>
+      <h3 id="modal-dni-title">Quitar imagen de DNI</h3>
+      <p>¿Confirmás que querés quitar la imagen del <strong id="modal-dni-lado"></strong> cargado?</p>
+      <p class="modal-note">Se elimina del almacenamiento. Vas a tener que subirla de nuevo si la necesitás.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="modal-dni-cancel">Cancelar</button>
+        <button type="button" class="btn btn-danger" id="modal-dni-confirm">Quitar imagen</button>
+      </div>
+    </div>
   </div>
 </AppLayout>
 
@@ -1039,6 +1150,129 @@ const tienNumero = !!exp.numero_expediente
   }
 </script>
 
+<script>
+  // Nombre de archivo visible + subida/eliminación de DNI sin recargar la página
+  const DNI_BOX = 'width:140px;height:92px;border-radius:8px;overflow:hidden;background:var(--color-surface)'
+  function renderPreviewVacio(comitenteId, lado) {
+    return '<div class="dni-preview-inner" style="' + DNI_BOX + ';border:1px dashed var(--color-border);background:var(--color-bg)">' +
+      '<div class="dni-placeholder" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:0.72rem;color:var(--color-text-secondary)">Sin cargar</div>' +
+      '</div>'
+  }
+  function renderPreviewArchivo(url, lado, esImagen, comitenteId) {
+    const contenido = esImagen
+      ? '<a href="' + url + '" target="_blank" style="display:block;width:100%;height:100%"><img src="' + url + '" alt="DNI ' + lado + '" class="dni-img" style="width:100%;height:100%;object-fit:cover;display:block" /></a>'
+      : '<a href="' + url + '" class="badge badge-finalizado" style="text-decoration:none">Ver PDF</a>'
+    const btn = '<button type="button" class="dni-remove-btn" data-comitente-id="' + comitenteId + '" data-lado="' + lado + '" title="Quitar imagen">✕</button>'
+    return '<div class="dni-preview-inner" style="position:relative;' + DNI_BOX + ';border:1px solid var(--color-border)">' + contenido + btn + '</div>'
+  }
+
+  // Modal de confirmación para quitar imagen de DNI
+  const overlayDni    = document.getElementById('modal-overlay-dni')
+  const dniLadoLabel  = document.getElementById('modal-dni-lado')
+  const btnDniCancel  = document.getElementById('modal-dni-cancel')
+  const btnDniConfirm = document.getElementById('modal-dni-confirm')
+  let dniPendiente = null
+
+  function cerrarModalDni() { overlayDni.hidden = true; dniPendiente = null }
+
+  document.addEventListener('click', function(e) {
+    const btn = e.target.closest('.dni-remove-btn')
+    if (!btn) return
+    dniPendiente = { comitenteId: btn.dataset.comitenteId, lado: btn.dataset.lado, btn: btn }
+    dniLadoLabel.textContent = btn.dataset.lado === 'dorso' ? 'Dorso' : 'Frente'
+    overlayDni.hidden = false
+  })
+
+  btnDniCancel.addEventListener('click', cerrarModalDni)
+  overlayDni.addEventListener('click', function(e) { if (e.target === overlayDni) cerrarModalDni() })
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !overlayDni.hidden) cerrarModalDni() })
+
+  btnDniConfirm.addEventListener('click', function() {
+    if (!dniPendiente) return
+    const { comitenteId, lado, btn } = dniPendiente
+    const previewWrap = document.querySelector(
+      '.dni-preview-wrap[data-comitente-id="' + comitenteId + '"][data-lado="' + lado + '"]'
+    )
+    btn.disabled = true
+    cerrarModalDni()
+
+    const fd = new FormData()
+    fd.append('comitente_id', comitenteId)
+    fd.append('lado', lado)
+
+    fetch('/api/comitentes/eliminar-dni', { method: 'POST', body: fd })
+      .then(function(res) { return res.json() })
+      .then(function(data) {
+        if (data.ok && previewWrap) {
+          previewWrap.innerHTML = renderPreviewVacio(comitenteId, lado)
+        } else if (!data.ok) {
+          alert('No se pudo quitar la imagen.')
+        }
+      })
+      .catch(function() { alert('No se pudo quitar la imagen.') })
+  })
+
+  document.querySelectorAll('.dni-upload-form').forEach(function(form) {
+    const fileInput  = form.querySelector('.dni-file-input')
+    const fileName    = form.querySelector('.file-name')
+    const submitBtn  = form.querySelector('.dni-submit-btn')
+    const lado         = form.querySelector('input[name="lado"]').value
+    const comitenteId = form.querySelector('input[name="comitente_id"]').value
+    const previewWrap = document.querySelector(
+      '.dni-preview-wrap[data-comitente-id="' + comitenteId + '"][data-lado="' + lado + '"]'
+    )
+
+    fileInput.addEventListener('change', function() {
+      const f = fileInput.files[0]
+      fileName.textContent = f ? f.name : 'Sin archivo seleccionado'
+      fileName.classList.toggle('has-file', !!f)
+    })
+
+    form.addEventListener('submit', function(e) {
+      e.preventDefault()
+      const file = fileInput.files[0]
+      if (!file) return
+
+      submitBtn.disabled = true
+      submitBtn.textContent = 'Subiendo...'
+
+      fetch(form.action, {
+        method: 'POST',
+        body: new FormData(form),
+        headers: { 'X-Requested-With': 'fetch' },
+      })
+        .then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data } }) })
+        .then(function(result) {
+          if (!result.ok || !result.data.ok) {
+            const mensajes = {
+              archivo_requerido: 'Seleccioná un archivo para subir.',
+              formato_invalido: 'Formato no válido. Usá JPG, PNG o PDF.',
+              error_storage: 'Error al subir el archivo. Probá de nuevo.',
+            }
+            alert(mensajes[result.data.warn] || 'No se pudo subir el archivo.')
+            return
+          }
+          const ext = file.name.split('.').pop().toLowerCase()
+          const url = '/api/documentos/descargar?path=' + result.data.path + '&t=' + Date.now()
+          const esImagen = ['jpg','jpeg','png'].indexOf(ext) !== -1
+          if (previewWrap) {
+            previewWrap.innerHTML = renderPreviewArchivo(url, lado, esImagen, comitenteId)
+          }
+          fileInput.value = ''
+          fileName.textContent = 'Sin archivo seleccionado'
+          fileName.classList.remove('has-file')
+        })
+        .catch(function() {
+          alert('No se pudo subir el archivo. Probá de nuevo.')
+        })
+        .finally(function() {
+          submitBtn.disabled = false
+          submitBtn.textContent = 'Subir'
+        })
+    })
+  })
+</script>
+
 <style>
 .page-header { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:1.5rem; gap:1rem; flex-wrap:wrap; }
 .back-link { font-size:0.875rem; color:var(--color-text-secondary); display:block; margin-bottom:0.25rem; text-decoration:none; }
@@ -1061,4 +1295,64 @@ const tienNumero = !!exp.numero_expediente
 .visor-num { font-weight:700; color:var(--color-primary); font-size:0.78rem; min-width:22px; }
 .visor-dms { font-family:monospace; font-size:0.85rem; color:var(--color-text); }
 .visor-suma { font-size:0.82rem; font-weight:600; color:var(--color-primary); border-top:1px solid var(--color-border); padding-top:0.375rem; margin-top:0.25rem; }
+
+/* DNI preview + upload (tamaño fijo via inline style, acá solo comportamiento) */
+.dni-preview-wrap { display:flex; flex-direction:column; gap:0.35rem; }
+.dni-img { cursor:zoom-in; transition:transform 0.25s ease; }
+.dni-preview-inner:hover .dni-img { transform:scale(1.18); }
+.dni-placeholder {
+  width:100%; height:100%; display:flex; align-items:center; justify-content:center;
+  font-size:0.72rem; color:var(--color-text-secondary);
+}
+.dni-remove-btn {
+  position:absolute; top:5px; right:5px; z-index:2;
+  width:22px; height:22px; border-radius:50%; border:none;
+  background:rgba(15,23,42,0.55); color:#fff; font-size:0.7rem; line-height:1;
+  display:flex; align-items:center; justify-content:center; cursor:pointer;
+  opacity:0; transition:opacity 0.15s ease, background 0.15s ease;
+}
+.dni-preview-inner:hover .dni-remove-btn { opacity:1; }
+.dni-remove-btn:hover { background:rgba(220,38,38,0.85); }
+.file-btn {
+  display:inline-flex; align-items:center; gap:0.4rem; width:fit-content;
+  padding:0.4rem 0.7rem; background:var(--color-surface); border:1px solid var(--color-border);
+  border-radius:var(--radius-sm); font-size:0.78rem; font-weight:500; color:var(--color-text);
+  cursor:pointer; transition:background 0.15s,border-color 0.15s;
+}
+.file-btn:hover { background:var(--color-bg); border-color:var(--color-primary); }
+.file-name {
+  font-size:0.72rem; color:var(--color-text-secondary); max-width:168px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.file-name.has-file { color:var(--color-primary); font-weight:500; }
+.dni-submit-btn[disabled] { opacity:0.6; cursor:not-allowed; }
+
+/* Modal confirmación (estilo shadcn) */
+.modal-overlay {
+  position:fixed; inset:0; background:rgba(15,23,42,0.5);
+  display:flex; align-items:center; justify-content:center; z-index:1000;
+  animation:modal-fade-in 0.15s ease-out;
+}
+.modal-overlay[hidden] { display:none; }
+.modal-card {
+  background:var(--color-surface); border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-md); padding:1.5rem; width:100%; max-width:400px;
+  margin:1rem; animation:modal-pop-in 0.15s ease-out;
+}
+.modal-icon {
+  width:40px; height:40px; border-radius:50%;
+  background:#FEF2F2; color:var(--color-danger);
+  display:flex; align-items:center; justify-content:center; margin-bottom:0.875rem;
+}
+.modal-card h3 { font-size:1.05rem; font-weight:700; color:var(--color-text); margin-bottom:0.4rem; }
+.modal-card p { font-size:0.9rem; color:var(--color-text-secondary); margin-bottom:0.5rem; }
+.modal-card p strong { color:var(--color-text); font-weight:600; }
+.modal-note {
+  font-size:0.8rem; color:var(--color-text-secondary); background:var(--color-bg);
+  border-radius:var(--radius-sm); padding:0.6rem 0.75rem; margin-bottom:1.25rem;
+}
+.modal-actions { display:flex; justify-content:flex-end; gap:0.6rem; }
+
+@keyframes modal-fade-in { from { opacity:0; } to { opacity:1; } }
+@keyframes modal-pop-in { from { opacity:0; transform:scale(0.96) translateY(4px); } to { opacity:1; transform:scale(1) translateY(0); } }
 </style>

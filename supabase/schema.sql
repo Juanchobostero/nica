@@ -5,14 +5,16 @@
 
 -- ── profiles ──────────────────────────────────────────────
 create table if not exists profiles (
-  id          uuid primary key references auth.users(id) on delete cascade,
-  nombre      text,
-  apellido    text,
-  matricula   text,
-  telefono    text,
-  email       text,
-  domicilio   text,
-  created_at  timestamptz default now()
+  id                  uuid primary key references auth.users(id) on delete cascade,
+  nombre              text,
+  apellido            text,
+  dni                 text,
+  matricula           text, -- Matrícula del Consejo Profesional
+  matricula_catastro  text, -- Matrícula de la Dirección Gral. de Catastro
+  telefono            text,
+  email               text,
+  domicilio           text,
+  created_at          timestamptz default now()
 );
 
 alter table profiles enable row level security;
@@ -37,6 +39,8 @@ create table if not exists comitentes (
   domicilio   text,
   telefono    text,
   email       text,
+  dni_scan_path        text,
+  dni_scan_path_dorso  text,
   created_at  timestamptz default now()
 );
 
@@ -73,6 +77,8 @@ create table if not exists expedientes (
   fecha_inicio        date,
   fecha_cierre        date,
   observaciones       text,
+  area_catastro       text,
+  eliminado_at        timestamptz,
   created_at          timestamptz default now(),
   updated_at          timestamptz default now()
 );
@@ -98,7 +104,7 @@ create table if not exists exp_comitentes (
   id              uuid primary key default gen_random_uuid(),
   expediente_id   uuid references expedientes(id) on delete cascade not null,
   comitente_id    uuid references comitentes(id) on delete cascade not null,
-  rol             text default 'titular' check (rol in ('titular','apoderado','heredero')),
+  rol             text default 'titular' check (rol in ('titular','apoderado','heredero','poseedor')),
   orden           int default 1
 );
 
@@ -159,6 +165,8 @@ create table if not exists inmuebles (
   subparcela            text,
   matricula_catastral   text,
   matricula_registro    text,
+  matricula_municipal   text,
+  antecedentes_tecnicos text,
   tipo_inmueble         text check (tipo_inmueble in ('urbano','rural'))
 );
 

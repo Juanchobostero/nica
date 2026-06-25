@@ -7,6 +7,16 @@ const { data: { user } } = await supabase.auth.getUser(token)
 const uid = user?.id ?? ''
 const db = getSupabase(token)
 
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  if (form.get('_action') === 'eliminar_expediente') {
+    const expId = form.get('expediente_id') as string
+    await db.from('expedientes')
+      .update({ eliminado_at: new Date().toISOString() })
+      .eq('id', expId).eq('user_id', uid)
+  }
+}
+
 const estado   = Astro.url.searchParams.get('estado') ?? 'todos'
 const busqueda = Astro.url.searchParams.get('q') ?? ''
 
@@ -17,6 +27,7 @@ let query = db
     exp_comitentes ( orden, comitentes ( nombre, apellido ) )
   `)
   .eq('user_id', uid)
+  .is('eliminado_at', null)
   .order('created_at', { ascending: false })
 
 if (estado !== 'todos') query = query.eq('estado', estado)
@@ -100,8 +111,17 @@ function comitentePrincipal(exp: any): string {
                 </span>
               </td>
               <td>{exp.fecha_inicio ? new Date(exp.fecha_inicio).toLocaleDateString('es-AR') : '—'}</td>
-              <td>
+              <td style="display:flex;gap:0.5rem">
                 <a href={`/expedientes/${exp.id}`} class="btn btn-secondary btn-sm">Ver / Editar</a>
+                <form method="POST" class="form-eliminar-expediente" style="display:inline"
+                  data-numero={exp.numero_expediente || ''}
+                  data-comitente={comitentePrincipal(exp)}
+                  data-tipo={exp.tipo_mensura || '—'}
+                  data-estado={(exp.estado ?? 'borrador').replace('_', ' ')}>
+                  <input type="hidden" name="_action" value="eliminar_expediente" />
+                  <input type="hidden" name="expediente_id" value={exp.id} />
+                  <button type="button" class="btn btn-danger btn-sm btn-eliminar-trigger">Eliminar</button>
+                </form>
               </td>
             </tr>
           ))}
@@ -109,10 +129,107 @@ function comitentePrincipal(exp: any): string {
       </table>
     </div>
   </div>
+
+  <div id="modal-overlay" class="modal-overlay" hidden>
+    <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+          <line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" />
+        </svg>
+      </div>
+      <h3 id="modal-title">Eliminar expediente</h3>
+      <p id="modal-desc">Esta acción ocultará el siguiente expediente de la lista:</p>
+      <div class="modal-info">
+        <div class="modal-info-row"><span>Nº Expediente</span><strong id="modal-numero"></strong></div>
+        <div class="modal-info-row"><span>Comitente</span><strong id="modal-comitente"></strong></div>
+        <div class="modal-info-row"><span>Tipo de mensura</span><strong id="modal-tipo"></strong></div>
+        <div class="modal-info-row"><span>Estado</span><strong id="modal-estado"></strong></div>
+      </div>
+      <p class="modal-note">
+        No se borra de forma permanente: queda oculto de la lista y se puede recuperar luego desde la base de datos si fue un error.
+      </p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="modal-cancel">Cancelar</button>
+        <button type="button" class="btn btn-danger" id="modal-confirm">Eliminar</button>
+      </div>
+    </div>
+  </div>
 </AppLayout>
+
+<script>
+  const overlay      = document.getElementById('modal-overlay')
+  const elNumero      = document.getElementById('modal-numero')
+  const elComitente   = document.getElementById('modal-comitente')
+  const elTipo         = document.getElementById('modal-tipo')
+  const elEstado       = document.getElementById('modal-estado')
+  const btnCancel    = document.getElementById('modal-cancel')
+  const btnConfirm   = document.getElementById('modal-confirm')
+  let formPendiente = null
+
+  function abrirModal(form) {
+    formPendiente = form
+    elNumero.textContent    = form.dataset.numero || 'Sin número asignado'
+    elComitente.textContent = form.dataset.comitente || '—'
+    elTipo.textContent      = form.dataset.tipo || '—'
+    elEstado.textContent    = form.dataset.estado || '—'
+    overlay.hidden = false
+  }
+  function cerrarModal() {
+    overlay.hidden = true
+    formPendiente = null
+  }
+
+  document.querySelectorAll('.btn-eliminar-trigger').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      abrirModal(btn.closest('.form-eliminar-expediente'))
+    })
+  })
+
+  btnCancel.addEventListener('click', cerrarModal)
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) cerrarModal() })
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !overlay.hidden) cerrarModal() })
+
+  btnConfirm.addEventListener('click', function() {
+    if (formPendiente) formPendiente.submit()
+  })
+</script>
 
 <style>
 .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
 .page-header h2 { font-size:1.5rem; }
 .filters { display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; }
+
+.modal-overlay {
+  position:fixed; inset:0; background:rgba(15,23,42,0.5);
+  display:flex; align-items:center; justify-content:center; z-index:1000;
+  animation:modal-fade-in 0.15s ease-out;
+}
+.modal-overlay[hidden] { display:none; }
+.modal-info { border:1px solid var(--color-border); border-radius:var(--radius-sm); margin-bottom:1rem; overflow:hidden; }
+.modal-info-row { display:flex; justify-content:space-between; gap:0.75rem; padding:0.45rem 0.75rem; font-size:0.85rem; }
+.modal-info-row:not(:last-child) { border-bottom:1px solid var(--color-border); }
+.modal-info-row span { color:var(--color-text-secondary); }
+.modal-info-row strong { color:var(--color-text); font-weight:600; text-align:right; }
+.modal-card {
+  background:var(--color-surface); border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-md); padding:1.5rem; width:100%; max-width:400px;
+  margin:1rem; animation:modal-pop-in 0.15s ease-out;
+}
+.modal-icon {
+  width:40px; height:40px; border-radius:50%;
+  background:#FEF2F2; color:var(--color-danger);
+  display:flex; align-items:center; justify-content:center; margin-bottom:0.875rem;
+}
+.modal-card h3 { font-size:1.05rem; font-weight:700; color:var(--color-text); margin-bottom:0.4rem; }
+.modal-card p#modal-desc { font-size:0.9rem; color:var(--color-text-secondary); margin-bottom:0.75rem; }
+.modal-note {
+  font-size:0.8rem; color:var(--color-text-secondary); background:var(--color-bg);
+  border-radius:var(--radius-sm); padding:0.6rem 0.75rem; margin-bottom:1.25rem;
+}
+.modal-actions { display:flex; justify-content:flex-end; gap:0.6rem; }
+
+@keyframes modal-fade-in { from { opacity:0; } to { opacity:1; } }
+@keyframes modal-pop-in { from { opacity:0; transform:scale(0.96) translateY(4px); } to { opacity:1; transform:scale(1) translateY(0); } }
 </style>

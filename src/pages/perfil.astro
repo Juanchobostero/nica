@@ -16,7 +16,9 @@ if (Astro.request.method === 'POST') {
     id: uid,
     nombre: form.get('nombre'),
     apellido: form.get('apellido'),
+    dni: form.get('dni'),
     matricula: form.get('matricula'),
+    matricula_catastro: form.get('matricula_catastro'),
     telefono: form.get('telefono'),
     email: form.get('email'),
     domicilio: form.get('domicilio'),
@@ -55,8 +57,16 @@ const { data: profile } = await db
           <input class="input" id="apellido" name="apellido" value={profile?.apellido ?? ''} required />
         </div>
         <div class="field">
-          <label for="matricula">Matrícula profesional</label>
+          <label for="dni">DNI</label>
+          <input class="input" id="dni" name="dni" value={(profile as any)?.dni ?? ''} />
+        </div>
+        <div class="field">
+          <label for="matricula">Matrícula Consejo</label>
           <input class="input" id="matricula" name="matricula" value={profile?.matricula ?? ''} />
+        </div>
+        <div class="field">
+          <label for="matricula_catastro">Matrícula Catastro</label>
+          <input class="input" id="matricula_catastro" name="matricula_catastro" value={(profile as any)?.matricula_catastro ?? ''} />
         </div>
         <div class="field">
           <label for="telefono">Teléfono</label>
