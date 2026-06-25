@@ -17,6 +17,11 @@ const { data: exp } = await db
 
 if (!exp) return Astro.redirect('/expedientes')
 
+const DOCS_POR_PAGINA = 10
+const docPage = Math.max(1, parseInt(Astro.url.searchParams.get('docpag') ?? '1') || 1)
+const docFrom = (docPage - 1) * DOCS_POR_PAGINA
+const docTo = docFrom + DOCS_POR_PAGINA - 1
+
 // Cargar datos relacionados en paralelo
 const [
   { data: inmueble },
@@ -24,7 +29,7 @@ const [
   { data: expTestigos },
   { data: poligono },
   { data: linderos },
-  { data: documentos },
+  { data: documentos, count: documentosCount },
   { data: comitentesAll },
   { data: testigosAll },
 ] = await Promise.all([
@@ -33,10 +38,12 @@ const [
   db.from('exp_testigos').select('*, testigos(*)').eq('expediente_id', id),
   db.from('poligono').select('*, lados(*), angulos(*)').eq('expediente_id', id).maybeSingle(),
   db.from('linderos').select('*').eq('expediente_id', id).maybeSingle(),
-  db.from('documentos_generados').select('*').eq('expediente_id', id).order('generado_at', { ascending: false }),
+  db.from('documentos_generados').select('*', { count: 'exact' }).eq('expediente_id', id).order('generado_at', { ascending: false }).range(docFrom, docTo),
   db.from('comitentes').select('id,nombre,apellido,dni').eq('user_id', uid).order('apellido'),
   db.from('testigos').select('id,nombre,apellido,dni').eq('user_id', uid).order('apellido'),
 ])
+
+const docTotalPages = Math.max(1, Math.ceil((documentosCount ?? 0) / DOCS_POR_PAGINA))
 
 let successMsg = ''
 let errorMsg = ''
@@ -59,6 +66,9 @@ if (Astro.request.method === 'POST') {
       matricula_catastral: form.get('matricula_catastral'),
       matricula_registro: form.get('matricula_registro'),
       matricula_municipal: form.get('matricula_municipal') || null,
+      registro_tomo: form.get('registro_tomo') || null,
+      registro_folio: form.get('registro_folio') || null,
+      registro_anio: form.get('registro_anio') || null,
       antecedentes_tecnicos: form.get('antecedentes_tecnicos') || null,
       tipo_inmueble: form.get('tipo_inmueble'),
     }
@@ -514,6 +524,22 @@ const tienNumero = !!exp.numero_expediente
           </div>
         </div>
 
+        <div class="section-label" style="margin-top:0.5rem">Antecedentes de dominio (inscripción en mayor extensión)</div>
+        <div class="form-grid form-grid-2" style="margin-bottom:1rem">
+          <div class="field">
+            <label>Tomo</label>
+            <input class="input" name="registro_tomo" value={(inmueble as any)?.registro_tomo ?? ''} />
+          </div>
+          <div class="field">
+            <label>Folio</label>
+            <input class="input" name="registro_folio" value={(inmueble as any)?.registro_folio ?? ''} />
+          </div>
+          <div class="field">
+            <label>Año</label>
+            <input class="input" name="registro_anio" value={(inmueble as any)?.registro_anio ?? ''} />
+          </div>
+        </div>
+
         <div style="margin-bottom:1rem">
           <label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer">
             <input type="checkbox" id="chk_sin_inscripcion" style="width:16px;height:16px;accent-color:var(--color-primary)" />
@@ -786,34 +812,59 @@ const tienNumero = !!exp.numero_expediente
           <button type="submit" class="btn btn-primary">Generar seleccionados</button>
         </form>
 
-        {(documentos ?? []).length > 0 && (
-          <div style="margin-top:2rem">
-            <h4 style="margin-bottom:0.75rem">Documentos generados</h4>
-            <table>
-              <thead><tr><th>Tipo</th><th>Fecha</th><th>Estado</th><th>Descarga</th></tr></thead>
-              <tbody>
-                {documentos!.map((doc: any) => (
-                  <tr>
-                    <td style="text-transform:capitalize">{doc.tipo_documento.replace(/_/g,' ')}</td>
-                    <td>{new Date(doc.generado_at).toLocaleDateString('es-AR')}</td>
-                    <td>
-                      {doc.estado === 'error_storage'
-                        ? <span class="badge badge-borrador">sin archivo</span>
-                        : <span class="badge badge-finalizado">generado</span>
-                      }
-                    </td>
-                    <td>
-                      {doc.storage_path
-                        ? <a href={`/api/documentos/descargar?path=${doc.storage_path}`} class="btn btn-secondary btn-sm">Descargar</a>
-                        : <span style="color:var(--color-muted);font-size:0.8125rem">No disponible</span>
-                      }
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <div style="margin-top:2rem" id="documentos_section">
+          <h4 style="margin-bottom:0.75rem" id="documentos_titulo">Documentos generados {documentosCount ? `(${documentosCount})` : ''}</h4>
+          <table>
+            <thead><tr><th>Tipo</th><th>Fecha y hora</th><th>Estado</th><th>Descarga</th><th></th></tr></thead>
+            <tbody id="documentos_tbody">
+              {(documentos ?? []).length === 0 && (
+                <tr id="documentos_vacio">
+                  <td colspan="5" style="text-align:center;color:var(--color-text-secondary);padding:1.5rem">
+                    Todavía no se generó ningún documento.
+                  </td>
+                </tr>
+              )}
+              {(documentos ?? []).map((doc: any) => (
+                <tr data-doc-row>
+                  <td style="text-transform:capitalize">{doc.tipo_documento.replace(/_/g,' ')}</td>
+                  <td>{new Date(doc.generado_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' })}</td>
+                  <td>
+                    {doc.estado === 'error_storage'
+                      ? <span class="badge badge-borrador">sin archivo</span>
+                      : <span class="badge badge-finalizado">generado</span>
+                    }
+                  </td>
+                  <td>
+                    {doc.storage_path
+                      ? <a href={`/api/documentos/descargar?path=${doc.storage_path}`} class="btn btn-secondary btn-sm">Descargar</a>
+                      : <span style="color:var(--color-muted);font-size:0.8125rem">No disponible</span>
+                    }
+                  </td>
+                  <td>
+                    <form class="form-eliminar-documento" style="display:inline"
+                      data-tipo={doc.tipo_documento.replace(/_/g, ' ')}
+                      data-fecha={new Date(doc.generado_at).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' })}
+                      data-documento-id={doc.id}>
+                      <button type="button" class="btn btn-danger btn-sm btn-eliminar-doc-trigger">Eliminar</button>
+                    </form>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {docTotalPages > 1 && (
+            <div style="display:flex;gap:0.5rem;align-items:center;justify-content:center;margin-top:1rem">
+              <a href={`?tab=documentos&docpag=${Math.max(1, docPage - 1)}`}
+                class={`btn btn-secondary btn-sm ${docPage <= 1 ? 'btn-disabled' : ''}`}
+                aria-disabled={docPage <= 1}>← Anterior</a>
+              <span style="font-size:0.875rem;color:var(--color-text-secondary)">Página {docPage} de {docTotalPages}</span>
+              <a href={`?tab=documentos&docpag=${Math.min(docTotalPages, docPage + 1)}`}
+                class={`btn btn-secondary btn-sm ${docPage >= docTotalPages ? 'btn-disabled' : ''}`}
+                aria-disabled={docPage >= docTotalPages}>Siguiente →</a>
+            </div>
+          )}
+        </div>
       </div>
     )}
   </div>
@@ -833,6 +884,29 @@ const tienNumero = !!exp.numero_expediente
       <div class="modal-actions">
         <button type="button" class="btn btn-secondary" id="modal-dni-cancel">Cancelar</button>
         <button type="button" class="btn btn-danger" id="modal-dni-confirm">Quitar imagen</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-overlay-doc" class="modal-overlay" hidden>
+    <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="modal-doc-title">
+      <div class="modal-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+          <line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" />
+        </svg>
+      </div>
+      <h3 id="modal-doc-title">Eliminar documento</h3>
+      <p>Esta acción borra el siguiente PDF de forma permanente (de la base y del almacenamiento):</p>
+      <div class="modal-info">
+        <div class="modal-info-row"><span>Tipo</span><strong id="modal-doc-tipo" style="text-transform:capitalize"></strong></div>
+        <div class="modal-info-row"><span>Fecha</span><strong id="modal-doc-fecha"></strong></div>
+      </div>
+      <p class="modal-note">Podés generarlo de nuevo en cualquier momento desde los checkboxes de arriba.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="modal-doc-cancel">Cancelar</button>
+        <button type="button" class="btn btn-danger" id="modal-doc-confirm">Eliminar</button>
       </div>
     </div>
   </div>
@@ -1212,6 +1286,149 @@ const tienNumero = !!exp.numero_expediente
       .catch(function() { alert('No se pudo quitar la imagen.') })
   })
 
+  // Modal de confirmación para eliminar documento generado
+  const overlayDoc    = document.getElementById('modal-overlay-doc')
+  const docTipoLabel  = document.getElementById('modal-doc-tipo')
+  const docFechaLabel = document.getElementById('modal-doc-fecha')
+  const btnDocCancel  = document.getElementById('modal-doc-cancel')
+  const btnDocConfirm = document.getElementById('modal-doc-confirm')
+  let formDocPendiente = null
+
+  function cerrarModalDoc() { overlayDoc.hidden = true; formDocPendiente = null }
+
+  function actualizarContadorDocumentos(delta) {
+    const titulo = document.getElementById('documentos_titulo')
+    if (!titulo) return
+    const actual = parseInt((titulo.textContent.match(/\((\d+)\)/) || [])[1] || '0')
+    const nuevo = Math.max(0, actual + delta)
+    titulo.textContent = 'Documentos generados (' + nuevo + ')'
+  }
+
+  function formatearFechaHora(iso) {
+    const d = new Date(iso)
+    const pad = function(n) { return String(n).padStart(2, '0') }
+    return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear() + ', ' + pad(d.getHours()) + ':' + pad(d.getMinutes())
+  }
+
+  // Destaca una fila en verde y la desvanece sola, vía estilos inline (no depende de animationend)
+  function destacarFilaNueva(tr) {
+    tr.style.backgroundColor = 'rgba(16,185,129,0.30)'
+    setTimeout(function() { tr.style.backgroundColor = '' }, 900)
+  }
+
+  // Desvanece y quita una fila de forma determinística (setTimeout, no animationend)
+  function quitarFilaConTransicion(tr, callback) {
+    tr.style.backgroundColor = 'rgba(239,68,68,0.16)'
+    tr.style.opacity = '0'
+    setTimeout(function() {
+      tr.remove()
+      if (callback) callback()
+    }, 320)
+  }
+
+  function crearFilaDocumento(doc) {
+    const tr = document.createElement('tr')
+    tr.setAttribute('data-doc-row', '')
+    const tipoLabel = doc.tipo_documento.replace(/_/g, ' ')
+    const estadoHtml = doc.estado === 'error_storage'
+      ? '<span class="badge badge-borrador">sin archivo</span>'
+      : '<span class="badge badge-finalizado">generado</span>'
+    const descargaHtml = doc.storage_path
+      ? '<a href="/api/documentos/descargar?path=' + doc.storage_path + '" class="btn btn-secondary btn-sm">Descargar</a>'
+      : '<span style="color:var(--color-muted);font-size:0.8125rem">No disponible</span>'
+    const fechaTexto = formatearFechaHora(doc.generado_at)
+    tr.innerHTML =
+      '<td style="text-transform:capitalize">' + tipoLabel + '</td>' +
+      '<td>' + fechaTexto + '</td>' +
+      '<td>' + estadoHtml + '</td>' +
+      '<td>' + descargaHtml + '</td>' +
+      '<td><form class="form-eliminar-documento" style="display:inline" data-tipo="' + tipoLabel + '" data-fecha="' + fechaTexto + '" data-documento-id="' + doc.id + '">' +
+        '<button type="button" class="btn btn-danger btn-sm btn-eliminar-doc-trigger">Eliminar</button></form></td>'
+    return tr
+  }
+
+  // Delegación: funciona también para filas insertadas dinámicamente al generar
+  document.addEventListener('click', function(e) {
+    const btn = e.target.closest('.btn-eliminar-doc-trigger')
+    if (!btn) return
+    const form = btn.closest('.form-eliminar-documento')
+    formDocPendiente = form
+    docTipoLabel.textContent = form.dataset.tipo || '—'
+    docFechaLabel.textContent = form.dataset.fecha || '—'
+    overlayDoc.hidden = false
+  })
+
+  btnDocCancel.addEventListener('click', cerrarModalDoc)
+  overlayDoc.addEventListener('click', function(e) { if (e.target === overlayDoc) cerrarModalDoc() })
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !overlayDoc.hidden) cerrarModalDoc() })
+
+  btnDocConfirm.addEventListener('click', function() {
+    if (!formDocPendiente) return
+    const form = formDocPendiente
+    const docId = form.dataset.documentoId
+    const fila = form.closest('tr')
+    cerrarModalDoc()
+
+    const fd = new FormData()
+    fd.append('documento_id', docId)
+
+    fetch('/api/documentos/eliminar', { method: 'POST', body: fd })
+      .then(function(res) { return res.json() })
+      .then(function(data) {
+        if (!data.ok) { alert('No se pudo eliminar el documento.'); return }
+        if (fila) {
+          quitarFilaConTransicion(fila, function() {
+            actualizarContadorDocumentos(-1)
+            const tbody = document.getElementById('documentos_tbody')
+            if (tbody && !tbody.querySelector('[data-doc-row]')) {
+              tbody.innerHTML = '<tr id="documentos_vacio"><td colspan="5" style="text-align:center;color:var(--color-text-secondary);padding:1.5rem">Todavía no se generó ningún documento.</td></tr>'
+            }
+          })
+        }
+      })
+      .catch(function() { alert('No se pudo eliminar el documento.') })
+  })
+
+  // Generar documentos sin recargar la página
+  const formGenerarDocs = document.querySelector('form[action="/api/documentos/generar"]')
+  if (formGenerarDocs) {
+    formGenerarDocs.addEventListener('submit', function(e) {
+      e.preventDefault()
+      const btnSubmit = formGenerarDocs.querySelector('button[type="submit"]')
+      const tiposMarcados = formGenerarDocs.querySelectorAll('input[name="tipos[]"]:checked')
+      if (!tiposMarcados.length) { alert('Seleccioná al menos un documento para generar.'); return }
+
+      btnSubmit.disabled = true
+      const textoOriginal = btnSubmit.textContent
+      btnSubmit.textContent = 'Generando...'
+
+      fetch(formGenerarDocs.action, {
+        method: 'POST',
+        body: new FormData(formGenerarDocs),
+        headers: { 'X-Requested-With': 'fetch' },
+      })
+        .then(function(res) { return res.json() })
+        .then(function(data) {
+          if (!data.ok) { alert('No se pudieron generar los documentos.'); return }
+          const tbody = document.getElementById('documentos_tbody')
+          const vacio = document.getElementById('documentos_vacio')
+          if (vacio) vacio.remove()
+          data.documentos.slice().reverse().forEach(function(doc) {
+            const fila = crearFilaDocumento(doc)
+            tbody.insertBefore(fila, tbody.firstChild)
+            destacarFilaNueva(fila)
+          })
+          actualizarContadorDocumentos(data.documentos.length)
+          tiposMarcados.forEach(function(chk) { chk.checked = false })
+        })
+        .catch(function() { alert('No se pudieron generar los documentos.') })
+        .finally(function() {
+          btnSubmit.disabled = false
+          btnSubmit.textContent = textoOriginal
+        })
+    })
+  }
+
   document.querySelectorAll('.dni-upload-form').forEach(function(form) {
     const fileInput  = form.querySelector('.dni-file-input')
     const fileName    = form.querySelector('.file-name')
@@ -1326,6 +1543,11 @@ const tienNumero = !!exp.numero_expediente
 }
 .file-name.has-file { color:var(--color-primary); font-weight:500; }
 .dni-submit-btn[disabled] { opacity:0.6; cursor:not-allowed; }
+.btn-disabled { opacity:0.4; pointer-events:none; }
+
+/* Transiciones de filas de documentos generados (controladas desde JS, no por keyframes,
+   ya que animar transform/opacity con animationend en <tr> no es confiable entre navegadores) */
+tr[data-doc-row] { transition: background-color 1.6s ease, opacity 0.3s ease; }
 
 /* Modal confirmación (estilo shadcn) */
 .modal-overlay {
@@ -1347,6 +1569,11 @@ const tienNumero = !!exp.numero_expediente
 .modal-card h3 { font-size:1.05rem; font-weight:700; color:var(--color-text); margin-bottom:0.4rem; }
 .modal-card p { font-size:0.9rem; color:var(--color-text-secondary); margin-bottom:0.5rem; }
 .modal-card p strong { color:var(--color-text); font-weight:600; }
+.modal-info { border:1px solid var(--color-border); border-radius:var(--radius-sm); margin-bottom:1rem; overflow:hidden; }
+.modal-info-row { display:flex; justify-content:space-between; gap:0.75rem; padding:0.45rem 0.75rem; font-size:0.85rem; }
+.modal-info-row:not(:last-child) { border-bottom:1px solid var(--color-border); }
+.modal-info-row span { color:var(--color-text-secondary); }
+.modal-info-row strong { color:var(--color-text); font-weight:600; text-align:right; }
 .modal-note {
   font-size:0.8rem; color:var(--color-text-secondary); background:var(--color-bg);
   border-radius:var(--radius-sm); padding:0.6rem 0.75rem; margin-bottom:1.25rem;

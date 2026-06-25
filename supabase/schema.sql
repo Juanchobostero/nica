@@ -166,6 +166,9 @@ create table if not exists inmuebles (
   matricula_catastral   text,
   matricula_registro    text,
   matricula_municipal   text,
+  registro_tomo         text,
+  registro_folio        text,
+  registro_anio         text,
   antecedentes_tecnicos text,
   tipo_inmueble         text check (tipo_inmueble in ('urbano','rural'))
 );

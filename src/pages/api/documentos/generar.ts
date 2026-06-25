@@ -28,7 +28,7 @@ function dibujarCentrado(page: PDFPage, texto: string, y: number, size: number, 
 
 // Parte un texto largo en líneas que entren dentro de maxWidth
 function partirEnLineas(texto: string, maxWidth: number, size: number, font: PDFFont): string[] {
-  const palabras = texto.split(' ')
+  const palabras = texto.replace(/\r?\n/g, ' ').split(' ').filter(Boolean)
   const lineas: string[] = []
   let actual = ''
   for (const palabra of palabras) {
@@ -44,14 +44,7 @@ function partirEnLineas(texto: string, maxWidth: number, size: number, font: PDF
   return lineas
 }
 
-// Dibuja "Label: valor" con label en negrita y valor en fuente normal, en una sola línea
-function dibujarLabelValor(page: PDFPage, x: number, y: number, label: string, valor: string, size: number, boldFont: PDFFont, font: PDFFont, color: any) {
-  page.drawText(label, { x, y, size, font: boldFont, color })
-  const labelW = boldFont.widthOfTextAtSize(label, size)
-  page.drawText(valor, { x: x + labelW + 3, y, size, font, color })
-}
-
-// Encabezado tipo membrete de Franco: logo sobre fondo blanco + caja negra (Objeto/Comitente/Ubicación/Profesional) + línea de contacto
+// Encabezado: caja negra a todo el ancho con Objeto/Comitente/Ubicación/Profesional (con wrap automático) + línea de contacto
 function dibujarEncabezado(
   page: PDFPage, width: number, height: number,
   fonts: { font: PDFFont; bold: PDFFont },
@@ -63,45 +56,49 @@ function dibujarEncabezado(
   const gris   = rgb(0.42, 0.45, 0.50)
   const negro  = rgb(0.10, 0.10, 0.10)
 
-  const barH = 62
+  const margen = 30
+  const cajaX = margen
+  const cajaW = width - margen * 2
+  const padX = 10
+  const sizeFila = 7.5
+  const lhFila = 10.5
+
+  const filasTexto = [
+    `OBJETO: ${datos.objeto}`,
+    `COMITENTE: ${datos.comitente}`,
+    `UBICACIÓN: ${datos.ubicacion}`,
+    `PROFESIONAL: ${datos.profesional}`,
+  ].map(t => t.toUpperCase())
+
+  const anchoDisponible = cajaW - padX * 2
+  const filasWrapped = filasTexto.map(t => partirEnLineas(t, anchoDisponible, sizeFila, bold))
+  const totalLineas = filasWrapped.reduce((acc, l) => acc + l.length, 0)
+  const barH = Math.max(50, totalLineas * lhFila + 14)
+
   const yTop = height - 14
+  const cajaY = yTop - barH
+  page.drawRectangle({ x: cajaX, y: cajaY, width: cajaW, height: barH, color: negroFondo })
 
-  // Logo: cuadrado con borde negro sobre fondo blanco (página)
-  const logoX = 30, logoY = yTop - barH, logoSize = barH
-  page.drawRectangle({ x: logoX, y: logoY, width: logoSize, height: logoSize, borderColor: negro, borderWidth: 1.5 })
-  const nW = bold.widthOfTextAtSize('N', 26)
-  page.drawText('N', { x: logoX + (logoSize - nW) / 2, y: logoY + logoSize / 2 - 11, size: 26, font: bold, color: negro })
-
-  page.drawText('CONSULTORIA EN', { x: logoX + logoSize + 10, y: yTop - 22, size: 9, font: bold, color: negro })
-  page.drawText('AGRIMENSURA',    { x: logoX + logoSize + 10, y: yTop - 34, size: 9, font: bold, color: negro })
-
-  // Caja negra con datos del expediente, a la derecha
-  const cajaX = logoX + logoSize + 130
-  const cajaW = width - 30 - cajaX
-  page.drawRectangle({ x: cajaX, y: yTop - barH, width: cajaW, height: barH, color: negroFondo })
-
-  const filas: [string, string][] = [
-    ['OBJETO: ', datos.objeto],
-    ['COMITENTE: ', datos.comitente],
-    ['UBICACIÓN: ', datos.ubicacion],
-    ['PROFESIONAL: ', datos.profesional],
-  ]
-  filas.forEach(([label, valor], i) => {
-    dibujarLabelValor(page, cajaX + 8, yTop - 13 - i * 13, label, valor.toUpperCase(), 7.3, bold, font, blanco)
+  let cursorY = yTop - 16
+  filasWrapped.forEach(lineas => {
+    lineas.forEach(linea => {
+      page.drawText(linea, { x: cajaX + padX, y: cursorY, size: sizeFila, font: bold, color: blanco })
+      cursorY -= lhFila
+    })
   })
 
   // Línea separadora debajo de todo el encabezado
-  page.drawLine({ start: { x: 30, y: logoY - 10 }, end: { x: width - 30, y: logoY - 10 }, thickness: 1, color: negro })
+  page.drawLine({ start: { x: margen, y: cajaY - 10 }, end: { x: width - margen, y: cajaY - 10 }, thickness: 1, color: negro })
 
   // Línea de contacto debajo de la franja
   const contacto = [datos.telefono ? `Celular: ${datos.telefono}` : '', datos.email ? `Correo: ${datos.email}` : '']
     .filter(Boolean).join(' – ')
   if (contacto) {
     const w = font.widthOfTextAtSize(contacto, 8)
-    page.drawText(contacto, { x: (width - w) / 2, y: logoY - 24, size: 8, font, color: gris })
+    page.drawText(contacto, { x: (width - w) / 2, y: cajaY - 24, size: 8, font, color: gris })
   }
 
-  return logoY - 24 // y final del encabezado, para que el cuerpo sepa desde dónde continuar
+  return cajaY - 24 // y final del encabezado, para que el cuerpo sepa desde dónde continuar
 }
 
 // Crea una página nueva (A4) con el encabezado tipo membrete ya dibujado. Para documentos multipágina.
@@ -217,7 +214,7 @@ function dibujarLineaJustificada(page: PDFPage, palabras: string[], x: number, y
 // Devuelve la coordenada Y donde termina (para encadenar el siguiente párrafo).
 function dibujarParrafo(page: PDFPage, texto: string, x: number, y: number, maxWidth: number, size: number, font: PDFFont, color: any, lineHeight?: number, sangria = 18): number {
   const lh = lineHeight ?? size * 1.55
-  const palabras = texto.split(' ')
+  const palabras = texto.replace(/\r?\n/g, ' ').split(' ').filter(Boolean)
   const lineas: string[] = []
   let actual = ''
   for (const palabra of palabras) {
@@ -264,14 +261,19 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const { data: { user } } = await supabase.auth.getUser(token)
   if (!user) return redirect('/login')
 
+  const isAjax = request.headers.get('X-Requested-With') === 'fetch'
   const db = getSupabase(token)
   const form = await request.formData()
   const expedienteId = form.get('expediente_id') as string
   const tipos = form.getAll('tipos[]') as string[]
 
   if (!tipos.length) {
-    return redirect(`/expedientes/${expedienteId}?tab=documentos&warn=sin_seleccion`)
+    return isAjax
+      ? new Response(JSON.stringify({ ok: false, warn: 'sin_seleccion' }), { status: 400 })
+      : redirect(`/expedientes/${expedienteId}?tab=documentos&warn=sin_seleccion`)
   }
+
+  const documentosCreados: { id: string; tipo_documento: string; storage_path: string | null; estado: string; generado_at: string }[] = []
 
   const { data: exp } = await db
     .from('expedientes')
@@ -281,6 +283,12 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
   const { data: inmueble } = await db
     .from('inmuebles').select('*').eq('expediente_id', expedienteId).maybeSingle()
+
+  const { data: poligono } = await db
+    .from('poligono').select('superficie_m2, superficie_letras').eq('expediente_id', expedienteId).maybeSingle()
+
+  const { data: linderos } = await db
+    .from('linderos').select('norte_mensura, sur_mensura, este_mensura, oeste_mensura').eq('expediente_id', expedienteId).maybeSingle()
 
   const { data: expComitentes } = await db
     .from('exp_comitentes').select('orden, rol, comitentes(nombre, apellido, dni, telefono, email, domicilio, dni_scan_path, dni_scan_path_dorso)')
@@ -354,9 +362,20 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       dibujarSelloProfesional(page, width / 2, yFirma + 90, { bold }, negro)
       page.drawLine({ start: { x: 40, y: yFirma + 30 }, end: { x: width - 40, y: yFirma + 30 }, thickness: 1, color: rgb(0.88,0.91,0.95) })
       dibujarCentrado(page, `Ing. Agrimensor ${nombreProfesional}`, yFirma, 12, boldItalic, negro, width)
-      const contacto = [profile?.email, profile?.telefono].filter(Boolean).join('  ·  ')
-      if (contacto) dibujarCentrado(page, contacto, yFirma - 18, 9, font, gris, width)
-      if (profile?.domicilio) dibujarCentrado(page, profile.domicilio, yFirma - 32, 9, font, gris, width)
+
+      const contacto = [profile?.email, profile?.telefono].filter(Boolean).join('  –  ')
+      if (contacto) {
+        const wTexto = font.widthOfTextAtSize(contacto, 9)
+        const xTexto = (width - wTexto) / 2
+        page.drawCircle({ x: xTexto - 8, y: yFirma - 18 + 3, size: 1.6, color: negro })
+        page.drawText(contacto, { x: xTexto, y: yFirma - 18, size: 9, font, color: gris })
+      }
+      if (profile?.domicilio) {
+        const wDom = font.widthOfTextAtSize(profile.domicilio, 9)
+        const xDom = (width - wDom) / 2
+        page.drawCircle({ x: xDom - 8, y: yFirma - 32 + 3, size: 1.6, color: negro })
+        page.drawText(profile.domicilio, { x: xDom, y: yFirma - 32, size: 9, font, color: gris })
+      }
 
     } else if (tipo === 'nota_elevacion') {
       // ── Nota de Elevación a la Directora ──────────────────────────────
@@ -459,6 +478,79 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         await dibujarArchivoEnCaja(pdfDoc, pag.page, db, c?.dni_scan_path_dorso, 40, yCursor - cajaH, cajaW, cajaH, font, gris)
       }
 
+    } else if (tipo === 'capitulo_ubicacion') {
+      // ── Capítulo de Extensión, Límites e Inscripciones ─────────────────
+      const margenX = 40
+      const anchoTexto = width - margenX * 2
+
+      page.drawText('UBICACIÓN, EXTENSIÓN, LÍMITES E INSCRIPCIONES', {
+        x: margenX, y: yEncabezadoFin - 30, size: 13, font: bold, color: azul,
+      })
+      page.drawLine({
+        start: { x: margenX, y: yEncabezadoFin - 42 }, end: { x: width - margenX, y: yEncabezadoFin - 42 },
+        thickness: 1, color: rgb(0.88, 0.91, 0.95),
+      })
+
+      let y = yEncabezadoFin - 70
+
+      const superficieTexto = poligono?.superficie_m2
+        ? `${poligono.superficie_m2} metros cuadrados${poligono.superficie_letras ? ` (${poligono.superficie_letras})` : ''}`
+        : '— metros cuadrados'
+      const parrafoUbicacion =
+        `Las presentes operaciones se realizan en el Departamento de ${inmueble?.departamento ?? '—'}` +
+        `${inmueble?.localidad ? `, Localidad de ${inmueble.localidad}` : ''} – ${construirUbicacion(inmueble)}, bajo el objeto de ` +
+        `${tipoMensuraTexto}, abarcando una Superficie total de ${superficieTexto}, cuyas medidas y afectación se acompañan en el plano presente en el expediente.`
+      y = dibujarParrafo(page, parrafoUbicacion, margenX, y, anchoTexto, 11, font, negro)
+      y -= 18
+
+      page.drawText('Los linderos son:', { x: margenX, y, size: 11, font, color: negro })
+      y -= 22
+
+      const lindLista: [string, string][] = [
+        ['NORTE: ', linderos?.norte_mensura ?? '—'],
+        ['ESTE: ',  linderos?.este_mensura ?? '—'],
+        ['SUR: ',   linderos?.sur_mensura ?? '—'],
+        ['OESTE: ', linderos?.oeste_mensura ?? '—'],
+      ]
+      lindLista.forEach(([label, valor]) => {
+        page.drawText(label, { x: margenX + 30, y, size: 11, font: bold, color: negro })
+        const wLabel = bold.widthOfTextAtSize(label, 11)
+        page.drawText(valor, { x: margenX + 30 + wLabel, y, size: 11, font, color: negro })
+        y -= 16
+      })
+      y -= 14
+
+      page.drawText('ANTECEDENTES DE DOMINIO:', { x: margenX, y, size: 11, font: bold, color: negro })
+      y -= 20
+
+      const tomo = (inmueble as any)?.registro_tomo
+      const folio = (inmueble as any)?.registro_folio
+      const anioRegistro = (inmueble as any)?.registro_anio
+      const inscripcionTexto = (tomo || folio || anioRegistro)
+        ? `inscripto en mayor extensión al Tomo ${tomo ?? '—'}, Folio ${folio ?? '—'}, Año ${anioRegistro ?? '—'} del Departamento de ${inmueble?.departamento ?? '—'}`
+        : 'sin antecedentes de inscripción registrados'
+      const parrafoDominio = `Las presentes operaciones afectan un inmueble identificado según catastro como ${construirUbicacion(inmueble)}, del Departamento de ${inmueble?.departamento ?? '—'}. En el Registro de la Propiedad Inmueble de la Provincia está ${inscripcionTexto}.`
+      y = dibujarParrafo(page, parrafoDominio, margenX, y, anchoTexto, 11, font, negro)
+      y -= 18
+
+      const parrafoRentas = `En la Dirección General de Rentas, se identifica con la/las Partidas Inmobiliarias ${inmueble?.matricula_catastral ?? '—'}.`
+      y = dibujarParrafo(page, parrafoRentas, margenX, y, anchoTexto, 11, font, negro)
+      y -= 18
+
+      const matriculaMunicipal = (inmueble as any)?.matricula_municipal
+      const parrafoMunicipal = matriculaMunicipal
+        ? `En el Registro de la Propiedad Municipal se identifica con la Matrícula Municipal ${matriculaMunicipal}.`
+        : 'En el Registro de la Propiedad Municipal no se encontraron inscripciones.'
+      y = dibujarParrafo(page, parrafoMunicipal, margenX, y, anchoTexto, 11, font, negro)
+      y -= 22
+
+      const antecedentesTecnicos = (inmueble as any)?.antecedentes_tecnicos
+      if (antecedentesTecnicos) {
+        page.drawText('ANTECEDENTES TÉCNICOS:', { x: margenX, y, size: 11, font: bold, color: negro })
+        y -= 20
+        dibujarParrafo(page, antecedentesTecnicos, margenX, y, anchoTexto, 11, font, negro)
+      }
+
     } else {
       // Título del documento
       const label = DOC_LABELS[tipo] ?? tipo.replace(/_/g, ' ')
@@ -517,14 +609,21 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       .upload(storagePath, pdfBytes, { contentType: 'application/pdf', upsert: true })
 
     // Registrar en BD aunque falle el storage (para no perder el intento)
-    await db.from('documentos_generados').insert({
+    const { data: docInsertado } = await db.from('documentos_generados').insert({
       expediente_id: expedienteId,
       tipo_documento: tipo,
       storage_path: uploadError ? null : storagePath,
       estado: uploadError ? 'error_storage' : 'generado',
       generado_at: new Date().toISOString(),
-    })
+    }).select('id, tipo_documento, storage_path, estado, generado_at').single()
+
+    if (docInsertado) documentosCreados.push(docInsertado as any)
   }
 
+  if (isAjax) {
+    return new Response(JSON.stringify({ ok: true, documentos: documentosCreados }), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
   return redirect(`/expedientes/${expedienteId}?tab=documentos&ok=1`)
 }
