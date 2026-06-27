@@ -75,6 +75,7 @@ create table if not exists expedientes (
   tipo_mensura        text,
   estado              text default 'borrador' check (estado in ('borrador','en_proceso','finalizado')),
   fecha_inicio        date,
+  hora_mensura        text,
   fecha_cierre        date,
   observaciones       text,
   area_catastro       text,
@@ -170,6 +171,10 @@ create table if not exists inmuebles (
   registro_folio        text,
   registro_anio         text,
   antecedentes_tecnicos text,
+  propietario_anterior  text,
+  calle_frente          text,
+  calle_entre1          text,
+  calle_entre2          text,
   tipo_inmueble         text check (tipo_inmueble in ('urbano','rural'))
 );
 

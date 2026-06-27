@@ -32,6 +32,7 @@ const [
   { data: documentos, count: documentosCount },
   { data: comitentesAll },
   { data: testigosAll },
+  { data: profile },
 ] = await Promise.all([
   db.from('inmuebles').select('*').eq('expediente_id', id).maybeSingle(),
   db.from('exp_comitentes').select('*, comitentes(*)').eq('expediente_id', id),
@@ -41,6 +42,7 @@ const [
   db.from('documentos_generados').select('*', { count: 'exact' }).eq('expediente_id', id).order('generado_at', { ascending: false }).range(docFrom, docTo),
   db.from('comitentes').select('id,nombre,apellido,dni').eq('user_id', uid).order('apellido'),
   db.from('testigos').select('id,nombre,apellido,dni').eq('user_id', uid).order('apellido'),
+  db.from('profiles').select('*').eq('id', uid).maybeSingle(),
 ])
 
 const docTotalPages = Math.max(1, Math.ceil((documentosCount ?? 0) / DOCS_POR_PAGINA))
@@ -70,6 +72,10 @@ if (Astro.request.method === 'POST') {
       registro_folio: form.get('registro_folio') || null,
       registro_anio: form.get('registro_anio') || null,
       antecedentes_tecnicos: form.get('antecedentes_tecnicos') || null,
+      propietario_anterior: form.get('propietario_anterior') || null,
+      calle_frente: form.get('calle_frente') || null,
+      calle_entre1: form.get('calle_entre1') || null,
+      calle_entre2: form.get('calle_entre2') || null,
       tipo_inmueble: form.get('tipo_inmueble'),
     }
     const { error } = inmueble
@@ -112,6 +118,7 @@ if (Astro.request.method === 'POST') {
       tipo_mensura: form.get('tipo_mensura'),
       numero_expediente: form.get('numero_expediente') || null,
       fecha_inicio: form.get('fecha_mensura') || null,
+      hora_mensura: form.get('hora_mensura') || null,
       area_catastro: form.get('area_catastro') || null,
     }).eq('id', id)
 
@@ -289,6 +296,26 @@ const identificador = exp.numero_expediente
   ?? (primerComitente ? `${primerComitente.apellido}, ${primerComitente.nombre}` : null)
   ?? 'Nuevo expediente'
 const tienNumero = !!exp.numero_expediente
+
+// Datos para validar qué falta antes de habilitar la generación de cada documento
+const datosValidacion = {
+  tieneComitente: !!primerComitente,
+  comitenteDni: !!primerComitente?.dni,
+  inmuebleDepartamento: !!inmueble?.departamento,
+  inmuebleLocalidad: !!inmueble?.localidad,
+  inmueblePartida: !!inmueble?.matricula_catastral,
+  profileNombre: !!(profile?.nombre && profile?.apellido),
+  profileDni: !!(profile as any)?.dni,
+  profileMatricula: !!profile?.matricula,
+  profileMatriculaCatastro: !!(profile as any)?.matricula_catastro,
+  fechaMensura: !!exp.fecha_inicio,
+  horaMensura: !!(exp as any).hora_mensura,
+  superficie: !!poligono?.superficie_m2,
+  superficieLetras: !!poligono?.superficie_letras,
+  linderosCompletos: !!(linderos?.norte_mensura && linderos?.sur_mensura && linderos?.este_mensura && linderos?.oeste_mensura),
+  cantLados: (poligono as any)?.lados?.length ?? 0,
+  cantAngulos: (poligono as any)?.angulos?.length ?? 0,
+}
 ---
 <AppLayout title={identificador}>
   <div class="page-header">
@@ -540,6 +567,26 @@ const tienNumero = !!exp.numero_expediente
           </div>
         </div>
 
+        <div class="section-label" style="margin-top:0.5rem">Referencias para notificación a linderos</div>
+        <div class="form-grid form-grid-2" style="margin-bottom:1rem">
+          <div class="field">
+            <label>Propietario anterior (a nombre de quien figura)</label>
+            <input class="input" name="propietario_anterior" value={(inmueble as any)?.propietario_anterior ?? ''} />
+          </div>
+          <div class="field">
+            <label>Calle de frente</label>
+            <input class="input" name="calle_frente" value={(inmueble as any)?.calle_frente ?? ''} />
+          </div>
+          <div class="field">
+            <label>Entre calle</label>
+            <input class="input" name="calle_entre1" value={(inmueble as any)?.calle_entre1 ?? ''} />
+          </div>
+          <div class="field">
+            <label>Y calle</label>
+            <input class="input" name="calle_entre2" value={(inmueble as any)?.calle_entre2 ?? ''} />
+          </div>
+        </div>
+
         <div style="margin-bottom:1rem">
           <label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer">
             <input type="checkbox" id="chk_sin_inscripcion" style="width:16px;height:16px;accent-color:var(--color-primary)" />
@@ -599,6 +646,10 @@ const tienNumero = !!exp.numero_expediente
             <div class="field">
               <label>Fecha de mensura</label>
               <input class="input" type="date" name="fecha_mensura" value={exp.fecha_inicio ?? ''} />
+            </div>
+            <div class="field">
+              <label>Hora de mensura</label>
+              <input class="input" type="time" name="hora_mensura" value={(exp as any).hora_mensura ?? ''} />
             </div>
             <div class="field">
               <label>Área de Catastro (ubicación actual del expediente)</label>
@@ -784,7 +835,6 @@ const tienNumero = !!exp.numero_expediente
               { value: 'citacion_linderos',       label: 'Notificación a Linderos y Autoridades' },
               { value: 'acta_mensura',            label: 'Acta de Mensura y Amojonamiento' },
               { value: 'acta_ausencia_linderos',  label: 'Acta de Ausencia de Linderos y Autoridades' },
-              { value: 'acta_ausencia_judicial',  label: 'Acta de Ausencia de Autoridad Judicial' },
               { value: 'memoria_mensura',         label: 'Memoria de Mensura' },
               { value: 'planilla_calculos',       label: 'Planilla de Cálculos' },
             ].map(doc => (
@@ -910,6 +960,23 @@ const tienNumero = !!exp.numero_expediente
       </div>
     </div>
   </div>
+
+  <div id="modal-overlay-validacion" class="modal-overlay" hidden>
+    <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="modal-validacion-title" style="max-width:460px">
+      <div class="modal-icon" style="background:#FEF3C7;color:#92400E">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 9v4" /><path d="M12 17h.01" />
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+        </svg>
+      </div>
+      <h3 id="modal-validacion-title">Faltan datos para generar</h3>
+      <p>No se generaron los documentos porque falta completar lo siguiente:</p>
+      <div id="modal-validacion-lista" style="max-height:280px;overflow-y:auto;margin-bottom:1rem"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" id="modal-validacion-cerrar">Entendido</button>
+      </div>
+    </div>
+  </div>
 </AppLayout>
 
 <script define:vars={{
@@ -918,7 +985,13 @@ const tienNumero = !!exp.numero_expediente
   angulosExistentes:     poligono?.angulos  ?? [],
   cantAngulosInicial:    poligono?.cantidad_angulos ?? 0,
   sinInscripcionInicial: !(inmueble as any)?.matricula_municipal,
+  datosValidacion: datosValidacion,
 }}>
+  // Expuesto en window: este script es inline (define:vars), pero el de "generar documentos"
+  // se procesa como módulo aparte y no comparte el scope global con este, así que no puede
+  // leer `datosValidacion` directamente — hay que colgarlo de window.
+  window.datosValidacion = datosValidacion
+
   // Linderos checkbox
   const chk = document.getElementById('lind_iguales')
   const divCit = document.getElementById('linderos_citacion')
@@ -1389,6 +1462,126 @@ const tienNumero = !!exp.numero_expediente
       .catch(function() { alert('No se pudo eliminar el documento.') })
   })
 
+  // ── Validación de datos requeridos antes de generar documentos ──────────
+  const DOC_LABELS_VALIDACION = {
+    caratula: 'Carátula',
+    nota_elevacion: 'Nota de Elevación a la Directora',
+    documento_identidad: 'Fotocopia del DNI del/los Comitente/s',
+    capitulo_ubicacion: 'Capítulo de Extensión, Límites e Inscripciones',
+    citacion_linderos: 'Notificación a Linderos y Autoridades',
+    acta_mensura: 'Acta de Mensura y Amojonamiento',
+    acta_ausencia_linderos: 'Acta de Ausencia de Linderos y Autoridades',
+    memoria_mensura: 'Memoria de Mensura',
+    planilla_calculos: 'Planilla de Cálculos',
+  }
+
+  const datosValidacion = window.datosValidacion || {}
+  const linderosLabel = 'Los 4 linderos de mensura (Tab 3 Mensura)'
+  const REQUISITOS_DOC = {
+    caratula: [
+      { ok: datosValidacion.tieneComitente, label: 'Comitente cargado (Tab 1 Comitente)' },
+      { ok: datosValidacion.inmuebleDepartamento, label: 'Departamento del inmueble (Tab 2 Inmueble)' },
+      { ok: datosValidacion.inmueblePartida, label: 'Partida Inmobiliaria (Tab 2 Inmueble)' },
+    ],
+    nota_elevacion: [
+      { ok: datosValidacion.tieneComitente, label: 'Comitente cargado (Tab 1 Comitente)' },
+      { ok: datosValidacion.comitenteDni, label: 'DNI del comitente (Tab 1 Comitente)' },
+      { ok: datosValidacion.inmuebleLocalidad, label: 'Localidad del inmueble (Tab 2 Inmueble)' },
+      { ok: datosValidacion.inmueblePartida, label: 'Partida Inmobiliaria (Tab 2 Inmueble)' },
+      { ok: datosValidacion.profileNombre, label: 'Nombre y apellido del profesional (Mi Perfil)' },
+      { ok: datosValidacion.profileDni, label: 'DNI del profesional (Mi Perfil)' },
+      { ok: datosValidacion.profileMatricula, label: 'Matrícula Consejo (Mi Perfil)' },
+      { ok: datosValidacion.profileMatriculaCatastro, label: 'Matrícula Catastro (Mi Perfil)' },
+    ],
+    documento_identidad: [
+      { ok: datosValidacion.tieneComitente, label: 'Al menos un comitente cargado (Tab 1 Comitente)' },
+    ],
+    capitulo_ubicacion: [
+      { ok: datosValidacion.inmuebleDepartamento, label: 'Departamento del inmueble (Tab 2 Inmueble)' },
+      { ok: datosValidacion.superficie, label: 'Superficie del polígono (Tab 3 Mensura)' },
+      { ok: datosValidacion.linderosCompletos, label: linderosLabel },
+    ],
+    citacion_linderos: [
+      { ok: datosValidacion.tieneComitente, label: 'Comitente cargado (Tab 1 Comitente)' },
+      { ok: datosValidacion.comitenteDni, label: 'DNI del comitente (Tab 1 Comitente)' },
+      { ok: datosValidacion.inmuebleLocalidad, label: 'Localidad del inmueble (Tab 2 Inmueble)' },
+      { ok: datosValidacion.fechaMensura, label: 'Fecha de mensura (Tab 3 Mensura)' },
+      { ok: datosValidacion.horaMensura, label: 'Hora de mensura (Tab 3 Mensura)' },
+      { ok: datosValidacion.linderosCompletos, label: linderosLabel },
+    ],
+    acta_mensura: [
+      { ok: datosValidacion.profileNombre, label: 'Nombre y apellido del profesional (Mi Perfil)' },
+      { ok: datosValidacion.profileDni, label: 'DNI del profesional (Mi Perfil)' },
+      { ok: datosValidacion.profileMatricula, label: 'Matrícula Consejo (Mi Perfil)' },
+      { ok: datosValidacion.fechaMensura, label: 'Fecha de mensura (Tab 3 Mensura)' },
+      { ok: datosValidacion.horaMensura, label: 'Hora de mensura (Tab 3 Mensura)' },
+      { ok: datosValidacion.tieneComitente, label: 'Comitente cargado (Tab 1 Comitente)' },
+      { ok: datosValidacion.comitenteDni, label: 'DNI del comitente (Tab 1 Comitente)' },
+      { ok: datosValidacion.superficie, label: 'Superficie del polígono (Tab 3 Mensura)' },
+      { ok: datosValidacion.superficieLetras, label: 'Superficie en letras (Tab 3 Mensura)' },
+      { ok: datosValidacion.linderosCompletos, label: linderosLabel },
+    ],
+    acta_ausencia_linderos: [
+      { ok: datosValidacion.profileNombre, label: 'Nombre y apellido del profesional (Mi Perfil)' },
+      { ok: datosValidacion.profileDni, label: 'DNI del profesional (Mi Perfil)' },
+      { ok: datosValidacion.fechaMensura, label: 'Fecha de mensura (Tab 3 Mensura)' },
+      { ok: datosValidacion.horaMensura, label: 'Hora de mensura (Tab 3 Mensura)' },
+      { ok: datosValidacion.linderosCompletos, label: linderosLabel },
+    ],
+    memoria_mensura: [
+      { ok: datosValidacion.cantLados > 0, label: 'Lados del polígono cargados (Tab 3 Mensura)' },
+      { ok: datosValidacion.cantAngulos > 0, label: 'Ángulos del polígono cargados (Tab 3 Mensura)' },
+      { ok: datosValidacion.superficie, label: 'Superficie del polígono (Tab 3 Mensura)' },
+      { ok: datosValidacion.superficieLetras, label: 'Superficie en letras (Tab 3 Mensura)' },
+    ],
+    planilla_calculos: [
+      { ok: datosValidacion.cantLados > 0, label: 'Lados del polígono cargados (Tab 3 Mensura)' },
+      { ok: datosValidacion.cantAngulos > 0, label: 'Ángulos del polígono cargados (Tab 3 Mensura)' },
+      { ok: datosValidacion.superficie, label: 'Superficie del polígono (Tab 3 Mensura)' },
+    ],
+  }
+
+  const overlayValidacion = document.getElementById('modal-overlay-validacion')
+  const listaValidacion = document.getElementById('modal-validacion-lista')
+  const btnValidacionCerrar = document.getElementById('modal-validacion-cerrar')
+  if (btnValidacionCerrar) {
+    btnValidacionCerrar.addEventListener('click', function() { overlayValidacion.hidden = true })
+    overlayValidacion.addEventListener('click', function(e) { if (e.target === overlayValidacion) overlayValidacion.hidden = true })
+    document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !overlayValidacion.hidden) overlayValidacion.hidden = true })
+  }
+
+  // Devuelve { tipo: [labels faltantes] } solo para los tipos marcados que tengan algo pendiente
+  function validarDocumentosSeleccionados(tipos) {
+    const faltantes = {}
+    tipos.forEach(function(tipo) {
+      const reqs = REQUISITOS_DOC[tipo]
+      if (!reqs) return
+      const pendientes = reqs.filter(function(r) { return !r.ok }).map(function(r) { return r.label })
+      if (pendientes.length) faltantes[tipo] = pendientes
+    })
+    return faltantes
+  }
+
+  function mostrarModalValidacion(faltantes) {
+    listaValidacion.innerHTML = ''
+    Object.keys(faltantes).forEach(function(tipo) {
+      const grupo = document.createElement('div')
+      grupo.className = 'validacion-doc'
+      const titulo = document.createElement('div')
+      titulo.className = 'validacion-doc-titulo'
+      titulo.textContent = DOC_LABELS_VALIDACION[tipo] || tipo
+      grupo.appendChild(titulo)
+      faltantes[tipo].forEach(function(label) {
+        const item = document.createElement('div')
+        item.className = 'validacion-item'
+        item.innerHTML = '<span>•</span><span>' + label + '</span>'
+        grupo.appendChild(item)
+      })
+      listaValidacion.appendChild(grupo)
+    })
+    overlayValidacion.hidden = false
+  }
+
   // Generar documentos sin recargar la página
   const formGenerarDocs = document.querySelector('form[action="/api/documentos/generar"]')
   if (formGenerarDocs) {
@@ -1397,6 +1590,12 @@ const tienNumero = !!exp.numero_expediente
       const btnSubmit = formGenerarDocs.querySelector('button[type="submit"]')
       const tiposMarcados = formGenerarDocs.querySelectorAll('input[name="tipos[]"]:checked')
       if (!tiposMarcados.length) { alert('Seleccioná al menos un documento para generar.'); return }
+
+      const faltantes = validarDocumentosSeleccionados(Array.prototype.map.call(tiposMarcados, function(chk) { return chk.value }))
+      if (Object.keys(faltantes).length) {
+        mostrarModalValidacion(faltantes)
+        return
+      }
 
       btnSubmit.disabled = true
       const textoOriginal = btnSubmit.textContent
@@ -1574,6 +1773,9 @@ tr[data-doc-row] { transition: background-color 1.6s ease, opacity 0.3s ease; }
 .modal-info-row:not(:last-child) { border-bottom:1px solid var(--color-border); }
 .modal-info-row span { color:var(--color-text-secondary); }
 .modal-info-row strong { color:var(--color-text); font-weight:600; text-align:right; }
+.validacion-doc { margin-bottom:0.75rem; }
+.validacion-doc-titulo { font-size:0.85rem; font-weight:700; color:var(--color-text); margin-bottom:0.3rem; }
+.validacion-item { font-size:0.82rem; color:#92400E; display:flex; align-items:flex-start; gap:0.4rem; padding:0.15rem 0; }
 .modal-note {
   font-size:0.8rem; color:var(--color-text-secondary); background:var(--color-bg);
   border-radius:var(--radius-sm); padding:0.6rem 0.75rem; margin-bottom:1.25rem;

@@ -11,7 +11,6 @@ const DOC_LABELS: Record<string, string> = {
   citacion_linderos:        'Notificación a Linderos y Autoridades',
   acta_mensura:             'Acta de Mensura y Amojonamiento',
   acta_ausencia_linderos:   'Acta de Ausencia de Linderos y Autoridades',
-  acta_ausencia_judicial:   'Acta de Ausencia de Autoridad Judicial',
   memoria_mensura:          'Memoria de Mensura',
   planilla_calculos:        'Planilla de Cálculos',
   // Declaraciones juradas
@@ -244,6 +243,53 @@ function dibujarParrafo(page: PDFPage, texto: string, x: number, y: number, maxW
   return y - lineas.length * lh
 }
 
+const UNIDADES_LETRAS = ['', 'UN', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE',
+  'DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISÉIS', 'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE',
+  'VEINTE', 'VEINTIÚN', 'VEINTIDÓS', 'VEINTITRÉS', 'VEINTICUATRO', 'VEINTICINCO', 'VEINTISÉIS',
+  'VEINTISIETE', 'VEINTIOCHO', 'VEINTINUEVE']
+const DECENAS_LETRAS = ['', 'DIEZ', 'VEINTE', 'TREINTA', 'CUARENTA', 'CINCUENTA', 'SESENTA', 'SETENTA', 'OCHENTA', 'NOVENTA']
+const CENTENAS_LETRAS = ['', 'CIENTO', 'DOSCIENTOS', 'TRESCIENTOS', 'CUATROCIENTOS', 'QUINIENTOS',
+  'SEISCIENTOS', 'SETECIENTOS', 'OCHOCIENTOS', 'NOVECIENTOS']
+
+function menorMilALetras(n: number): string {
+  if (n === 0) return ''
+  if (n === 100) return 'CIEN'
+  let r = ''
+  if (n >= 100) { r = CENTENAS_LETRAS[Math.floor(n / 100)]; n %= 100 }
+  if (n >= 30) {
+    r += (r ? ' ' : '') + DECENAS_LETRAS[Math.floor(n / 10)]
+    if (n % 10) r += ' Y ' + UNIDADES_LETRAS[n % 10]
+  } else if (n > 0) {
+    r += (r ? ' ' : '') + UNIDADES_LETRAS[n]
+  }
+  return r
+}
+
+function numeroALetras(n: number): string {
+  if (n === 0) return 'CERO'
+  if (n >= 1000) {
+    const miles = Math.floor(n / 1000)
+    let r = miles === 1 ? 'MIL' : menorMilALetras(miles) + ' MIL'
+    const resto = n % 1000
+    if (resto) r += ' ' + menorMilALetras(resto)
+    return r
+  }
+  return menorMilALetras(n)
+}
+
+function capitalizarPrimera(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase()
+}
+
+// "19:00" → "Diecinueve horas, cero minutos"
+function horaALetras(horaStr: string | null | undefined): string {
+  if (!horaStr) return '—'
+  const [h, m] = horaStr.split(':').map(n => parseInt(n) || 0)
+  const horaTxt = numeroALetras(h) + (h === 1 ? ' HORA' : ' HORAS')
+  const minTxt = numeroALetras(m) + (m === 1 ? ' MINUTO' : ' MINUTOS')
+  return capitalizarPrimera(`${horaTxt}, ${minTxt}`)
+}
+
 function construirUbicacion(inmueble: any): string {
   if (!inmueble) return '—'
   const partes: string[] = []
@@ -254,6 +300,129 @@ function construirUbicacion(inmueble: any): string {
   if (inmueble.circunscripcion) partes.push(`Circunscripción ${inmueble.circunscripcion}`)
   if (inmueble.seccion)         partes.push(`Sección ${inmueble.seccion}`)
   return partes.length ? partes.join(', ') : '—'
+}
+
+// "90°00’ (NOVENTA GRADOS, CERO MINUTOS)." — formato con coma, distinto al usado en el Tab 3
+function anguloALetrasConComa(grados: number, minutos: number, segundos: number): string {
+  let texto = numeroALetras(grados) + (grados === 1 ? ' GRADO' : ' GRADOS')
+  texto += ', ' + numeroALetras(minutos) + (minutos === 1 ? ' MINUTO' : ' MINUTOS')
+  if (segundos > 0) texto += ', ' + numeroALetras(segundos) + (segundos === 1 ? ' SEGUNDO' : ' SEGUNDOS')
+  return texto
+}
+
+function formatearDMS(grados: number, minutos: number, segundos: number): string {
+  const base = `${grados}°${String(minutos).padStart(2, '0')}’`
+  return segundos > 0 ? `${base}${String(Math.round(segundos)).padStart(2, '0')}”` : base
+}
+
+// Genera etiquetas de lado AB, BC, CD, ... a partir de vértices A, B, C, ...
+function generarEtiquetasLados(n: number): string[] {
+  const vertices: string[] = []
+  for (let i = 0; i < n; i++) vertices.push(String.fromCharCode(65 + (i % 26)))
+  return vertices.map((v, i) => v + vertices[(i + 1) % n])
+}
+
+// Calcula la poligonal: azimuts, proyecciones DX/DY, coordenadas X/Y, y su corrección por cierre (regla de la brújula)
+function calcularPoligonal(lados: any[], angulos: any[]) {
+  const n = Math.max(lados.length, angulos.length)
+  if (n === 0) return null
+
+  const azimuts: number[] = []
+  for (let i = 0; i < n; i++) {
+    const ang = angulos[i] ?? {}
+    const angDecimal = (ang.grados ?? 0) + (ang.minutos ?? 0) / 60 + (ang.segundos ?? 0) / 3600
+    if (i === 0) {
+      azimuts.push(90)
+    } else {
+      const az = azimuts[i - 1] - (180 - angDecimal)
+      azimuts.push(((az % 360) + 360) % 360)
+    }
+  }
+
+  const dx: number[] = [], dy: number[] = [], x: number[] = [], y: number[] = []
+  let cumX = 0, cumY = 0
+  for (let i = 0; i < n; i++) {
+    x.push(cumX); y.push(cumY)
+    const L = Number(lados[i]?.valor_m ?? 0)
+    const rad = (azimuts[i] * Math.PI) / 180
+    const dxi = L * Math.cos(rad)
+    const dyi = L * Math.sin(rad)
+    dx.push(dxi); dy.push(dyi)
+    cumX += dxi; cumY += dyi
+  }
+
+  const sumDX = dx.reduce((a, b) => a + b, 0)
+  const sumDY = dy.reduce((a, b) => a + b, 0)
+  const totalLength = lados.reduce((a, l) => a + Number(l?.valor_m ?? 0), 0)
+  const error = Math.sqrt(sumDX * sumDX + sumDY * sumDY)
+
+  // Corrección proporcional al largo de cada lado (regla de la brújula), para que el polígono cierre exacto
+  const dxc: number[] = [], dyc: number[] = [], xc: number[] = [], yc: number[] = []
+  let cumXC = 0, cumYC = 0
+  for (let i = 0; i < n; i++) {
+    const L = Number(lados[i]?.valor_m ?? 0)
+    const corrX = totalLength ? -sumDX * (L / totalLength) : 0
+    const corrY = totalLength ? -sumDY * (L / totalLength) : 0
+    const dxci = dx[i] + corrX
+    const dyci = dy[i] + corrY
+    xc.push(cumXC); yc.push(cumYC)
+    dxc.push(dxci); dyc.push(dyci)
+    cumXC += dxci; cumYC += dyci
+  }
+
+  return { n, azimuts, dx, dy, x, y, dxc, dyc, xc, yc, sumDX, sumDY, totalLength, error }
+}
+
+// Dibuja una tabla con grilla: encabezado en negrita + filas de datos
+function dibujarTabla(
+  page: PDFPage, x0: number, yTop: number,
+  anchos: number[], encabezados: string[], filas: string[][],
+  fonts: { font: PDFFont; bold: PDFFont }, color: any, rowHeight = 14, fontSize = 7,
+): number {
+  const { font, bold } = fonts
+  const totalWidth = anchos.reduce((a, w) => a + w, 0)
+  let y = yTop
+
+  const dibujarFila = (valores: string[], esEncabezado: boolean) => {
+    page.drawRectangle({ x: x0, y: y - rowHeight, width: totalWidth, height: rowHeight, borderColor: color, borderWidth: 0.6 })
+    let cx = x0
+    valores.forEach((valor, i) => {
+      if (i > 0) page.drawLine({ start: { x: cx, y }, end: { x: cx, y: y - rowHeight }, thickness: 0.5, color })
+      const fnt = esEncabezado ? bold : font
+      const w = fnt.widthOfTextAtSize(valor, fontSize)
+      page.drawText(valor, { x: cx + (anchos[i] - w) / 2, y: y - rowHeight + 4, size: fontSize, font: fnt, color })
+      cx += anchos[i]
+    })
+    y -= rowHeight
+  }
+
+  dibujarFila(encabezados, true)
+  filas.forEach(fila => dibujarFila(fila, false))
+  return y
+}
+
+const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
+
+function formatearFechaLarga(fechaISO: string | null | undefined): string {
+  if (!fechaISO) return '—'
+  const d = new Date(fechaISO + 'T00:00:00')
+  const mes = MESES[d.getMonth()]
+  return `${d.getDate()} de ${mes.charAt(0).toUpperCase() + mes.slice(1)} del ${d.getFullYear()}`
+}
+
+function formatearFechaCorta(fechaISO: string | null | undefined): string {
+  if (!fechaISO) return '—'
+  const d = new Date(fechaISO + 'T00:00:00')
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getDate())} / ${pad(d.getMonth() + 1)} / ${d.getFullYear()}`
+}
+
+// Devuelve el lindero de citación; si no se cargó (o "linderos iguales" está marcado), usa el de mensura
+function valorLindero(linderos: any, lado: 'norte' | 'sur' | 'este' | 'oeste'): string {
+  const citacion = linderos?.[`${lado}_citacion`]
+  const mensura = linderos?.[`${lado}_mensura`]
+  const valor = (linderos?.linderos_iguales || !citacion) ? mensura : citacion
+  return valor ?? '—'
 }
 
 export const POST: APIRoute = async ({ request, cookies, redirect }) => {
@@ -277,7 +446,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
   const { data: exp } = await db
     .from('expedientes')
-    .select('numero_expediente, tipo_mensura')
+    .select('numero_expediente, tipo_mensura, fecha_inicio, hora_mensura')
     .eq('id', expedienteId)
     .single()
 
@@ -285,14 +454,25 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
     .from('inmuebles').select('*').eq('expediente_id', expedienteId).maybeSingle()
 
   const { data: poligono } = await db
-    .from('poligono').select('superficie_m2, superficie_letras').eq('expediente_id', expedienteId).maybeSingle()
+    .from('poligono')
+    .select('superficie_m2, superficie_letras, lados(orden, valor_m, valor_letras), angulos(orden, grados, minutos, segundos)')
+    .eq('expediente_id', expedienteId).maybeSingle()
+
+  const ladosOrdenados = ((poligono as any)?.lados ?? []).slice().sort((a: any, b: any) => a.orden - b.orden)
+  const angulosOrdenados = ((poligono as any)?.angulos ?? []).slice().sort((a: any, b: any) => a.orden - b.orden)
 
   const { data: linderos } = await db
-    .from('linderos').select('norte_mensura, sur_mensura, este_mensura, oeste_mensura').eq('expediente_id', expedienteId).maybeSingle()
+    .from('linderos')
+    .select('norte_mensura, sur_mensura, este_mensura, oeste_mensura, norte_citacion, sur_citacion, este_citacion, oeste_citacion, linderos_iguales')
+    .eq('expediente_id', expedienteId).maybeSingle()
 
   const { data: expComitentes } = await db
     .from('exp_comitentes').select('orden, rol, comitentes(nombre, apellido, dni, telefono, email, domicilio, dni_scan_path, dni_scan_path_dorso)')
     .eq('expediente_id', expedienteId).order('orden')
+
+  const { data: expTestigos } = await db
+    .from('exp_testigos').select('testigos(nombre, apellido, dni)')
+    .eq('expediente_id', expedienteId)
 
   const { data: profile } = await db
     .from('profiles').select('*').eq('id', user.id).maybeSingle()
@@ -312,7 +492,8 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
   for (const tipo of tipos) {
     const pdfDoc  = await PDFDocument.create()
-    const page    = pdfDoc.addPage([595.28, 841.89]) // A4
+    const esApaisado = tipo === 'planilla_calculos'
+    const page    = pdfDoc.addPage(esApaisado ? [841.89, 595.28] : [595.28, 841.89]) // A4 (apaisado para la planilla, tabla ancha)
     const font       = await pdfDoc.embedFont(StandardFonts.Helvetica)
     const bold       = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
     const boldItalic = await pdfDoc.embedFont(StandardFonts.HelveticaBoldOblique)
@@ -549,6 +730,335 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         page.drawText('ANTECEDENTES TÉCNICOS:', { x: margenX, y, size: 11, font: bold, color: negro })
         y -= 20
         dibujarParrafo(page, antecedentesTecnicos, margenX, y, anchoTexto, 11, font, negro)
+      }
+
+    } else if (tipo === 'citacion_linderos') {
+      // ── Notificación a Linderos y Autoridades ──────────────────────────
+      const margenX = 40
+      const anchoTexto = width - margenX * 2
+
+      dibujarCentrado(page, 'NOTIFICACIÓN A LINDEROS Y AUTORIDADES', yEncabezadoFin - 30, 13, bold, azul, width)
+
+      const fechaTexto = formatearFechaLarga(exp?.fecha_inicio)
+      const wFecha = font.widthOfTextAtSize(fechaTexto, 11)
+      page.drawText(fechaTexto, { x: width - margenX - wFecha, y: yEncabezadoFin - 55, size: 11, font, color: negro })
+
+      let y = yEncabezadoFin - 90
+      page.drawText('Sres. LINDEROS Y AUTORIDADES:', { x: margenX, y, size: 11, font: bold, color: negro })
+      y -= 24
+
+      const tipoMensuraMinuscula = `Mensura para ${(exp?.tipo_mensura ?? '—').toLowerCase()}`
+      const propietarioAnterior = (inmueble as any)?.propietario_anterior
+      const calleFrente = (inmueble as any)?.calle_frente
+      const calleEntre1 = (inmueble as any)?.calle_entre1
+      const calleEntre2 = (inmueble as any)?.calle_entre2
+
+      const parrafoComision =
+        `El Ing. Agrimensor que suscribe, habiendo recibido comisión de ${nombreComitente.toUpperCase()} ` +
+        `(DNI: ${comitentePrincipal?.dni ?? '—'}); en carácter de ${rolComitente} - para realizar las operaciones de ` +
+        `${tipoMensuraMinuscula} en un inmueble ubicado en la localidad de ${inmueble?.localidad ?? '—'}, ` +
+        `Partida Inmobiliaria de Referencia ${inmueble?.matricula_catastral ?? '—'}` +
+        `${propietarioAnterior ? ` a nombre de ${propietarioAnterior}` : ''} – ${construirUbicacion(inmueble)}` +
+        `${calleFrente ? `, frente a la calle ${calleFrente}` : ''}` +
+        `${(calleEntre1 || calleEntre2) ? `, entre las calles ${calleEntre1 ?? '—'} y ${calleEntre2 ?? '—'}` : ''}` +
+        `. Cuyos linderos son los siguientes:`
+      y = dibujarParrafo(page, parrafoComision, margenX, y, anchoTexto, 11, font, negro)
+      y -= 18
+
+      const lindLista: [string, string][] = [
+        ['NORTE: ', valorLindero(linderos, 'norte')],
+        ['SUR: ',   valorLindero(linderos, 'sur')],
+        ['ESTE: ',  valorLindero(linderos, 'este')],
+        ['OESTE: ', valorLindero(linderos, 'oeste')],
+      ]
+      lindLista.forEach(([label, valor]) => {
+        page.drawText('- ', { x: margenX, y, size: 11, font: bold, color: negro })
+        page.drawText(label, { x: margenX + 10, y, size: 11, font: bold, color: negro })
+        const wLabel = bold.widthOfTextAtSize(label, 11)
+        const textoValor = `${valor} ......................................`
+        page.drawText(textoValor, { x: margenX + 10 + wLabel, y, size: 11, font, color: negro })
+        y -= 18
+      })
+      y -= 12
+
+      const fechaCorta = formatearFechaCorta(exp?.fecha_inicio)
+      const horaTexto = (exp as any)?.hora_mensura ?? '—'
+      const parrafoPreviene =
+        `Previene a Uds. que dará principio a las operaciones el día ${fechaCorta}, a las ${horaTexto}hs. ` +
+        `en el lugar del inmueble citado, para que puedan concurrir a reconocer si se sobrepasan los límites de su propiedad.`
+      y = dibujarParrafo(page, parrafoPreviene, margenX, y, anchoTexto, 11, font, negro)
+      y -= 18
+
+      const parrafoInvitados = 'A este fin están Uds. invitados a asistir al citado punto, por sí o por apoderados y con sus respectivos títulos.'
+      y = dibujarParrafo(page, parrafoInvitados, margenX, y, anchoTexto, 11, font, negro)
+      y -= 18
+
+      const parrafoNotificado = 'Debiendo hacer constar haber practicado esta citación se servirá darse por NOTIFICADO, firmando al pie de la presente y devolvérmela.'
+      y = dibujarParrafo(page, parrafoNotificado, margenX, y, anchoTexto, 11, font, negro)
+      y -= 18
+
+      dibujarParrafo(page, 'Saluda a Uds. muy atentamente.', margenX, y, anchoTexto, 11, font, negro, undefined, 0)
+
+      // Firma del profesional al pie
+      const yFirmaProf = 140
+      dibujarCentrado(page, nombreProfesional.toUpperCase(), yFirmaProf, 11, bold, negro, width)
+      dibujarCentrado(page, 'Ingeniero Agrimensor', yFirmaProf - 14, 10, font, negro, width)
+      const matriculaTexto = [
+        profile?.matricula ? `MP: ${profile.matricula}` : '',
+        (profile as any)?.matricula_catastro ? `DGC: ${(profile as any).matricula_catastro}` : '',
+      ].filter(Boolean).join(' – ')
+      if (matriculaTexto) dibujarCentrado(page, matriculaTexto, yFirmaProf - 28, 10, font, negro, width)
+
+    } else if (tipo === 'acta_mensura') {
+      // ── Acta de Mensura y Amojonamiento ─────────────────────────────────
+      const margenX = 40
+      const anchoTexto = width - margenX * 2
+
+      dibujarCentrado(page, 'ACTA DE MENSURA Y AMOJONAMIENTO', yEncabezadoFin - 30, 13, bold, azul, width)
+
+      let y = yEncabezadoFin - 60
+
+      const profesionalDni       = (profile as any)?.dni
+      const profesionalMatricula = profile?.matricula
+      const profesionalCatastro  = (profile as any)?.matricula_catastro
+      const horaTexto = (exp as any)?.hora_mensura ?? '—'
+
+      const parrafoActa =
+        `En el Departamento de ${inmueble?.departamento ?? '—'}, Localidad de ${inmueble?.localidad ?? '—'} – ` +
+        `${construirUbicacion(inmueble)} - Provincia de Corrientes. República Argentina. El Ing. Agrimensor ` +
+        `que suscribe, ${nombreProfesional.toUpperCase()}` +
+        `${profesionalDni ? ` - DNI: ${profesionalDni}` : ''}` +
+        `${profesionalMatricula ? ` - MATRICULA PROFESIONAL DEL CONSEJO: ${profesionalMatricula}.` : ''}` +
+        `${profesionalCatastro ? ` MATRICULA PROFESIONAL DE CATASTRO: ${profesionalCatastro};` : ''}` +
+        ` - siendo ${horaTexto} hs. (${horaALetras(horaTexto)}) del día ${formatearFechaLarga(exp?.fecha_inicio)}, ` +
+        `se deja constancia mediante la presente, que se han medido los límites de la posesión ejercida por el ` +
+        `Sr. ${nombreComitente.toUpperCase()} (DNI: ${comitentePrincipal?.dni ?? '—'}). Habiendo materializado todos ` +
+        `los vértices con mojones de madera dura, determinando una superficie TOTAL de ${poligono?.superficie_m2 ?? '—'} ` +
+        `metros cuadrados${poligono?.superficie_letras ? ` (${poligono.superficie_letras.toUpperCase()})` : ''}.`
+      y = dibujarParrafo(page, parrafoActa, margenX, y, anchoTexto, 11, font, negro)
+      y -= 16
+
+      page.drawText('Sus linderos son:', { x: margenX, y, size: 11, font, color: negro })
+      y -= 22
+
+      const lindActa: [string, string][] = [
+        ['NORTE: ', linderos?.norte_mensura ?? '—'],
+        ['ESTE: ',  linderos?.este_mensura ?? '—'],
+        ['SUR: ',   linderos?.sur_mensura ?? '—'],
+        ['OESTE: ', linderos?.oeste_mensura ?? '—'],
+      ]
+      lindActa.forEach(([label, valor]) => {
+        page.drawText(label, { x: margenX, y, size: 11, font: bold, color: negro })
+        const wLabel = bold.widthOfTextAtSize(label, 11)
+        page.drawText(valor, { x: margenX + wLabel, y, size: 11, font, color: negro })
+        y -= 16
+      })
+      y -= 14
+
+      dibujarParrafo(
+        page,
+        'Sin más, se da por finalizadas las presentes operaciones, firmando los profesionales actuantes, el comitente que encargó el trabajo y los testigos invitados para tal efecto.',
+        margenX, y, anchoTexto, 11, font, negro,
+      )
+
+      // Firmas: testigos + comitente, en columnas iguales
+      const firmantes = [
+        ...((expTestigos ?? []) as any[]).map((et, idx) => ({
+          nombre: `${et.testigos?.nombre ?? ''} ${et.testigos?.apellido ?? ''}`.trim() || '—',
+          rol: `Testigo ${idx + 1}`,
+          dni: et.testigos?.dni,
+        })),
+        { nombre: nombreComitenteDirecto, rol: 'Comitente', dni: comitentePrincipal?.dni },
+      ]
+      const yFirmas = 145
+      const colW = (width - margenX * 2) / firmantes.length
+      firmantes.forEach((f, i) => {
+        const colX = margenX + colW * i
+        const centrarEnCol = (texto: string, yPos: number, size: number, fnt: PDFFont) => {
+          const w = fnt.widthOfTextAtSize(texto, size)
+          page.drawText(texto, { x: colX + (colW - w) / 2, y: yPos, size, font: fnt, color: negro })
+        }
+        centrarEnCol(f.nombre, yFirmas, 10, bold)
+        centrarEnCol(f.rol, yFirmas - 14, 9, font)
+        if (f.dni) centrarEnCol(`DNI: ${f.dni}`, yFirmas - 28, 9, font)
+      })
+
+    } else if (tipo === 'acta_ausencia_linderos') {
+      // ── Acta de Ausencia de Linderos y Autoridades ──────────────────────
+      const margenX = 40
+      const anchoTexto = width - margenX * 2
+
+      dibujarCentrado(page, 'ACTA DE AUSENCIA DE LINDEROS Y AUTORIDADES', yEncabezadoFin - 30, 13, bold, azul, width)
+
+      let y = yEncabezadoFin - 60
+
+      const profesionalDni       = (profile as any)?.dni
+      const profesionalMatricula = profile?.matricula
+      const profesionalCatastro  = (profile as any)?.matricula_catastro
+      const horaTexto = (exp as any)?.hora_mensura ?? '—'
+
+      const parrafoAusencia =
+        `En el Departamento de ${inmueble?.departamento ?? '—'}, Localidad de ${inmueble?.localidad ?? '—'} – ` +
+        `${construirUbicacion(inmueble)} - Provincia de Corrientes. República Argentina. El Ing. Agrimensor ` +
+        `que suscribe, ${nombreProfesional.toUpperCase()}` +
+        `${profesionalDni ? ` - DNI: ${profesionalDni}` : ''}` +
+        `${profesionalMatricula ? ` - MATRICULA PROFESIONAL DEL CONSEJO: ${profesionalMatricula}.` : ''}` +
+        `${profesionalCatastro ? ` MATRICULA PROFESIONAL DE CATASTRO: ${profesionalCatastro};` : ''}` +
+        ` - siendo ${horaTexto} hs. (${horaALetras(horaTexto)}) del día ${formatearFechaLarga(exp?.fecha_inicio)}, ` +
+        `se deja constancia mediante la presente, que no han podido ser notificados los linderos que se detallan ` +
+        `a continuación por no encontrarse en los respectivos inmuebles linderos en reiteradas oportunidades.`
+      y = dibujarParrafo(page, parrafoAusencia, margenX, y, anchoTexto, 11, font, negro)
+      y -= 16
+
+      page.drawText('Los linderos son:', { x: margenX, y, size: 11, font, color: negro })
+      y -= 22
+
+      const lindAusencia: [string, string][] = [
+        ['NORTE: ', valorLindero(linderos, 'norte')],
+        ['ESTE: ',  valorLindero(linderos, 'este')],
+        ['SUR: ',   valorLindero(linderos, 'sur')],
+        ['OESTE: ', valorLindero(linderos, 'oeste')],
+      ]
+      lindAusencia.forEach(([label, valor]) => {
+        page.drawText(label, { x: margenX, y, size: 11, font: bold, color: negro })
+        const wLabel = bold.widthOfTextAtSize(label, 11)
+        page.drawText(valor, { x: margenX + wLabel, y, size: 11, font, color: negro })
+        y -= 16
+      })
+
+      // Firmas: solo testigos, en columnas iguales
+      const testigosFirmantes = ((expTestigos ?? []) as any[]).map((et, idx) => ({
+        nombre: `${et.testigos?.nombre ?? ''} ${et.testigos?.apellido ?? ''}`.trim() || '—',
+        rol: `Testigo ${idx + 1}`,
+        dni: et.testigos?.dni,
+      }))
+      if (testigosFirmantes.length) {
+        const yFirmasTest = 160
+        const colWTest = (width - margenX * 2) / testigosFirmantes.length
+        testigosFirmantes.forEach((f, i) => {
+          const colX = margenX + colWTest * i
+          const centrarEnCol = (texto: string, yPos: number, size: number, fnt: PDFFont) => {
+            const w = fnt.widthOfTextAtSize(texto, size)
+            page.drawText(texto, { x: colX + (colWTest - w) / 2, y: yPos, size, font: fnt, color: negro })
+          }
+          centrarEnCol(f.nombre, yFirmasTest, 10, bold)
+          centrarEnCol(f.rol, yFirmasTest - 14, 9, font)
+          if (f.dni) centrarEnCol(`DNI: ${f.dni}`, yFirmasTest - 28, 9, font)
+        })
+      }
+
+    } else if (tipo === 'memoria_mensura') {
+      // ── Memoria de Mensura ──────────────────────────────────────────────
+      const margenX = 40
+      const anchoTexto = width - margenX * 2
+
+      page.drawText('MEMORIA DE LAS OPERACIONES:', { x: margenX, y: yEncabezadoFin - 30, size: 13, font: bold, color: azul })
+
+      let y = yEncabezadoFin - 55
+      page.drawText('POLIGONO GENERAL', { x: margenX, y, size: 11, font: bold, color: negro })
+      y -= 26
+
+      page.drawText('LADOS:', { x: margenX, y, size: 11, font: bold, color: negro })
+      y -= 20
+      if (!ladosOrdenados.length) {
+        page.drawText('—', { x: margenX, y, size: 11, font, color: negro })
+        y -= 18
+      }
+      ladosOrdenados.forEach((lado: any) => {
+        const valorM = lado.valor_m != null ? Number(lado.valor_m).toFixed(2).replace('.', ',') : '—'
+        const texto = `${valorM} m = ${lado.valor_letras ?? '—'}`
+        y = dibujarParrafo(page, texto, margenX, y, anchoTexto, 11, font, negro, undefined, 0)
+        y -= 4
+      })
+      y -= 16
+
+      page.drawText('ANGULOS:', { x: margenX, y, size: 11, font: bold, color: negro })
+      y -= 20
+      if (!angulosOrdenados.length) {
+        page.drawText('—', { x: margenX, y, size: 11, font, color: negro })
+        y -= 18
+      }
+      angulosOrdenados.forEach((ang: any) => {
+        const g = ang.grados ?? 0, m = ang.minutos ?? 0, s = ang.segundos ?? 0
+        const texto = `${formatearDMS(g, m, s)} (${anguloALetrasConComa(g, m, s)}).`
+        page.drawText(texto, { x: margenX, y, size: 11, font, color: negro })
+        y -= 18
+      })
+      y -= 20
+
+      const superficieTexto = poligono?.superficie_m2
+        ? `${poligono.superficie_m2} metros cuadrados${poligono.superficie_letras ? ` (${poligono.superficie_letras.toUpperCase()})` : ''}`
+        : '—'
+      const labelSup = 'SUPERFICIE TOTAL: '
+      page.drawText(labelSup, { x: margenX, y, size: 11, font: bold, color: negro })
+      const wLabelSup = bold.widthOfTextAtSize(labelSup, 11)
+      dibujarParrafo(page, superficieTexto, margenX + wLabelSup, y, anchoTexto - wLabelSup, 11, font, negro, undefined, 0)
+
+    } else if (tipo === 'planilla_calculos') {
+      // ── Planilla de Cálculo de Coordenadas y Superficie ─────────────────
+      const margenX = 25
+      const calc = calcularPoligonal(ladosOrdenados, angulosOrdenados)
+
+      page.drawText('PLANILLA DE CALCULO DE COORDENADAS Y SUPERFICIE', {
+        x: margenX, y: yEncabezadoFin - 22, size: 12, font: bold, color: azul,
+      })
+
+      if (!calc) {
+        page.drawText('Cargá los lados y ángulos del polígono en la pestaña Mensura para generar esta planilla.', {
+          x: margenX, y: yEncabezadoFin - 50, size: 10, font, color: negro,
+        })
+      } else {
+        const { n, azimuts, dx, dy, x, y: yCoord, dxc, dyc, xc, yc, sumDX, sumDY, error } = calc
+        const etiquetas = generarEtiquetasLados(n)
+        const fmt = (v: number) => v.toFixed(2)
+        const fmtAng = (g: number, m: number, s: number) => [String(g), String(m), String(Math.round(s))]
+
+        // Anchos: N° | °,',"(ángulo) | LADO | °,',"(calc) | DX DY X Y DXC DYC XC YC
+        const anchos = [34, 26, 24, 26, 52, 26, 24, 26, 58, 58, 58, 58, 58, 58, 58, 58]
+        const encabezados = ['N°', '°', "'", '"', 'LADO', '°', "'", '"', 'DX', 'DY', 'X', 'Y', 'DXC', 'DYC', 'XC', 'YC']
+
+        // Subtítulos de grupo (sin grilla) sobre las columnas de ángulos
+        const xAngulo = margenX + anchos[0]
+        const wAngulo = anchos[1] + anchos[2] + anchos[3]
+        page.drawText('ANGULO', { x: xAngulo + (wAngulo - bold.widthOfTextAtSize('ANGULO', 7)) / 2, y: yEncabezadoFin - 38, size: 7, font: bold, color: negro })
+        const xCalc = margenX + anchos.slice(0, 5).reduce((a, w) => a + w, 0)
+        const wCalc = anchos[5] + anchos[6] + anchos[7]
+        page.drawText('ANG. DE CALCULO', { x: xCalc + (wCalc - bold.widthOfTextAtSize('ANG. DE CALCULO', 7)) / 2, y: yEncabezadoFin - 38, size: 7, font: bold, color: negro })
+
+        const filas: string[][] = []
+        for (let i = 0; i < n; i++) {
+          const ang = angulosOrdenados[i] ?? {}
+          const [ag, am, as_] = fmtAng(ang.grados ?? 0, ang.minutos ?? 0, ang.segundos ?? 0)
+          const azRad = azimuts[i]
+          const azGrados = Math.floor(azRad)
+          const azMinutos = Math.round((azRad - azGrados) * 60)
+          filas.push([
+            etiquetas[i], ag, am, as_,
+            fmt(Number(ladosOrdenados[i]?.valor_m ?? 0)),
+            String(azGrados), String(azMinutos), '0',
+            fmt(dx[i]), fmt(dy[i]), fmt(x[i]), fmt(yCoord[i]),
+            fmt(dxc[i]), fmt(dyc[i]), fmt(xc[i]), fmt(yc[i]),
+          ])
+        }
+        // Fila de totales
+        const sumLado = ladosOrdenados.reduce((a: number, l: any) => a + Number(l?.valor_m ?? 0), 0)
+        const sumGrados = angulosOrdenados.reduce((a: number, an: any) => a + (an.grados ?? 0), 0)
+        filas.push(['', String(sumGrados), '0', '0', fmt(sumLado), '', '', '', fmt(sumDX), fmt(sumDY), '', '', fmt(0), fmt(0), '', ''])
+
+        const yDespuesTabla = dibujarTabla(page, margenX, yEncabezadoFin - 42, anchos, encabezados, filas, { font, bold }, negro, 13, 7)
+
+        let yPie = yDespuesTabla - 16
+        page.drawText('ERROR TOTAL: ', { x: margenX + 300, y: yPie, size: 9, font: bold, color: negro })
+        page.drawText(error.toFixed(2), { x: margenX + 380, y: yPie, size: 9, font, color: negro })
+        yPie -= 14
+        page.drawText('TOLERANCIA: ', { x: margenX + 300, y: yPie, size: 9, font: bold, color: negro })
+        page.drawText('0.10', { x: margenX + 380, y: yPie, size: 9, font, color: negro })
+        yPie -= 20
+
+        const superficieValor = poligono?.superficie_m2 ? Number(poligono.superficie_m2).toFixed(2) : '—'
+        page.drawRectangle({ x: margenX, y: yPie - 18, width: width - margenX * 2, height: 22, color: rgb(0.92, 0.92, 0.92) })
+        page.drawText('SUPERFICIE:', { x: margenX + 300, y: yPie - 12, size: 10, font: bold, color: negro })
+        page.drawText(`${superficieValor}   m2`, { x: margenX + 390, y: yPie - 12, size: 10, font, color: negro })
       }
 
     } else {
