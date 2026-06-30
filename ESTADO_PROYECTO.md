@@ -5,6 +5,8 @@
 
 ## ✅ Funcionalidades implementadas (demo-ready)
 
+> Última actualización: **30 Junio 2026 · v0.5**
+
 ### Autenticación
 - Login con email + password (Supabase Auth)
 - Cookies httpOnly con access-token y refresh-token
@@ -73,6 +75,95 @@
 
 ### Perfil
 - Formulario con datos del profesional (nombre, matrícula, domicilio, etc.)
+
+---
+
+## 📋 Cambios de la sesión — 30 Junio 2026 (v0.5)
+
+Sesión enfocada en **mejoras de formularios** (Tab 2 Inmueble, formulario Nuevo Expediente) y **mejoras de generación de PDFs** (márgenes, logo, inscripción). Todos los cambios coordinados entre sí — no se rompió funcionalidad existente.
+
+### 1. Formulario Nuevo Expediente (`nuevo.astro`)
+- **Lista completa de 31 tipos de mensura** — reemplaza la lista corta anterior de 7 ítems. Incluye todos los tipos oficiales usados en la provincia (Mensura, División, Unificación, PH, Conjuntos Inmobiliarios, Regularización Dominial, Derecho de Superficie, Reputación de Dominio, etc.)
+- **Campo "Tipo de Inmueble"** (Urbano / Rural) agregado al crear el expediente — define el tipo desde el inicio y ya no puede cambiarse desde Tab 2
+- Al crear el expediente, se inserta automáticamente el registro en `inmuebles` con el tipo seleccionado
+
+### 2. Tab 2 Inmueble — reestructuración completa
+
+#### Tipo de inmueble (solo lectura)
+- Ya no es editable en Tab 2 — se muestra como **badge informativo** ("Urbano" / "Rural") con leyenda "Se define al crear el expediente"
+- El valor viaja al servidor como `hidden input` para no perderse al guardar
+
+#### Identificación Catastral — campos dinámicos según tipo
+| Campo | Urbano | Rural |
+|-------|--------|-------|
+| Manzana | ✅ visible y habilitado | ❌ oculto y deshabilitado |
+| Parcela | ✅ visible | ❌ oculto |
+| Sección Rural | ❌ oculto | ✅ visible |
+| Fracción / Paraje | Label cambia dinámicamente según tipo | Label cambia a "Paraje" |
+- **Fracción/Paraje**: deshabilitado por defecto, se habilita con un checkbox "Habilitar fracción/paraje" (solo se guarda si hay valor real)
+- **Eliminados**: Circunscripción y Subparcela (no se usan en la provincia)
+
+#### Inscripción Municipal (movida arriba de Registro)
+- Deshabilitada por defecto (la mayoría de los inmuebles no la tienen)
+- Checkbox "Habilitar inscripción municipal (caso excepcional)" para activar el campo
+- Posicionada **antes** de Inscripción en Registro de la Propiedad
+
+#### Inscripción en Registro de la Propiedad Inmueble
+- **Radio toggle**: "Matrícula" (default) / "Tomo / Folio / Finca / Año"
+  - Matrícula: muestra 1 campo (nº de matrícula)
+  - Tomo/Folio/Finca/Año: muestra 4 campos (sistema pre-matrícula)
+- **Checkbox "en mayor extensión"**: para cuando la escritura corresponde a una parcela de mayor superficie
+- El tipo seleccionado se guarda en `tipo_inscripcion_registro`; según el tipo se limpian los campos del otro modo
+
+### 3. Tab 3 Mensura
+
+#### Tipo de mensura (ahora solo lectura)
+- El select de tipo mensura fue **eliminado** de Tab 3 — el tipo se define al crear el expediente y no se puede cambiar
+- Si el expediente tiene tipo mensura asignado, se muestra como bloque informativo de solo lectura
+
+#### Superficie — campos según tipo de inmueble
+- **Urbano**: un campo `Superficie total (m²)` — igual que antes
+- **Rural**: tres campos separados — **Hectáreas / Áreas / Centiáreas** — se combinan para calcular m² al guardar (1 ha = 10.000 m², 1 a = 100 m²)
+- Los campos rurales se pre-populan desde el m² almacenado al reabrir
+
+#### Auto-conversión a letras
+- La superficie se convierte automáticamente a texto al tipear, igual que lados y ángulos
+- Urbano: "CIENTO VEINTE METROS CUADRADOS CON CINCUENTA CENTÍMETROS"
+- Rural: "DOS HECTÁREAS, TRES ÁREAS, QUINCE CENTIÁREAS"
+
+### 4. Generación de PDFs (`generar.ts`)
+
+#### Márgenes
+- Margen izquierdo aumentado de 40 → **55pt** en todos los documentos de texto (Nota de Elevación, Capítulo, Citación, Acta de Mensura, Acta de Ausencia, Memoria)
+- Carátula: margen izquierdo del cuerpo aumentado de 55 → **90pt** para proteger el texto del anillado
+
+#### Carátula — logo PNG
+- **Sello circular dibujado** (pdf-lib primitives) **eliminado** — reemplazado por el logo PNG oficial del estudio
+- Logo se carga desde `public/images/nica-logo-caratula.png` con `fs.readFile` (más confiable que fetch a sí mismo en dev SSR); fallback a HTTP fetch para producción
+- El PNG incluye el sello, nombre del profesional y datos de contacto — no se duplica texto debajo
+- **Nota técnica**: Chrome guarda imágenes WebP con extensión `.png` pero el contenido sigue siendo WebP (incompatible con pdf-lib). La conversión correcta se hace con PowerShell usando el codec WIC nativo de Windows 11
+
+#### Tipo de mensura en documentos
+- El prefijo "MENSURA PARA " fue eliminado del título — ahora se usa el nombre del tipo directamente (evita redundancia como "MENSURA PARA MENSURA Y DIVISIÓN")
+
+#### Inscripción en Capítulo de Extensión
+- Ahora usa `tipo_inscripcion_registro` para mostrar el texto correcto:
+  - Matrícula: "inscripto bajo Matrícula XXXX"
+  - Tomo: "inscripto al Tomo X, Folio Y, Finca Z, Año AAAA del Departamento de..."
+  - Agrega "en mayor extensión" si `inscripcion_mayor_extension = true`
+
+#### "Generado por NICA · fecha" eliminado
+- El timestamp al pie de todos los documentos fue eliminado (no corresponde en documentos legales de mensura)
+
+### SQL ejecutado para esta sesión
+```sql
+ALTER TABLE inmuebles ADD COLUMN IF NOT EXISTS tipo_inscripcion_registro text DEFAULT 'matricula';
+ALTER TABLE inmuebles ADD COLUMN IF NOT EXISTS registro_finca text;
+ALTER TABLE inmuebles ADD COLUMN IF NOT EXISTS inscripcion_mayor_extension boolean DEFAULT false;
+```
+
+### Ítem pendiente
+- **Ítem 11 — Múltiples polígonos**: complejo, requiere cambios de esquema de BD y UI con cards. Se analiza y planifica en la próxima sección.
 
 ---
 

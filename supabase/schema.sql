@@ -170,12 +170,15 @@ create table if not exists inmuebles (
   registro_tomo         text,
   registro_folio        text,
   registro_anio         text,
-  antecedentes_tecnicos text,
-  propietario_anterior  text,
-  calle_frente          text,
-  calle_entre1          text,
-  calle_entre2          text,
-  tipo_inmueble         text check (tipo_inmueble in ('urbano','rural'))
+  antecedentes_tecnicos         text,
+  propietario_anterior          text,
+  calle_frente                  text,
+  calle_entre1                  text,
+  calle_entre2                  text,
+  tipo_inmueble                 text check (tipo_inmueble in ('urbano','rural')),
+  tipo_inscripcion_registro     text default 'matricula',  -- 'matricula' | 'tomo'
+  registro_finca                text,                      -- para inscripción por tomo (anterior al 87)
+  inscripcion_mayor_extension   boolean default false      -- inscripto en mayor extensión
 );
 
 alter table inmuebles enable row level security;

@@ -11,6 +11,8 @@ let errorMsg = ''
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData()
+  const tipoInmueble = (form.get('tipo_inmueble') as string) || 'urbano'
+
   const { data, error } = await db.from('expedientes').insert({
     user_id: uid,
     numero_expediente: form.get('numero_expediente') || null,
@@ -21,10 +23,46 @@ if (Astro.request.method === 'POST') {
   }).select('id').single()
 
   if (error) { errorMsg = error.message }
-  else { return Astro.redirect(`/expedientes/${data.id}`) }
+  else {
+    // Crear el registro de inmueble ya con el tipo seleccionado
+    await db.from('inmuebles').insert({ expediente_id: data.id, tipo_inmueble: tipoInmueble })
+    return Astro.redirect(`/expedientes/${data.id}`)
+  }
 }
 
-const TIPOS_MENSURA = ['División', 'Unificación', 'Simple', 'Relevamiento', 'Subdivisión', 'Otro']
+const TIPOS_MENSURA = [
+  'Mensura',
+  'Mensura y División',
+  'Mensura y Deslinde',
+  'Mensura y Unificación',
+  'Mensura, Unificación y Redistribución Parcelaria',
+  'Mensura para Prescripción Adquisitiva',
+  'Mensura para Prescripción Adquisitiva y División',
+  'División en Base a Mensura Registrada para Prescripción Adquisitiva',
+  'Mensura y Proyecto de Unificación',
+  'Mensura, Proyecto de Unificación y Redistribución Parcelaria',
+  'Mensura de División de la Edificación Existente para Someter al Régimen de Propiedad Horizontal (Según Titulo V, Libro IV del Código Civil y Comercial) en base a Mensura Registrada.',
+  'Mensura de División de la Edificación Existente y a construir para Someter al Régimen de Propiedad Horizontal (Según Titulo V, Libro IV del Código Civil y Comercial) en base a Mensura Registrada.',
+  'Mensura de División de la Edificación a Construir para Someter al Régimen de Propiedad Horizontal (Según Titulo V, Libro IV del Código Civil y Comercial) en base a Mensura Registrada.',
+  'Mensura de Modificación de la División de la Edificación Existente para Someter al Régimen de Propiedad Horizontal (Según Titulo V, Libro IV del Código Civil y Comercial) en base a Mensura Registrada.',
+  'División en base a Mensura Registrada',
+  'Unificación en Base a Mensura Registrada',
+  'Unificación en Base a Mensura Registrada y Redistribución Parcelaria',
+  'Proyecto de Unificación en Base a Mensura Registrada',
+  'Proyecto de Unificacion en Base a Mensura Registrada y Redistribución Parcelaria',
+  'Modificación del Estado Parcelario en Base a Mensura Registrada',
+  'División en Base a Mensura Registrada para Someter al Régimen de Conjuntos Inmobiliarios (Según Titulo VI, Libro IV del Código Civil y Comercial)',
+  'Mensura y División para Someter al Régimen de Conjuntos Inmobiliarios (Según Titulo VI, Libro IV del Código Civil y Comercial)',
+  'División para Someter al Régimen de Conjuntos Inmobiliarios (Según Titulo VI, Libro IV del Código Civil y Comercial)',
+  'Mensura de una Parcela con Mensura Registrada.',
+  'Rectificación de Mensura',
+  'Mensura para Plan de Regularización Dominial según Ley 5.836/2008 y modificatoria Ley 6.211/2013',
+  'Mensura para constituir Derecho Real de Superficie (Según Titulo VII, Libro IV del Código Civil y Comercial)',
+  'Mensura y División para Someter al Régimen de Conjunto Inmobiliario - Cementerio Privado',
+  'División en Base a Mensura Registrada para Someter al Régimen de Conjunto Inmobiliario - Cementerio Privado',
+  'Mensura para Reputación de Dominio (Disp. 1G/2024)',
+  'Mensura para Reputación de Dominio y División. (Disp. 1G/2024)',
+]
 ---
 <AppLayout title="Nuevo expediente">
   <div class="page-header">
@@ -38,30 +76,45 @@ const TIPOS_MENSURA = ['División', 'Unificación', 'Simple', 'Relevamiento', 'S
 
   <div class="card" style="max-width:700px">
     <p style="color:var(--color-text-secondary);font-size:0.875rem;margin-bottom:1.5rem">
-      Completá los datos del expediente. Podés guardar y continuar luego.
+      Completá los datos básicos del expediente. Podés guardar y continuar luego.
     </p>
     <form method="POST">
+
+      <div class="section-label">Tipo de inmueble</div>
+      <div style="display:flex;gap:2rem;margin-bottom:1.5rem;margin-top:0.25rem">
+        <label style="display:flex;align-items:center;gap:7px;font-weight:400;cursor:pointer">
+          <input type="radio" name="tipo_inmueble" value="urbano" checked /> Urbano
+        </label>
+        <label style="display:flex;align-items:center;gap:7px;font-weight:400;cursor:pointer">
+          <input type="radio" name="tipo_inmueble" value="rural" /> Rural
+        </label>
+      </div>
+
+      <div class="section-label">Datos del expediente</div>
       <div class="form-grid form-grid-2" style="margin-bottom:1rem">
         <div class="field">
           <label for="numero_expediente">Nº Expediente</label>
           <input class="input" id="numero_expediente" name="numero_expediente" type="text" placeholder="Ej: 2024-001" />
         </div>
         <div class="field">
-          <label for="tipo_mensura">Tipo de mensura</label>
-          <select class="input" id="tipo_mensura" name="tipo_mensura">
-            <option value="">Seleccionar...</option>
-            {TIPOS_MENSURA.map(t => <option value={t}>{t}</option>)}
-          </select>
-        </div>
-        <div class="field">
           <label for="fecha_inicio">Fecha de inicio</label>
           <input class="input" id="fecha_inicio" name="fecha_inicio" type="date" />
         </div>
       </div>
+
+      <div class="field" style="margin-bottom:1rem">
+        <label for="tipo_mensura">Tipo de mensura</label>
+        <select class="input" id="tipo_mensura" name="tipo_mensura">
+          <option value="">Seleccionar...</option>
+          {TIPOS_MENSURA.map(t => <option value={t}>{t}</option>)}
+        </select>
+      </div>
+
       <div class="field" style="margin-bottom:1.5rem">
         <label for="observaciones">Observaciones</label>
         <textarea class="input" id="observaciones" name="observaciones" rows="3" style="resize:vertical"></textarea>
       </div>
+
       <div style="display:flex;gap:0.75rem;justify-content:flex-end">
         <a href="/expedientes" class="btn btn-secondary">Cancelar</a>
         <button type="submit" class="btn btn-primary">Crear y continuar →</button>
@@ -75,4 +128,5 @@ const TIPOS_MENSURA = ['División', 'Unificación', 'Simple', 'Relevamiento', 'S
 .back-link { font-size:0.875rem; color:var(--color-text-secondary); display:block; margin-bottom:0.25rem; text-decoration:none; }
 .back-link:hover { color:var(--color-primary); text-decoration:none; }
 .page-header h2 { font-size:1.5rem; }
+.section-label { font-weight:600; font-size:0.8125rem; color:var(--color-primary); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:0.6rem; }
 </style>

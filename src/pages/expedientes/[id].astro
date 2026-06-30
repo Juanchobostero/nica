@@ -55,28 +55,30 @@ if (Astro.request.method === 'POST') {
   const action = form.get('_action') as string
 
   if (action === 'guardar_inmueble') {
+    const tipoInscripcion = (form.get('tipo_inscripcion_registro') as string) || 'matricula'
     const payload = {
       expediente_id: id,
+      tipo_inmueble: form.get('tipo_inmueble'),
       departamento: form.get('departamento'),
       localidad: form.get('localidad'),
-      circunscripcion: form.get('circunscripcion'),
-      seccion: form.get('seccion'),
-      fraccion: form.get('fraccion'),
-      manzana: form.get('manzana'),
-      parcela: form.get('parcela'),
-      subparcela: form.get('subparcela'),
+      seccion: form.get('seccion') || null,
+      fraccion: form.get('fraccion') || null,
+      manzana: form.get('manzana') || null,
+      parcela: form.get('parcela') || null,
       matricula_catastral: form.get('matricula_catastral'),
-      matricula_registro: form.get('matricula_registro'),
+      tipo_inscripcion_registro: tipoInscripcion,
+      matricula_registro: tipoInscripcion === 'matricula' ? (form.get('matricula_registro') || null) : null,
+      registro_tomo:  tipoInscripcion === 'tomo' ? (form.get('registro_tomo')  || null) : null,
+      registro_folio: tipoInscripcion === 'tomo' ? (form.get('registro_folio') || null) : null,
+      registro_finca: tipoInscripcion === 'tomo' ? (form.get('registro_finca') || null) : null,
+      registro_anio:  tipoInscripcion === 'tomo' ? (form.get('registro_anio')  || null) : null,
+      inscripcion_mayor_extension: form.get('inscripcion_mayor_extension') === 'on',
       matricula_municipal: form.get('matricula_municipal') || null,
-      registro_tomo: form.get('registro_tomo') || null,
-      registro_folio: form.get('registro_folio') || null,
-      registro_anio: form.get('registro_anio') || null,
       antecedentes_tecnicos: form.get('antecedentes_tecnicos') || null,
       propietario_anterior: form.get('propietario_anterior') || null,
       calle_frente: form.get('calle_frente') || null,
       calle_entre1: form.get('calle_entre1') || null,
       calle_entre2: form.get('calle_entre2') || null,
-      tipo_inmueble: form.get('tipo_inmueble'),
     }
     const { error } = inmueble
       ? await db.from('inmuebles').update(payload).eq('expediente_id', id)
@@ -115,16 +117,24 @@ if (Astro.request.method === 'POST') {
 
     if (!errorMsg) {
     await db.from('expedientes').update({
-      tipo_mensura: form.get('tipo_mensura'),
       numero_expediente: form.get('numero_expediente') || null,
       fecha_inicio: form.get('fecha_mensura') || null,
       hora_mensura: form.get('hora_mensura') || null,
       area_catastro: form.get('area_catastro') || null,
     }).eq('id', id)
 
+    // Superficie: si es rural usar Ha/A/Ca, si es urbano usar m² directo
+    let superficieM2: number | null = parseFloat(form.get('superficie_m2') as string) || null
+    if (inmueble?.tipo_inmueble === 'rural') {
+      const ha = parseFloat(form.get('superficie_ha') as string) || 0
+      const a  = parseFloat(form.get('superficie_a')  as string) || 0
+      const ca = parseFloat(form.get('superficie_ca') as string) || 0
+      if (ha > 0 || a > 0 || ca > 0) superficieM2 = ha * 10000 + a * 100 + ca
+    }
+
     const polPayload = {
       expediente_id: id,
-      superficie_m2: parseFloat(form.get('superficie_m2') as string) || null,
+      superficie_m2: superficieM2,
       superficie_letras: form.get('superficie_letras') || null,
       cantidad_lados: cantLados,
       cantidad_angulos: cantAngulos,
@@ -288,7 +298,6 @@ const DEPARTAMENTOS = [
   'Saladas','San Cosme','San Luis del Palmar','San Martín','San Miguel',
   'San Roque','Santo Tomé','Sauce'
 ]
-const TIPOS_MENSURA = ['División','Unificación','Simple','Relevamiento','Subdivisión','Prescripción Adquisitiva','Otro']
 
 // Identificador: número oficial si existe, sino nombre del primer comitente
 const primerComitente = (expComitentes ?? [])[0]?.comitentes as any
@@ -502,6 +511,18 @@ const datosValidacion = {
         <input type="hidden" name="_action" value="guardar_inmueble" />
         <input type="hidden" name="_tab" value="inmueble" />
 
+        <!-- Tipo de inmueble (solo informativo, se define al crear) -->
+        <input type="hidden" name="tipo_inmueble" value={inmueble?.tipo_inmueble ?? 'urbano'} />
+        <div class="section-label">Tipo de inmueble</div>
+        <div style="margin-bottom:1.5rem;margin-top:0.25rem">
+          <span style="display:inline-block;padding:3px 12px;border-radius:99px;font-size:0.82rem;font-weight:600;background:var(--color-primary);color:#fff">
+            {inmueble?.tipo_inmueble === 'rural' ? 'Rural' : 'Urbano'}
+          </span>
+          <span style="font-size:0.78rem;color:var(--color-text-secondary);margin-left:0.5rem">Se define al crear el expediente</span>
+        </div>
+
+        <!-- Identificación Catastral -->
+        <div class="section-label">Identificación Catastral</div>
         <div class="form-grid form-grid-2" style="margin-bottom:1rem">
           <div class="field">
             <label>Departamento</label>
@@ -516,57 +537,142 @@ const datosValidacion = {
             <label>Localidad</label>
             <input class="input" name="localidad" value={inmueble?.localidad ?? ''} />
           </div>
-          <div class="field">
-            <label>Circunscripción</label>
-            <input class="input" name="circunscripcion" value={inmueble?.circunscripcion ?? ''} />
-          </div>
-          <div class="field">
-            <label>Sección</label>
-            <input class="input" name="seccion" value={inmueble?.seccion ?? ''} />
-          </div>
-          <div class="field">
-            <label>Fracción</label>
-            <input class="input" name="fraccion" value={inmueble?.fraccion ?? ''} />
-          </div>
-          <div class="field">
+
+          <!-- Solo URBANO: Manzana -->
+          <div class="field campo-urbano" id="grupo_manzana" style={inmueble?.tipo_inmueble === 'rural' ? 'display:none' : ''}>
             <label>Manzana</label>
-            <input class="input" name="manzana" value={inmueble?.manzana ?? ''} />
+            <input class="input" name="manzana" id="input_manzana" value={inmueble?.manzana ?? ''}
+              disabled={inmueble?.tipo_inmueble === 'rural'} />
           </div>
-          <div class="field">
+
+          <!-- Solo URBANO: Parcela -->
+          <div class="field campo-urbano" id="grupo_parcela" style={inmueble?.tipo_inmueble === 'rural' ? 'display:none' : ''}>
             <label>Parcela</label>
-            <input class="input" name="parcela" value={inmueble?.parcela ?? ''} />
+            <input class="input" name="parcela" id="input_parcela" value={inmueble?.parcela ?? ''}
+              disabled={inmueble?.tipo_inmueble === 'rural'} />
           </div>
-          <div class="field">
-            <label>Subparcela</label>
-            <input class="input" name="subparcela" value={inmueble?.subparcela ?? ''} />
+
+          <!-- Solo RURAL: Sección Rural -->
+          <div class="field campo-rural" id="grupo_seccion" style={inmueble?.tipo_inmueble !== 'rural' ? 'display:none' : ''}>
+            <label id="lbl_seccion">Sección Rural</label>
+            <input class="input" name="seccion" id="input_seccion" value={inmueble?.seccion ?? ''}
+              disabled={inmueble?.tipo_inmueble !== 'rural'} />
           </div>
+
+          <!-- Partida inmobiliaria (siempre) -->
           <div class="field">
             <label>Partida Inmobiliaria</label>
             <input class="input" name="matricula_catastral" value={inmueble?.matricula_catastral ?? ''}
               style="text-transform:uppercase" oninput="this.value = this.value.toUpperCase()" />
           </div>
+
+          <!-- Fracción / Paraje (siempre, pero disabled por defecto) -->
           <div class="field">
-            <label>Matrícula Registro de la Propiedad</label>
-            <input class="input" name="matricula_registro" value={inmueble?.matricula_registro ?? ''} />
+            <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.3rem">
+              <label id="lbl_fraccion" style="margin:0">{inmueble?.tipo_inmueble === 'rural' ? 'Paraje' : 'Fracción'}</label>
+              <label style="display:flex;align-items:center;gap:5px;font-size:0.78rem;font-weight:400;cursor:pointer;color:var(--color-text-secondary)">
+                <input type="checkbox" id="chk_fraccion" style="width:13px;height:13px"
+                  checked={!!(inmueble?.fraccion)} />
+                Habilitar
+              </label>
+            </div>
+            <input class="input" name="fraccion" id="input_fraccion"
+              value={inmueble?.fraccion ?? ''}
+              disabled={!inmueble?.fraccion}
+              placeholder="Opcional" />
           </div>
         </div>
 
-        <div class="section-label" style="margin-top:0.5rem">Antecedentes de dominio (inscripción en mayor extensión)</div>
-        <div class="form-grid form-grid-2" style="margin-bottom:1rem">
+        <!-- Inscripción Municipal (excepcional) -->
+        <div class="section-label" style="margin-top:0.5rem">Inscripción Municipal</div>
+        <div style="margin-bottom:1.25rem">
+          <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;font-size:0.9rem">
+            <input type="checkbox" id="chk_inscripcion_municipal"
+              style="width:15px;height:15px;accent-color:var(--color-primary)"
+              checked={!!(inmueble?.matricula_municipal)} />
+            Habilitar inscripción municipal (caso excepcional)
+          </label>
+          <p style="font-size:0.78rem;color:var(--color-text-secondary);margin:0.2rem 0 0.6rem 24px">
+            La mayoría de los inmuebles tienen matrícula. Solo habilitar en casos especiales.
+          </p>
+          <div id="campo_inscripcion_municipal" class="field" style="margin-bottom:0">
+            <label>Nº Inscripción Municipal</label>
+            <input class="input" id="input_inscripcion_municipal" name="matricula_municipal"
+              value={inmueble?.matricula_municipal ?? ''}
+              disabled={!inmueble?.matricula_municipal} />
+          </div>
+        </div>
+
+        <!-- Inscripción Registro de la Propiedad -->
+        <div class="section-label" style="margin-top:0.5rem">Inscripción en Registro de la Propiedad Inmueble</div>
+        <input type="hidden" name="tipo_inscripcion_registro" id="tipo_inscripcion_registro_input"
+          value={(inmueble as any)?.tipo_inscripcion_registro ?? 'matricula'} />
+        <div style="display:flex;gap:1.5rem;margin-bottom:1rem">
+          <label style="display:flex;align-items:center;gap:7px;font-weight:400;cursor:pointer">
+            <input type="radio" name="_inscripcion_radio" id="radio_matricula" value="matricula"
+              checked={(inmueble as any)?.tipo_inscripcion_registro !== 'tomo'} />
+            Matrícula
+          </label>
+          <label style="display:flex;align-items:center;gap:7px;font-weight:400;cursor:pointer">
+            <input type="radio" name="_inscripcion_radio" id="radio_tomo" value="tomo"
+              checked={(inmueble as any)?.tipo_inscripcion_registro === 'tomo'} />
+            Tomo / Folio / Finca / Año
+          </label>
+        </div>
+
+        <!-- Matrícula (modo por defecto) -->
+        <div id="grupo_matricula_registro" class="form-grid form-grid-2"
+          style={(inmueble as any)?.tipo_inscripcion_registro === 'tomo' ? 'display:none;margin-bottom:1rem' : 'margin-bottom:1rem'}>
+          <div class="field">
+            <label>Nº Matrícula</label>
+            <input class="input" name="matricula_registro" id="input_matricula_registro"
+              value={inmueble?.matricula_registro ?? ''}
+              disabled={(inmueble as any)?.tipo_inscripcion_registro === 'tomo'} />
+          </div>
+        </div>
+
+        <!-- Tomo / Folio / Finca / Año -->
+        <div id="grupo_tomo_folio" class="form-grid form-grid-2"
+          style={(inmueble as any)?.tipo_inscripcion_registro !== 'tomo' ? 'display:none;margin-bottom:1rem' : 'margin-bottom:1rem'}>
           <div class="field">
             <label>Tomo</label>
-            <input class="input" name="registro_tomo" value={(inmueble as any)?.registro_tomo ?? ''} />
+            <input class="input" name="registro_tomo" id="input_registro_tomo"
+              value={(inmueble as any)?.registro_tomo ?? ''}
+              disabled={(inmueble as any)?.tipo_inscripcion_registro !== 'tomo'} />
           </div>
           <div class="field">
             <label>Folio</label>
-            <input class="input" name="registro_folio" value={(inmueble as any)?.registro_folio ?? ''} />
+            <input class="input" name="registro_folio" id="input_registro_folio"
+              value={(inmueble as any)?.registro_folio ?? ''}
+              disabled={(inmueble as any)?.tipo_inscripcion_registro !== 'tomo'} />
+          </div>
+          <div class="field">
+            <label>Finca</label>
+            <input class="input" name="registro_finca" id="input_registro_finca"
+              value={(inmueble as any)?.registro_finca ?? ''}
+              disabled={(inmueble as any)?.tipo_inscripcion_registro !== 'tomo'} />
           </div>
           <div class="field">
             <label>Año</label>
-            <input class="input" name="registro_anio" value={(inmueble as any)?.registro_anio ?? ''} />
+            <input class="input" name="registro_anio" id="input_registro_anio"
+              value={(inmueble as any)?.registro_anio ?? ''}
+              disabled={(inmueble as any)?.tipo_inscripcion_registro !== 'tomo'} />
           </div>
         </div>
 
+        <div style="margin-bottom:1.25rem">
+          <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;font-size:0.9rem">
+            <input type="checkbox" name="inscripcion_mayor_extension" id="chk_mayor_extension"
+              style="width:15px;height:15px;accent-color:var(--color-primary)"
+              checked={(inmueble as any)?.inscripcion_mayor_extension === true} />
+            La inscripción anterior es en mayor extensión
+          </label>
+          <p style="font-size:0.78rem;color:var(--color-text-secondary);margin:0.2rem 0 0 24px">
+            Marcar cuando la escritura original corresponde a una parcela de mayor superficie de la que se mide.
+          </p>
+        </div>
+
+        <!-- Referencias para notificación a linderos -->
         <div class="section-label" style="margin-top:0.5rem">Referencias para notificación a linderos</div>
         <div class="form-grid form-grid-2" style="margin-bottom:1rem">
           <div class="field">
@@ -587,35 +693,11 @@ const datosValidacion = {
           </div>
         </div>
 
-        <div style="margin-bottom:1rem">
-          <label style="display:flex;align-items:center;gap:8px;font-weight:500;cursor:pointer">
-            <input type="checkbox" id="chk_sin_inscripcion" style="width:16px;height:16px;accent-color:var(--color-primary)" />
-            Sin inscripción municipal
-          </label>
-          <p style="font-size:0.8rem;color:var(--color-text-secondary);margin:0.25rem 0 0.5rem 24px">
-            Marcar cuando el inmueble no tiene matrícula municipal asignada.
-          </p>
-          <div id="campo_inscripcion_municipal" class="field" style="margin-top:0.5rem;margin-bottom:0">
-            <label>Inscripción Municipal</label>
-            <input class="input" id="input_inscripcion_municipal" name="matricula_municipal" value={inmueble?.matricula_municipal ?? ''} />
-          </div>
-        </div>
-
+        <!-- Antecedentes técnicos -->
         <div class="field" style="margin-bottom:1.5rem">
           <label>Antecedentes Técnicos</label>
-          <textarea class="input" name="antecedentes_tecnicos" rows="5" placeholder="Ej: En el Registro de la Propiedad Inmueble se halla...">{(inmueble as any)?.antecedentes_tecnicos ?? ''}</textarea>
-        </div>
-
-        <div class="field" style="margin-bottom:1.5rem">
-          <label>Tipo de inmueble</label>
-          <div style="display:flex;gap:1.5rem;margin-top:4px">
-            <label style="display:flex;align-items:center;gap:6px;font-weight:400">
-              <input type="radio" name="tipo_inmueble" value="urbano" checked={inmueble?.tipo_inmueble === 'urbano'} /> Urbano
-            </label>
-            <label style="display:flex;align-items:center;gap:6px;font-weight:400">
-              <input type="radio" name="tipo_inmueble" value="rural" checked={inmueble?.tipo_inmueble === 'rural'} /> Rural
-            </label>
-          </div>
+          <textarea class="input" name="antecedentes_tecnicos" rows="5"
+            placeholder="Ej: En el Registro de la Propiedad Inmueble se halla...">{(inmueble as any)?.antecedentes_tecnicos ?? ''}</textarea>
         </div>
 
         <button type="submit" class="btn btn-primary">Guardar inmueble</button>
@@ -630,15 +712,13 @@ const datosValidacion = {
           <input type="hidden" name="_tab" value="mensura" />
 
           <div class="section-label">Datos generales</div>
-          <div class="form-grid form-grid-2" style="margin-bottom:1.25rem">
-            <div class="field">
-              <label>Tipo de mensura</label>
-              <select class="input" name="tipo_mensura">
-                {TIPOS_MENSURA.map(t => (
-                  <option value={t} selected={exp.tipo_mensura === t}>{t}</option>
-                ))}
-              </select>
+          {exp.tipo_mensura && (
+            <div style="background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:0.5rem 0.75rem;margin-bottom:1rem;font-size:0.85rem;color:var(--color-text-secondary)">
+              <span style="font-weight:600;color:var(--color-text)">Tipo de mensura:</span> {exp.tipo_mensura}
+              <span style="font-size:0.75rem;margin-left:0.5rem">(se define al crear el expediente)</span>
             </div>
+          )}
+          <div class="form-grid form-grid-2" style="margin-bottom:1.25rem">
             <div class="field">
               <label>Nº Expediente</label>
               <input class="input" name="numero_expediente" value={exp.numero_expediente ?? ''} />
@@ -659,14 +739,45 @@ const datosValidacion = {
 
           <div class="section-label">Polígono</div>
           <div class="form-grid form-grid-2" style="margin-bottom:1rem">
-            <div class="field">
-              <label>Superficie total (m²)</label>
-              <input class="input" type="number" step="0.0001" name="superficie_m2" value={poligono?.superficie_m2 ?? ''} />
-            </div>
-            <div class="field">
-              <label>Superficie en letras</label>
-              <input class="input" name="superficie_letras" value={poligono?.superficie_letras ?? ''} />
-            </div>
+            {inmueble?.tipo_inmueble === 'rural' ? (
+              <>
+                <div class="field">
+                  <label>Superficie — Hectáreas</label>
+                  <input class="input" type="number" step="1" min="0" name="superficie_ha" id="sup_ha"
+                    value={poligono?.superficie_m2 != null ? Math.floor((poligono.superficie_m2 as number) / 10000) : ''} />
+                </div>
+                <div class="field">
+                  <label>Áreas</label>
+                  <input class="input" type="number" step="1" min="0" max="99" name="superficie_a" id="sup_a"
+                    value={poligono?.superficie_m2 != null ? Math.floor(((poligono.superficie_m2 as number) % 10000) / 100) : ''} />
+                </div>
+                <div class="field">
+                  <label>Centiáreas</label>
+                  <input class="input" type="number" step="0.01" min="0" max="99.99" name="superficie_ca" id="sup_ca"
+                    value={poligono?.superficie_m2 != null ? Number(((poligono.superficie_m2 as number) % 100).toFixed(2)) : ''} />
+                </div>
+                <div class="field" style="grid-column:1/-1">
+                  <label>Superficie en letras <span style="font-weight:400;font-size:0.78rem;color:var(--color-text-secondary)">(auto)</span></label>
+                  <input class="input" name="superficie_letras" id="superficie_letras"
+                    value={poligono?.superficie_letras ?? ''}
+                    style="color:var(--color-primary);font-weight:600" />
+                </div>
+              </>
+            ) : (
+              <>
+                <div class="field">
+                  <label>Superficie total (m²)</label>
+                  <input class="input" type="number" step="0.0001" name="superficie_m2" id="superficie_m2"
+                    value={poligono?.superficie_m2 ?? ''} />
+                </div>
+                <div class="field">
+                  <label>Superficie en letras <span style="font-weight:400;font-size:0.78rem;color:var(--color-text-secondary)">(auto)</span></label>
+                  <input class="input" name="superficie_letras" id="superficie_letras"
+                    value={poligono?.superficie_letras ?? ''}
+                    style="color:var(--color-primary);font-weight:600" />
+                </div>
+              </>
+            )}
             <div class="field">
               <label>Cantidad de lados</label>
               <input class="input" type="number" name="cantidad_lados" id="cant_lados" value={poligono?.cantidad_lados ?? ''} min="0" />
@@ -980,11 +1091,15 @@ const datosValidacion = {
 </AppLayout>
 
 <script define:vars={{
-  ladosExistentes:       poligono?.lados    ?? [],
-  cantLadosInicial:      poligono?.cantidad_lados   ?? 0,
-  angulosExistentes:     poligono?.angulos  ?? [],
-  cantAngulosInicial:    poligono?.cantidad_angulos ?? 0,
-  sinInscripcionInicial: !(inmueble as any)?.matricula_municipal,
+  ladosExistentes:            poligono?.lados    ?? [],
+  cantLadosInicial:           poligono?.cantidad_lados   ?? 0,
+  angulosExistentes:          poligono?.angulos  ?? [],
+  cantAngulosInicial:         poligono?.cantidad_angulos ?? 0,
+  tipoInmuebleInicial:        inmueble?.tipo_inmueble ?? 'urbano',
+  tipoInscripcionInicial:     (inmueble as any)?.tipo_inscripcion_registro ?? 'matricula',
+  fraccionTieneValor:         !!(inmueble?.fraccion),
+  inscripcionMunTieneValor:   !!(inmueble?.matricula_municipal),
+  esRuralInicial:             inmueble?.tipo_inmueble === 'rural',
   datosValidacion: datosValidacion,
 }}>
   // Expuesto en window: este script es inline (define:vars), pero el de "generar documentos"
@@ -1280,21 +1395,115 @@ const datosValidacion = {
     })
   }
 
-  // ── Checkbox "Sin inscripción municipal" ───────────────────────────────
-  const chkInscripcion   = document.getElementById('chk_sin_inscripcion')
-  const campoInscripcion = document.getElementById('campo_inscripcion_municipal')
-  const inputInscripcion = document.getElementById('input_inscripcion_municipal')
+  // ── Toggle tipo de inmueble (Tab 2) ───────────────────────────────────
+  function aplicarTipoInmueble(esRural) {
+    var grupoManzana = document.getElementById('grupo_manzana')
+    var grupoParcela = document.getElementById('grupo_parcela')
+    var grupoSeccion = document.getElementById('grupo_seccion')
+    var inputManzana = document.getElementById('input_manzana')
+    var inputParcela = document.getElementById('input_parcela')
+    var inputSeccion = document.getElementById('input_seccion')
+    var lblFraccion  = document.getElementById('lbl_fraccion')
 
-  if (chkInscripcion && campoInscripcion && inputInscripcion) {
-    function aplicarInscripcion(sinInscripcion) {
-      campoInscripcion.style.opacity = sinInscripcion ? '0.5' : '1'
-      inputInscripcion.disabled = sinInscripcion
-      if (sinInscripcion) inputInscripcion.value = ''
-    }
-    chkInscripcion.checked = sinInscripcionInicial
-    aplicarInscripcion(sinInscripcionInicial)
-    chkInscripcion.addEventListener('change', function() { aplicarInscripcion(chkInscripcion.checked) })
+    if (grupoManzana) { grupoManzana.style.display = esRural ? 'none' : ''; if (inputManzana) inputManzana.disabled = esRural }
+    if (grupoParcela) { grupoParcela.style.display = esRural ? 'none' : ''; if (inputParcela) inputParcela.disabled = esRural }
+    if (grupoSeccion) { grupoSeccion.style.display = esRural ? '' : 'none'; if (inputSeccion) inputSeccion.disabled = !esRural }
+    if (lblFraccion) lblFraccion.textContent = esRural ? 'Paraje' : 'Fracción'
   }
+
+  // Aplicar estado inicial (tipo inmueble es solo lectura, no tiene listeners de cambio)
+  aplicarTipoInmueble(tipoInmuebleInicial === 'rural')
+
+  // ── Toggle inscripción Registro de la Propiedad ───────────────────────
+  function aplicarTipoInscripcion(tipo) {
+    var grupoM = document.getElementById('grupo_matricula_registro')
+    var grupoT = document.getElementById('grupo_tomo_folio')
+    var inputM = document.getElementById('input_matricula_registro')
+    var hiddenInput = document.getElementById('tipo_inscripcion_registro_input')
+    var inputs = [
+      document.getElementById('input_registro_tomo'),
+      document.getElementById('input_registro_folio'),
+      document.getElementById('input_registro_finca'),
+      document.getElementById('input_registro_anio'),
+    ]
+    var esTomo = tipo === 'tomo'
+    if (grupoM) grupoM.style.display = esTomo ? 'none' : ''
+    if (grupoT) grupoT.style.display = esTomo ? '' : 'none'
+    if (inputM) inputM.disabled = esTomo
+    inputs.forEach(function(inp) { if (inp) inp.disabled = !esTomo })
+    if (hiddenInput) hiddenInput.value = tipo
+  }
+
+  var radioMatricula = document.getElementById('radio_matricula')
+  var radioTomo      = document.getElementById('radio_tomo')
+  if (radioMatricula) radioMatricula.addEventListener('change', function() { if (radioMatricula.checked) aplicarTipoInscripcion('matricula') })
+  if (radioTomo)      radioTomo.addEventListener('change',      function() { if (radioTomo.checked)      aplicarTipoInscripcion('tomo') })
+  aplicarTipoInscripcion(tipoInscripcionInicial)
+
+  // ── Toggle fracción / paraje ───────────────────────────────────────────
+  var chkFraccion   = document.getElementById('chk_fraccion')
+  var inputFraccion = document.getElementById('input_fraccion')
+  if (chkFraccion && inputFraccion) {
+    inputFraccion.disabled = !fraccionTieneValor
+    chkFraccion.addEventListener('change', function() {
+      inputFraccion.disabled = !chkFraccion.checked
+      if (!chkFraccion.checked) inputFraccion.value = ''
+    })
+  }
+
+  // ── Toggle inscripción municipal ───────────────────────────────────────
+  var chkMunicipal   = document.getElementById('chk_inscripcion_municipal')
+  var inputMunicipal = document.getElementById('input_inscripcion_municipal')
+  if (chkMunicipal && inputMunicipal) {
+    inputMunicipal.disabled = !inscripcionMunTieneValor
+    chkMunicipal.addEventListener('change', function() {
+      inputMunicipal.disabled = !chkMunicipal.checked
+      if (!chkMunicipal.checked) inputMunicipal.value = ''
+    })
+  }
+
+  // ── Auto-conversión superficie a letras (Tab 3) ───────────────────────
+  function superficieALetrasM2(valor) {
+    if (!valor || isNaN(parseFloat(valor))) return ''
+    var n = parseFloat(valor)
+    var metros = Math.floor(n)
+    var cm = Math.round((n - metros) * 100)
+    var texto = convertir(metros) + ' METROS CUADRADOS'
+    if (cm > 0) texto += ' CON ' + convertir(cm) + (cm === 1 ? ' CENTÍMETRO' : ' CENTÍMETROS')
+    return texto
+  }
+
+  function superficieHaALetras(ha, a, ca) {
+    var partes = []
+    if (ha > 0) partes.push(convertir(ha) + (ha === 1 ? ' HECTÁREA' : ' HECTÁREAS'))
+    if (a > 0)  partes.push(convertir(a)  + (a  === 1 ? ' ÁREA' : ' ÁREAS'))
+    if (ca > 0) partes.push(convertir(Math.floor(ca)) + (Math.floor(ca) === 1 ? ' CENTIÁREA' : ' CENTIÁREAS'))
+    return partes.join(', ')
+  }
+
+  var inputSupM2 = document.getElementById('superficie_m2')
+  var supLetras  = document.getElementById('superficie_letras')
+  var inputHa    = document.getElementById('sup_ha')
+  var inputA     = document.getElementById('sup_a')
+  var inputCa    = document.getElementById('sup_ca')
+
+  if (inputSupM2 && supLetras) {
+    inputSupM2.addEventListener('input', function() {
+      supLetras.value = superficieALetrasM2(inputSupM2.value)
+    })
+  }
+
+  function actualizarLetrasRural() {
+    if (!supLetras) return
+    var ha = parseFloat(inputHa?.value) || 0
+    var a  = parseFloat(inputA?.value)  || 0
+    var ca = parseFloat(inputCa?.value) || 0
+    supLetras.value = superficieHaALetras(ha, a, ca)
+  }
+
+  if (inputHa) inputHa.addEventListener('input', actualizarLetrasRural)
+  if (inputA)  inputA.addEventListener('input',  actualizarLetrasRural)
+  if (inputCa) inputCa.addEventListener('input', actualizarLetrasRural)
 </script>
 
 <script>

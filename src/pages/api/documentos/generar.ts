@@ -1,6 +1,8 @@
 import type { APIRoute } from 'astro'
 import { supabase, getSupabase } from '../../../lib/supabase'
 import { PDFDocument, StandardFonts, rgb, degrees, type PDFFont, type PDFPage } from 'pdf-lib'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
 const DOC_LABELS: Record<string, string> = {
   // Contenido básico
@@ -487,7 +489,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
     ? `${comitentePrincipal.nombre} ${comitentePrincipal.apellido}`
     : '—'
   const nombreProfesional = profile ? `${profile.nombre ?? ''} ${profile.apellido ?? ''}`.trim() : '—'
-  const tipoMensuraTexto = `MENSURA PARA ${(exp?.tipo_mensura ?? '—').toUpperCase()}`
+  const tipoMensuraTexto = (exp?.tipo_mensura ?? '—').toUpperCase()
   const ubicacionCompleta = `${construirUbicacion(inmueble)}${inmueble?.departamento ? ', ' + inmueble.departamento : ''}`
 
   for (const tipo of tipos) {
@@ -531,36 +533,45 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       ]
       let yCampos = yTitulo - 45
       camposCaratula.forEach(([clave, valor]) => {
-        const lineasValor = partirEnLineas(`${clave}${valor}`, width - 90, 15, boldItalic)
+        const lineasValor = partirEnLineas(`${clave}${valor}`, width - 145, 15, boldItalic)
         lineasValor.forEach((linea, i) => {
-          page.drawText(linea, { x: 42, y: yCampos - i * 20, size: 15, font: boldItalic, color: negro })
+          page.drawText(linea, { x: 90, y: yCampos - i * 20, size: 15, font: boldItalic, color: negro })
         })
         yCampos -= lineasValor.length * 20 + 14
       })
 
-      // Sello circular + firma / pie profesional
-      const yFirma = 160
-      dibujarSelloProfesional(page, width / 2, yFirma + 90, { bold }, negro)
-      page.drawLine({ start: { x: 40, y: yFirma + 30 }, end: { x: width - 40, y: yFirma + 30 }, thickness: 1, color: rgb(0.88,0.91,0.95) })
-      dibujarCentrado(page, `Ing. Agrimensor ${nombreProfesional}`, yFirma, 12, boldItalic, negro, width)
-
-      const contacto = [profile?.email, profile?.telefono].filter(Boolean).join('  –  ')
-      if (contacto) {
-        const wTexto = font.widthOfTextAtSize(contacto, 9)
-        const xTexto = (width - wTexto) / 2
-        page.drawCircle({ x: xTexto - 8, y: yFirma - 18 + 3, size: 1.6, color: negro })
-        page.drawText(contacto, { x: xTexto, y: yFirma - 18, size: 9, font, color: gris })
-      }
-      if (profile?.domicilio) {
-        const wDom = font.widthOfTextAtSize(profile.domicilio, 9)
-        const xDom = (width - wDom) / 2
-        page.drawCircle({ x: xDom - 8, y: yFirma - 32 + 3, size: 1.6, color: negro })
-        page.drawText(profile.domicilio, { x: xDom, y: yFirma - 32, size: 9, font, color: gris })
+      // Logo PNG — ocupa todo el pie (incluye sello, nombre y contacto)
+      try {
+        let logoBytes: Uint8Array | null = null
+        try {
+          const logoDisk = await readFile(join(process.cwd(), 'public', 'images', 'nica-logo-caratula.png'))
+          logoBytes = new Uint8Array(logoDisk)
+        } catch {
+          const logoRes = await fetch(new URL('/images/nica-logo-caratula.png', request.url).toString())
+          if (logoRes.ok) logoBytes = new Uint8Array(await logoRes.arrayBuffer())
+        }
+        if (logoBytes) {
+          const logoImg = await pdfDoc.embedPng(logoBytes)
+          const maxLogoW = 360, maxLogoH = 180
+          const scale = Math.min(maxLogoW / logoImg.width, maxLogoH / logoImg.height)
+          const lw = logoImg.width * scale, lh = logoImg.height * scale
+          page.drawImage(logoImg, { x: (width - lw) / 2, y: 55, width: lw, height: lh })
+        } else {
+          // Fallback si no hay PNG: texto mínimo
+          const yFirma = 165
+          page.drawLine({ start: { x: 55, y: yFirma + 30 }, end: { x: width - 55, y: yFirma + 30 }, thickness: 1, color: rgb(0.88,0.91,0.95) })
+          dibujarCentrado(page, `Ing. Agrimensor ${nombreProfesional}`, yFirma, 12, boldItalic, negro, width)
+        }
+      } catch {
+        // Fallback si hay error: texto mínimo
+        const yFirma = 165
+        page.drawLine({ start: { x: 55, y: yFirma + 30 }, end: { x: width - 55, y: yFirma + 30 }, thickness: 1, color: rgb(0.88,0.91,0.95) })
+        dibujarCentrado(page, `Ing. Agrimensor ${nombreProfesional}`, yFirma, 12, boldItalic, negro, width)
       }
 
     } else if (tipo === 'nota_elevacion') {
       // ── Nota de Elevación a la Directora ──────────────────────────────
-      const margenX = 40
+      const margenX = 55
       const anchoTexto = width - margenX * 2
       const fechaTexto = new Date().toLocaleDateString('es-AR', { day: 'numeric', month: 'long', year: 'numeric' })
 
@@ -661,7 +672,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
     } else if (tipo === 'capitulo_ubicacion') {
       // ── Capítulo de Extensión, Límites e Inscripciones ─────────────────
-      const margenX = 40
+      const margenX = 55
       const anchoTexto = width - margenX * 2
 
       page.drawText('UBICACIÓN, EXTENSIÓN, LÍMITES E INSCRIPCIONES', {
@@ -704,12 +715,21 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       page.drawText('ANTECEDENTES DE DOMINIO:', { x: margenX, y, size: 11, font: bold, color: negro })
       y -= 20
 
-      const tomo = (inmueble as any)?.registro_tomo
-      const folio = (inmueble as any)?.registro_folio
-      const anioRegistro = (inmueble as any)?.registro_anio
-      const inscripcionTexto = (tomo || folio || anioRegistro)
-        ? `inscripto en mayor extensión al Tomo ${tomo ?? '—'}, Folio ${folio ?? '—'}, Año ${anioRegistro ?? '—'} del Departamento de ${inmueble?.departamento ?? '—'}`
-        : 'sin antecedentes de inscripción registrados'
+      const tipoInscripcion = (inmueble as any)?.tipo_inscripcion_registro ?? 'matricula'
+      const mayorExtension  = (inmueble as any)?.inscripcion_mayor_extension ? ' en mayor extensión' : ''
+      let inscripcionTexto: string
+      if (tipoInscripcion === 'tomo') {
+        const tomo  = (inmueble as any)?.registro_tomo  ?? '—'
+        const folio = (inmueble as any)?.registro_folio ?? '—'
+        const finca = (inmueble as any)?.registro_finca ?? '—'
+        const anio  = (inmueble as any)?.registro_anio  ?? '—'
+        inscripcionTexto = `inscripto${mayorExtension} al Tomo ${tomo}, Folio ${folio}, Finca ${finca}, Año ${anio} del Departamento de ${inmueble?.departamento ?? '—'}`
+      } else {
+        const matricula = inmueble?.matricula_registro
+        inscripcionTexto = matricula
+          ? `inscripto${mayorExtension} bajo Matrícula ${matricula}`
+          : 'sin antecedentes de inscripción registrados'
+      }
       const parrafoDominio = `Las presentes operaciones afectan un inmueble identificado según catastro como ${construirUbicacion(inmueble)}, del Departamento de ${inmueble?.departamento ?? '—'}. En el Registro de la Propiedad Inmueble de la Provincia está ${inscripcionTexto}.`
       y = dibujarParrafo(page, parrafoDominio, margenX, y, anchoTexto, 11, font, negro)
       y -= 18
@@ -734,7 +754,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
     } else if (tipo === 'citacion_linderos') {
       // ── Notificación a Linderos y Autoridades ──────────────────────────
-      const margenX = 40
+      const margenX = 55
       const anchoTexto = width - margenX * 2
 
       dibujarCentrado(page, 'NOTIFICACIÓN A LINDEROS Y AUTORIDADES', yEncabezadoFin - 30, 13, bold, azul, width)
@@ -747,7 +767,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       page.drawText('Sres. LINDEROS Y AUTORIDADES:', { x: margenX, y, size: 11, font: bold, color: negro })
       y -= 24
 
-      const tipoMensuraMinuscula = `Mensura para ${(exp?.tipo_mensura ?? '—').toLowerCase()}`
+      const tipoMensuraMinuscula = (exp?.tipo_mensura ?? '—')
       const propietarioAnterior = (inmueble as any)?.propietario_anterior
       const calleFrente = (inmueble as any)?.calle_frente
       const calleEntre1 = (inmueble as any)?.calle_entre1
@@ -811,7 +831,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
     } else if (tipo === 'acta_mensura') {
       // ── Acta de Mensura y Amojonamiento ─────────────────────────────────
-      const margenX = 40
+      const margenX = 55
       const anchoTexto = width - margenX * 2
 
       dibujarCentrado(page, 'ACTA DE MENSURA Y AMOJONAMIENTO', yEncabezadoFin - 30, 13, bold, azul, width)
@@ -885,7 +905,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
     } else if (tipo === 'acta_ausencia_linderos') {
       // ── Acta de Ausencia de Linderos y Autoridades ──────────────────────
-      const margenX = 40
+      const margenX = 55
       const anchoTexto = width - margenX * 2
 
       dibujarCentrado(page, 'ACTA DE AUSENCIA DE LINDEROS Y AUTORIDADES', yEncabezadoFin - 30, 13, bold, azul, width)
@@ -949,7 +969,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
     } else if (tipo === 'memoria_mensura') {
       // ── Memoria de Mensura ──────────────────────────────────────────────
-      const margenX = 40
+      const margenX = 55
       const anchoTexto = width - margenX * 2
 
       page.drawText('MEMORIA DE LAS OPERACIONES:', { x: margenX, y: yEncabezadoFin - 30, size: 13, font: bold, color: azul })
@@ -1105,10 +1125,6 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         start: { x: 40, y: 60 }, end: { x: pw - 40, y: 60 },
         thickness: 1, color: rgb(0.88, 0.91, 0.95),
       })
-      p.drawText(
-        `Generado por NICA · ${new Date().toLocaleString('es-AR')}`,
-        { x: 40, y: 42, size: 8, font, color: gris }
-      )
     })
 
     const pdfBytes = await pdfDoc.save()
