@@ -27,7 +27,7 @@ const [
   { data: inmueble },
   { data: expComitentes },
   { data: expTestigos },
-  { data: poligono },
+  { data: poligonosRaw },
   { data: linderos },
   { data: documentos, count: documentosCount },
   { data: comitentesAll },
@@ -37,13 +37,19 @@ const [
   db.from('inmuebles').select('*').eq('expediente_id', id).maybeSingle(),
   db.from('exp_comitentes').select('*, comitentes(*)').eq('expediente_id', id),
   db.from('exp_testigos').select('*, testigos(*)').eq('expediente_id', id),
-  db.from('poligono').select('*, lados(*), angulos(*)').eq('expediente_id', id).maybeSingle(),
+  db.from('poligono').select('*, lados(*), angulos(*)').eq('expediente_id', id).order('parcela_desde', { ascending: true, nullsFirst: true }),
   db.from('linderos').select('*').eq('expediente_id', id).maybeSingle(),
   db.from('documentos_generados').select('*', { count: 'exact' }).eq('expediente_id', id).order('generado_at', { ascending: false }).range(docFrom, docTo),
   db.from('comitentes').select('id,nombre,apellido,dni').eq('user_id', uid).order('apellido'),
   db.from('testigos').select('id,nombre,apellido,dni').eq('user_id', uid).order('apellido'),
   db.from('profiles').select('*').eq('id', uid).maybeSingle(),
 ])
+
+// Un expediente puede tener varios polígonos (división en parcelas); ordenados por parcela_desde.
+// TODO (paso 3): la UI de Tab 3 hoy solo usa `poligono` (el primero) — falta la UI de cards para
+// crear/editar los polígonos siguientes.
+const poligonos = poligonosRaw ?? []
+const poligono = poligonos[0] ?? null
 
 const docTotalPages = Math.max(1, Math.ceil((documentosCount ?? 0) / DOCS_POR_PAGINA))
 
@@ -87,106 +93,144 @@ if (Astro.request.method === 'POST') {
     else successMsg = 'Inmueble guardado.'
   }
 
-  if (action === 'guardar_mensura') {
-    const cantLados   = parseInt(form.get('cantidad_lados') as string) || 0
-    const cantAngulos = parseInt(form.get('cantidad_angulos') as string) || 0
+  const eliminarPolId    = (form.get('eliminar_pol_id') as string) || ''
+  const agregarPoligono  = (form.get('_agregar_poligono') as string) || ''
 
-    // Validar sumatoria angular antes de guardar
+  if (eliminarPolId) {
+    // Borra un polígono puntual (lados/angulos se van en cascada por FK).
+    await db.from('poligono').delete().eq('id', eliminarPolId)
+    successMsg = 'Polígono eliminado.'
+  }
+
+  if ((action === 'guardar_mensura' || agregarPoligono) && !eliminarPolId) {
+    const cantPoligonos = parseInt(form.get('cantidad_poligonos') as string) || 0
+
+    // Validar sumatoria angular de cada polígono ANTES de guardar nada
     // (en un polígono cerrado, la cantidad de ángulos = cantidad de vértices = cantidad de lados)
-    if (cantAngulos >= 3) {
-      let sumSeg = 0
-      for (let i = 1; i <= cantAngulos; i++) {
-        const va = (form.get(`angulo_${i}_valor`) as string) || ''
-        if (va) {
-          const [gp, dp = ''] = va.split('.')
-          const dec = dp.padEnd(4, '0')
-          sumSeg += (parseInt(gp)||0)*3600 + (parseInt(dec.substring(0,2))||0)*60 + (parseInt(dec.substring(2,4))||0)
+    for (let p = 0; p < cantPoligonos && !errorMsg; p++) {
+      const cantAngulos = parseInt(form.get(`pol_${p}_cantidad_angulos`) as string) || 0
+      if (cantAngulos >= 3) {
+        let sumSeg = 0
+        for (let i = 1; i <= cantAngulos; i++) {
+          const va = (form.get(`pol_${p}_angulo_${i}_valor`) as string) || ''
+          if (va) {
+            const [gp, dp = ''] = va.split('.')
+            const dec = dp.padEnd(4, '0')
+            sumSeg += (parseInt(gp)||0)*3600 + (parseInt(dec.substring(0,2))||0)*60 + (parseInt(dec.substring(2,4))||0)
+          }
         }
-      }
-      if (sumSeg > 0) {
-        const expectedSeg = (cantAngulos - 2) * 180 * 3600
-        if (sumSeg !== expectedSeg) {
-          const fmt = (s: number) =>
-            `${Math.floor(s/3600)}° ${String(Math.floor((s%3600)/60)).padStart(2,'0')}' ${String(s%60).padStart(2,'0')}"`
-          const diff = sumSeg - expectedSeg
-          const sign = diff > 0 ? '+' : '-'
-          errorMsg = `Sumatoria angular incorrecta — Actual: ${fmt(sumSeg)} · Esperado: ${fmt(expectedSeg)} (${cantAngulos} ángulos → ${(cantAngulos-2)*180}°) · Diferencia: ${sign}${fmt(Math.abs(diff))}`
+        if (sumSeg > 0) {
+          const expectedSeg = (cantAngulos - 2) * 180 * 3600
+          if (sumSeg !== expectedSeg) {
+            const fmt = (s: number) =>
+              `${Math.floor(s/3600)}° ${String(Math.floor((s%3600)/60)).padStart(2,'0')}' ${String(s%60).padStart(2,'0')}"`
+            const diff = sumSeg - expectedSeg
+            const sign = diff > 0 ? '+' : '-'
+            const numParcela = form.get(`pol_${p}_parcela_desde`) || (p + 1)
+            errorMsg = `Sumatoria angular incorrecta en Parcela ${numParcela} — Actual: ${fmt(sumSeg)} · Esperado: ${fmt(expectedSeg)} (${cantAngulos} ángulos → ${(cantAngulos-2)*180}°) · Diferencia: ${sign}${fmt(Math.abs(diff))}`
+          }
         }
       }
     }
 
     if (!errorMsg) {
-    await db.from('expedientes').update({
-      numero_expediente: form.get('numero_expediente') || null,
-      fecha_inicio: form.get('fecha_mensura') || null,
-      hora_mensura: form.get('hora_mensura') || null,
-      area_catastro: form.get('area_catastro') || null,
-    }).eq('id', id)
+      await db.from('expedientes').update({
+        numero_expediente: form.get('numero_expediente') || null,
+        fecha_inicio: form.get('fecha_mensura') || null,
+        hora_mensura: form.get('hora_mensura') || null,
+        area_catastro: form.get('area_catastro') || null,
+      }).eq('id', id)
 
-    // Superficie: si es rural usar Ha/A/Ca, si es urbano usar m² directo
-    let superficieM2: number | null = parseFloat(form.get('superficie_m2') as string) || null
-    if (inmueble?.tipo_inmueble === 'rural') {
-      const ha = parseFloat(form.get('superficie_ha') as string) || 0
-      const a  = parseFloat(form.get('superficie_a')  as string) || 0
-      const ca = parseFloat(form.get('superficie_ca') as string) || 0
-      if (ha > 0 || a > 0 || ca > 0) superficieM2 = ha * 10000 + a * 100 + ca
-    }
+      let maxParcelaHasta = 0
 
-    const polPayload = {
-      expediente_id: id,
-      superficie_m2: superficieM2,
-      superficie_letras: form.get('superficie_letras') || null,
-      cantidad_lados: cantLados,
-      cantidad_angulos: cantAngulos,
-    }
+      for (let p = 0; p < cantPoligonos; p++) {
+        const existingId  = (form.get(`pol_${p}_id`) as string) || ''
+        const cantLados    = parseInt(form.get(`pol_${p}_cantidad_lados`) as string) || 0
+        const cantAngulos  = parseInt(form.get(`pol_${p}_cantidad_angulos`) as string) || 0
+        const parcelaDesde = parseInt(form.get(`pol_${p}_parcela_desde`) as string) || (p + 1)
+        const parcelaHasta = parseInt(form.get(`pol_${p}_parcela_hasta`) as string) || parcelaDesde
+        maxParcelaHasta = Math.max(maxParcelaHasta, parcelaDesde, parcelaHasta)
 
-    let polId: string | null = poligono?.id ?? null
-    if (poligono) {
-      await db.from('poligono').update(polPayload).eq('expediente_id', id)
-    } else {
-      const { data: newPol } = await db.from('poligono').insert(polPayload).select('id').single()
-      polId = newPol?.id ?? null
-    }
+        // Superficie: si es rural usar Ha/A/Ca, si es urbano usar m² directo
+        let superficieM2: number | null = parseFloat(form.get(`pol_${p}_superficie_m2`) as string) || null
+        if (inmueble?.tipo_inmueble === 'rural') {
+          const ha = parseFloat(form.get(`pol_${p}_superficie_ha`) as string) || 0
+          const a  = parseFloat(form.get(`pol_${p}_superficie_a`)  as string) || 0
+          const ca = parseFloat(form.get(`pol_${p}_superficie_ca`) as string) || 0
+          if (ha > 0 || a > 0 || ca > 0) superficieM2 = ha * 10000 + a * 100 + ca
+        }
 
-    // Guardar lados si se enviaron
-    if (polId && cantLados > 0) {
-      await db.from('lados').delete().eq('poligono_id', polId)
-      for (let i = 1; i <= cantLados; i++) {
-        const vm = form.get(`lado_${i}_valor_m`) as string
-        const vl = form.get(`lado_${i}_valor_letras`) as string
-        if (vm || vl) {
-          await db.from('lados').insert({
-            poligono_id: polId,
-            orden: i,
-            valor_m:      parseFloat(vm) || null,
-            valor_letras: vl || null,
-          })
+        const polPayload = {
+          expediente_id: id,
+          parcela_desde: parcelaDesde,
+          parcela_hasta: parcelaHasta,
+          superficie_m2: superficieM2,
+          superficie_letras: form.get(`pol_${p}_superficie_letras`) || null,
+          cantidad_lados: cantLados,
+          cantidad_angulos: cantAngulos,
+        }
+
+        let polId: string | null = existingId || null
+        if (existingId) {
+          await db.from('poligono').update(polPayload).eq('id', existingId)
+        } else {
+          const { data: newPol } = await db.from('poligono').insert(polPayload).select('id').single()
+          polId = newPol?.id ?? null
+        }
+
+        // Guardar lados si se enviaron
+        if (polId && cantLados > 0) {
+          await db.from('lados').delete().eq('poligono_id', polId)
+          for (let i = 1; i <= cantLados; i++) {
+            const vm = form.get(`pol_${p}_lado_${i}_valor_m`) as string
+            const vl = form.get(`pol_${p}_lado_${i}_valor_letras`) as string
+            if (vm || vl) {
+              await db.from('lados').insert({
+                poligono_id: polId,
+                orden: i,
+                valor_m:      parseFloat(vm) || null,
+                valor_letras: vl || null,
+              })
+            }
+          }
+        }
+
+        // Guardar ángulos si se enviaron
+        if (polId && cantAngulos > 0) {
+          await db.from('angulos').delete().eq('poligono_id', polId)
+          for (let i = 1; i <= cantAngulos; i++) {
+            const va = form.get(`pol_${p}_angulo_${i}_valor`) as string
+            const vl = form.get(`pol_${p}_angulo_${i}_valor_letras`) as string
+            if (va || vl) {
+              const [gradosPart, decimalPart = ''] = (va || '').split('.')
+              const decStr = decimalPart.padEnd(4, '0')
+              await db.from('angulos').insert({
+                poligono_id:  polId,
+                orden:        i,
+                grados:       parseInt(gradosPart) || null,
+                minutos:      parseInt(decStr.substring(0, 2)) || null,
+                segundos:     parseInt(decStr.substring(2, 4)) || null,
+                valor_letras: vl || null,
+              })
+            }
+          }
         }
       }
-    }
 
-    // Guardar ángulos si se enviaron
-    if (polId && cantAngulos > 0) {
-      await db.from('angulos').delete().eq('poligono_id', polId)
-      for (let i = 1; i <= cantAngulos; i++) {
-        const va = form.get(`angulo_${i}_valor`) as string
-        const vl = form.get(`angulo_${i}_valor_letras`) as string
-        if (va || vl) {
-          const [gradosPart, decimalPart = ''] = (va || '').split('.')
-          const decStr = decimalPart.padEnd(4, '0')
-          await db.from('angulos').insert({
-            poligono_id:  polId,
-            orden:        i,
-            grados:       parseInt(gradosPart) || null,
-            minutos:      parseInt(decStr.substring(0, 2)) || null,
-            segundos:     parseInt(decStr.substring(2, 4)) || null,
-            valor_letras: vl || null,
-          })
-        }
+      if (agregarPoligono) {
+        // Numeración consecutiva: el nuevo polígono arranca donde terminó el último.
+        await db.from('poligono').insert({
+          expediente_id: id,
+          parcela_desde: maxParcelaHasta + 1,
+          parcela_hasta: maxParcelaHasta + 1,
+          cantidad_lados: 0,
+          cantidad_angulos: 0,
+        })
+        successMsg = 'Polígono agregado.'
+      } else {
+        successMsg = 'Mensura guardada.'
       }
     }
-    if (!errorMsg) successMsg = 'Mensura guardada.'
-    } // fin if (!errorMsg)
   }
 
   if (action === 'guardar_linderos') {
@@ -325,6 +369,17 @@ const datosValidacion = {
   cantLados: (poligono as any)?.lados?.length ?? 0,
   cantAngulos: (poligono as any)?.angulos?.length ?? 0,
 }
+
+// Tab 3 Mensura: un expediente puede tener varios polígonos (división en parcelas).
+// Si todavía no hay ninguno cargado, se muestra igual una card vacía (idx 0) para no
+// cambiar la experiencia del caso simple de un solo polígono.
+const poligonosParaUI = poligonos.length > 0 ? poligonos : [null as any]
+const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
+  lados: pol?.lados ?? [],
+  cantLados: pol?.cantidad_lados ?? 0,
+  angulos: pol?.angulos ?? [],
+  cantAngulos: pol?.cantidad_angulos ?? 0,
+}))
 ---
 <AppLayout title={identificador}>
   <div class="page-header">
@@ -737,75 +792,120 @@ const datosValidacion = {
             </div>
           </div>
 
-          <div class="section-label">Polígono</div>
-          <div class="form-grid form-grid-2" style="margin-bottom:1rem">
-            {inmueble?.tipo_inmueble === 'rural' ? (
-              <>
-                <div class="field">
-                  <label>Superficie — Hectáreas</label>
-                  <input class="input" type="number" step="1" min="0" name="superficie_ha" id="sup_ha"
-                    value={poligono?.superficie_m2 != null ? Math.floor((poligono.superficie_m2 as number) / 10000) : ''} />
+          <div class="section-label">Polígono(s)</div>
+          <input type="hidden" name="cantidad_poligonos" value={poligonosParaUI.length} />
+
+          <div id="poligonos_cards">
+            {poligonosParaUI.map((pol: any, idx: number) => {
+              const desde = pol?.parcela_desde ?? (idx + 1)
+              const hasta = pol?.parcela_hasta ?? desde
+              return (
+                <div class="poligono-card" id={`poligono_card_${idx}`}>
+                  <div class="poligono-card-header">
+                    <span class="poligono-card-label" id={`poligono_label_${idx}`}>
+                      {desde === hasta ? `Parcela ${desde}` : `Parcelas ${desde} a ${hasta}`}
+                    </span>
+                    {poligonosParaUI.length > 1 && (
+                      <button type="submit" name="eliminar_pol_id" value={pol?.id ?? ''}
+                        formnovalidate class="btn btn-danger btn-sm">
+                        Eliminar
+                      </button>
+                    )}
+                  </div>
+
+                  <input type="hidden" name={`pol_${idx}_id`} value={pol?.id ?? ''} />
+
+                  <div class="form-grid form-grid-2" style="margin-bottom:0.75rem">
+                    <div class="field">
+                      <label>Nº Parcela (desde)</label>
+                      <input class="input" type="number" min="1" name={`pol_${idx}_parcela_desde`}
+                        value={desde} data-pol-desde={idx} />
+                    </div>
+                    <div class="field">
+                      <label>Nº Parcela (hasta) <span style="font-weight:400;font-size:0.78rem;color:var(--color-text-secondary)">(si agrupa varias con igual medida)</span></label>
+                      <input class="input" type="number" min="1" name={`pol_${idx}_parcela_hasta`}
+                        value={hasta} data-pol-hasta={idx} />
+                    </div>
+                  </div>
+
+                  <div class="form-grid form-grid-2" style="margin-bottom:1rem">
+                    {inmueble?.tipo_inmueble === 'rural' ? (
+                      <>
+                        <div class="field">
+                          <label>Superficie — Hectáreas</label>
+                          <input class="input" type="number" step="1" min="0" name={`pol_${idx}_superficie_ha`} id={`sup_ha_${idx}`}
+                            value={pol?.superficie_m2 != null ? Math.floor((pol.superficie_m2 as number) / 10000) : ''} />
+                        </div>
+                        <div class="field">
+                          <label>Áreas</label>
+                          <input class="input" type="number" step="1" min="0" max="99" name={`pol_${idx}_superficie_a`} id={`sup_a_${idx}`}
+                            value={pol?.superficie_m2 != null ? Math.floor(((pol.superficie_m2 as number) % 10000) / 100) : ''} />
+                        </div>
+                        <div class="field">
+                          <label>Centiáreas</label>
+                          <input class="input" type="number" step="0.01" min="0" max="99.99" name={`pol_${idx}_superficie_ca`} id={`sup_ca_${idx}`}
+                            value={pol?.superficie_m2 != null ? Number(((pol.superficie_m2 as number) % 100).toFixed(2)) : ''} />
+                        </div>
+                        <div class="field" style="grid-column:1/-1">
+                          <label>Superficie en letras <span style="font-weight:400;font-size:0.78rem;color:var(--color-text-secondary)">(auto)</span></label>
+                          <input class="input" name={`pol_${idx}_superficie_letras`} id={`superficie_letras_${idx}`}
+                            value={pol?.superficie_letras ?? ''} readonly tabindex="-1"
+                            style="color:var(--color-primary);font-weight:600;background:var(--color-border);cursor:default" />
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div class="field">
+                          <label>Superficie total (m²)</label>
+                          <input class="input" type="number" step="0.0001" name={`pol_${idx}_superficie_m2`} id={`superficie_m2_${idx}`}
+                            value={pol?.superficie_m2 ?? ''} />
+                        </div>
+                        <div class="field">
+                          <label>Superficie en letras <span style="font-weight:400;font-size:0.78rem;color:var(--color-text-secondary)">(auto)</span></label>
+                          <input class="input" name={`pol_${idx}_superficie_letras`} id={`superficie_letras_${idx}`}
+                            value={pol?.superficie_letras ?? ''} readonly tabindex="-1"
+                            style="color:var(--color-primary);font-weight:600;background:var(--color-border);cursor:default" />
+                        </div>
+                      </>
+                    )}
+                    <div class="field">
+                      <label>Cantidad de lados</label>
+                      <input class="input" type="number" name={`pol_${idx}_cantidad_lados`} id={`cant_lados_${idx}`} value={pol?.cantidad_lados ?? ''} min="0" />
+                    </div>
+                    <div class="field">
+                      <label>Cantidad de ángulos</label>
+                      <input class="input" type="number" name={`pol_${idx}_cantidad_angulos`} id={`cant_angulos_${idx}`} value={pol?.cantidad_angulos ?? ''} min="0" />
+                    </div>
+                  </div>
+
+                  <div id={`lados_section_${idx}`} style="margin-top:1rem;display:none">
+                    <div class="section-label">Lados del polígono</div>
+                    <div class="lados-header">
+                      <span>Lado</span><span>Longitud (m)</span><span>En letras</span>
+                    </div>
+                    <div id={`lados_rows_${idx}`}></div>
+                    {pol?.cantidad_lados > 0 && (
+                      <p class="lados-suma" id={`lados_suma_${idx}`}></p>
+                    )}
+                  </div>
+
+                  <div id={`angulos_section_${idx}`} style="margin-top:1.25rem;display:none">
+                    <div class="section-label">Ángulos del polígono</div>
+                    <div class="lados-header">
+                      <span>Ángulo</span><span>Valor (GG.MMSS)</span><span>En letras</span>
+                    </div>
+                    <div id={`angulos_rows_${idx}`}></div>
+                    <div id={`angulos_visor_${idx}`} style="display:none;margin-top:0.75rem"></div>
+                  </div>
                 </div>
-                <div class="field">
-                  <label>Áreas</label>
-                  <input class="input" type="number" step="1" min="0" max="99" name="superficie_a" id="sup_a"
-                    value={poligono?.superficie_m2 != null ? Math.floor(((poligono.superficie_m2 as number) % 10000) / 100) : ''} />
-                </div>
-                <div class="field">
-                  <label>Centiáreas</label>
-                  <input class="input" type="number" step="0.01" min="0" max="99.99" name="superficie_ca" id="sup_ca"
-                    value={poligono?.superficie_m2 != null ? Number(((poligono.superficie_m2 as number) % 100).toFixed(2)) : ''} />
-                </div>
-                <div class="field" style="grid-column:1/-1">
-                  <label>Superficie en letras <span style="font-weight:400;font-size:0.78rem;color:var(--color-text-secondary)">(auto)</span></label>
-                  <input class="input" name="superficie_letras" id="superficie_letras"
-                    value={poligono?.superficie_letras ?? ''}
-                    style="color:var(--color-primary);font-weight:600" />
-                </div>
-              </>
-            ) : (
-              <>
-                <div class="field">
-                  <label>Superficie total (m²)</label>
-                  <input class="input" type="number" step="0.0001" name="superficie_m2" id="superficie_m2"
-                    value={poligono?.superficie_m2 ?? ''} />
-                </div>
-                <div class="field">
-                  <label>Superficie en letras <span style="font-weight:400;font-size:0.78rem;color:var(--color-text-secondary)">(auto)</span></label>
-                  <input class="input" name="superficie_letras" id="superficie_letras"
-                    value={poligono?.superficie_letras ?? ''}
-                    style="color:var(--color-primary);font-weight:600" />
-                </div>
-              </>
-            )}
-            <div class="field">
-              <label>Cantidad de lados</label>
-              <input class="input" type="number" name="cantidad_lados" id="cant_lados" value={poligono?.cantidad_lados ?? ''} min="0" />
-            </div>
-            <div class="field">
-              <label>Cantidad de ángulos</label>
-              <input class="input" type="number" name="cantidad_angulos" id="cant_angulos" value={poligono?.cantidad_angulos ?? ''} min="0" />
-            </div>
+              )
+            })}
           </div>
 
-          <div id="lados_section" style="margin-top:1rem;display:none">
-            <div class="section-label">Lados del polígono</div>
-            <div class="lados-header">
-              <span>Lado</span><span>Longitud (m)</span><span>En letras</span>
-            </div>
-            <div id="lados_rows"></div>
-            {poligono?.cantidad_lados > 0 && (
-              <p class="lados-suma" id="lados_suma"></p>
-            )}
-          </div>
-
-          <div id="angulos_section" style="margin-top:1.25rem;display:none">
-            <div class="section-label">Ángulos del polígono</div>
-            <div class="lados-header">
-              <span>Ángulo</span><span>Valor (GG.MMSS)</span><span>En letras</span>
-            </div>
-            <div id="angulos_rows"></div>
-            <div id="angulos_visor" style="display:none;margin-top:0.75rem"></div>
+          <div style="margin:0.25rem 0 1.25rem">
+            <button type="submit" name="_agregar_poligono" value="1" formnovalidate class="btn btn-secondary">
+              + Agregar polígono
+            </button>
           </div>
 
           <div id="error_sumatoria" style="display:none;color:#EF4444;font-size:0.85rem;font-weight:500;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:0.6rem 0.875rem;margin-top:1rem"></div>
@@ -1091,10 +1191,7 @@ const datosValidacion = {
 </AppLayout>
 
 <script define:vars={{
-  ladosExistentes:            poligono?.lados    ?? [],
-  cantLadosInicial:           poligono?.cantidad_lados   ?? 0,
-  angulosExistentes:          poligono?.angulos  ?? [],
-  cantAngulosInicial:         poligono?.cantidad_angulos ?? 0,
+  poligonosVars:              poligonosVarsForScript,
   tipoInmuebleInicial:        inmueble?.tipo_inmueble ?? 'urbano',
   tipoInscripcionInicial:     (inmueble as any)?.tipo_inscripcion_registro ?? 'matricula',
   fraccionTieneValor:         !!(inmueble?.fraccion),
@@ -1190,58 +1287,20 @@ const datosValidacion = {
     return `${g}.${mm}${ss}`
   }
 
-  // ── Lados ───────────────────────────────────────────────────────────────
-  const cantInput    = document.getElementById('cant_lados')
-  const ladosSection = document.getElementById('lados_section')
-  const ladosRows    = document.getElementById('lados_rows')
-  const ladosSuma    = document.getElementById('lados_suma')
+  // ── Lados / Ángulos / numeración por polígono (card) ────────────────────
+  // Cada card de polígono/parcela tiene sus propios elementos con id sufijado
+  // por índice (ej. cant_lados_0, lados_rows_0...), así que estas funciones
+  // toman `idx` y buscan siempre dentro de ese scope.
 
-  function actualizarSuma() {
-    const inputs = document.querySelectorAll('[data-lado-m]')
-    let suma = 0
-    inputs.forEach(inp => { suma += parseFloat(inp.value) || 0 })
-    if (ladosSuma) ladosSuma.textContent = `Suma total: ${suma.toFixed(4)} m`
+  function actualizarLabelPoligono(idx) {
+    const desdeInput = document.querySelector(`[data-pol-desde="${idx}"]`)
+    const hastaInput  = document.querySelector(`[data-pol-hasta="${idx}"]`)
+    const label = document.getElementById(`poligono_label_${idx}`)
+    if (!desdeInput || !hastaInput || !label) return
+    const desde = parseInt(desdeInput.value) || (idx + 1)
+    const hasta = parseInt(hastaInput.value) || desde
+    label.textContent = desde === hasta ? `Parcela ${desde}` : `Parcelas ${desde} a ${hasta}`
   }
-
-  function generarFilas(cantidad) {
-    if (!ladosRows) return
-    ladosRows.innerHTML = ''
-    for (let i = 1; i <= cantidad; i++) {
-      const exist = ladosExistentes.find(l => l.orden === i) || {}
-      const fila = document.createElement('div')
-      fila.className = 'lado-fila'
-      fila.innerHTML = `
-        <span class="lado-num">L${i}</span>
-        <input class="input" type="number" step="0.0001" name="lado_${i}_valor_m"
-          value="${exist.valor_m ?? ''}" placeholder="0.0000" data-lado-m />
-        <input class="input" name="lado_${i}_valor_letras"
-          value="${exist.valor_letras ?? ''}" placeholder="En letras" data-lado-letras
-          style="color:var(--color-primary);font-weight:600" />
-      `
-      ladosRows.appendChild(fila)
-    }
-    document.querySelectorAll('[data-lado-m]').forEach(inp => {
-      inp.addEventListener('input', actualizarSuma)
-      inp.addEventListener('input', function() {
-        const letrasInput = this.closest('.lado-fila')?.querySelector('[data-lado-letras]')
-        if (letrasInput) letrasInput.value = numeroALetras(this.value)
-      })
-    })
-    actualizarSuma()
-    if (ladosSection) ladosSection.style.display = cantidad > 0 ? 'block' : 'none'
-    if (ladosSuma)    ladosSuma.style.display    = cantidad > 0 ? 'block' : 'none'
-  }
-
-  if (cantInput) {
-    cantInput.addEventListener('input', () => generarFilas(parseInt(cantInput.value) || 0))
-    if (cantLadosInicial > 0) generarFilas(cantLadosInicial)
-  }
-
-  // ── Ángulos ─────────────────────────────────────────────────────────────
-  const cantAngulosInput  = document.getElementById('cant_angulos')
-  const angulosSection    = document.getElementById('angulos_section')
-  const angulosRows       = document.getElementById('angulos_rows')
-  const angulosVisor      = document.getElementById('angulos_visor')
 
   function svgAngulos(datos, totalSeg) {
     if (!datos.length || totalSeg === 0) return ''
@@ -1289,109 +1348,187 @@ const datosValidacion = {
     return `<svg width="${SZ}" height="${SZ}" viewBox="0 0 ${SZ} ${SZ}" style="flex-shrink:0;filter:drop-shadow(0 2px 8px rgba(27,46,94,.2))">${sectors}${rays}${arc}${labels}${dot}</svg>`
   }
 
-  function actualizarVisor() {
-    if (!angulosVisor) return
-    const entradas = document.querySelectorAll('[data-angulo-valor]')
-    const datos = []
-    entradas.forEach((inp, idx) => {
-      const p = parsearAngulo(inp.value)
-      if (p && (p.grados || p.minutos || p.segundos)) datos.push({ num: idx + 1, ...p })
-    })
-    if (!datos.length) { angulosVisor.style.display = 'none'; return }
+  // Guarda { idx, cantAngulosInput, angulosRows } de cada card para poder
+  // validar la sumatoria angular de TODAS al hacer submit del formulario.
+  const camposSumatoria = []
 
-    let totalSeg = 0
-    datos.forEach(d => { totalSeg += d.grados * 3600 + d.minutos * 60 + d.segundos })
-    const sumG = Math.floor(totalSeg / 3600)
-    const sumM = Math.floor((totalSeg % 3600) / 60)
-    const sumS = totalSeg % 60
-    const pad  = n => String(n).padStart(2, '0')
+  function initPoligonoCard(idx, datos) {
+    const ladosExistentes    = datos.lados
+    const cantLadosInicial   = datos.cantLados
+    const angulosExistentes  = datos.angulos
+    const cantAngulosInicial = datos.cantAngulos
 
-    const listaHtml = datos.map(d =>
-      `<div style="display:flex;align-items:center;gap:0.45rem">
-        <span style="font-weight:700;color:#1B2E5E;font-size:0.78rem;min-width:22px">A${d.num}</span>
-        <span style="font-family:monospace;font-size:0.85rem;color:#1A1A2E">${d.grados}° ${pad(d.minutos)}' ${pad(d.segundos)}"</span>
-      </div>`
-    ).join('')
+    // ── Lados ───────────────────────────────────────────────────────────
+    const cantInput    = document.getElementById(`cant_lados_${idx}`)
+    const ladosSection = document.getElementById(`lados_section_${idx}`)
+    const ladosRows    = document.getElementById(`lados_rows_${idx}`)
+    const ladosSuma    = document.getElementById(`lados_suma_${idx}`)
 
-    angulosVisor.innerHTML = `
-      <div style="background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:0.875rem 1rem;box-shadow:0 1px 4px rgba(27,46,94,.07)">
-        <div style="display:flex;align-items:center;gap:1.25rem">
-          <div>
-            <div style="font-size:0.7rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.45rem">Resumen de ángulos</div>
-            <div style="display:flex;flex-direction:column;gap:0.2rem;margin-bottom:0.45rem">${listaHtml}</div>
-            <div style="font-size:0.82rem;font-weight:600;color:#1B2E5E;border-top:1px solid #E2E8F0;padding-top:0.375rem">∑ = ${sumG}° ${pad(sumM)}' ${pad(sumS)}"</div>
-          </div>
-          ${svgAngulos(datos, totalSeg)}
-        </div>
-      </div>`
-    angulosVisor.style.display = 'block'
-  }
-
-  function generarFilasAngulos(cantidad) {
-    if (!angulosRows) return
-    angulosRows.innerHTML = ''
-    for (let i = 1; i <= cantidad; i++) {
-      const exist = angulosExistentes.find(a => a.orden === i) || {}
-      const valorDisplay = formatearValorAngulo(exist.grados, exist.minutos, exist.segundos)
-      const fila = document.createElement('div')
-      fila.className = 'lado-fila'
-      fila.innerHTML = `
-        <span class="lado-num">A${i}</span>
-        <input class="input" name="angulo_${i}_valor"
-          value="${valorDisplay}" placeholder="Ej: 90.3010" data-angulo-valor />
-        <input class="input" name="angulo_${i}_valor_letras"
-          value="${exist.valor_letras ?? ''}" placeholder="En letras" data-angulo-letras
-          style="color:var(--color-primary);font-weight:600" />
-      `
-      angulosRows.appendChild(fila)
+    function actualizarSuma() {
+      const inputs = ladosRows ? ladosRows.querySelectorAll('[data-lado-m]') : []
+      let suma = 0
+      inputs.forEach(inp => { suma += parseFloat(inp.value) || 0 })
+      if (ladosSuma) ladosSuma.textContent = `Suma total: ${suma.toFixed(4)} m`
     }
-    document.querySelectorAll('[data-angulo-valor]').forEach(inp => {
-      inp.addEventListener('input', function() {
-        const letrasInput = this.closest('.lado-fila')?.querySelector('[data-angulo-letras]')
-        if (letrasInput) letrasInput.value = anguloALetras(this.value)
-        actualizarVisor()
+
+    function generarFilas(cantidad) {
+      if (!ladosRows) return
+      ladosRows.innerHTML = ''
+      for (let i = 1; i <= cantidad; i++) {
+        const exist = ladosExistentes.find(l => l.orden === i) || {}
+        const fila = document.createElement('div')
+        fila.className = 'lado-fila'
+        fila.innerHTML = `
+          <span class="lado-num">L${i}</span>
+          <input class="input" type="number" step="0.0001" name="pol_${idx}_lado_${i}_valor_m"
+            value="${exist.valor_m ?? ''}" placeholder="0.0000" data-lado-m />
+          <input class="input" name="pol_${idx}_lado_${i}_valor_letras"
+            value="${exist.valor_letras ?? ''}" placeholder="En letras" data-lado-letras readonly tabindex="-1"
+            style="color:var(--color-primary);font-weight:600;background:var(--color-border);cursor:default" />
+        `
+        ladosRows.appendChild(fila)
+      }
+      ladosRows.querySelectorAll('[data-lado-m]').forEach(inp => {
+        inp.addEventListener('input', actualizarSuma)
+        inp.addEventListener('input', function() {
+          const letrasInput = this.closest('.lado-fila')?.querySelector('[data-lado-letras]')
+          if (letrasInput) letrasInput.value = numeroALetras(this.value)
+        })
       })
-    })
-    actualizarVisor()
-    if (angulosSection) angulosSection.style.display = cantidad > 0 ? 'block' : 'none'
+      actualizarSuma()
+      if (ladosSection) ladosSection.style.display = cantidad > 0 ? 'block' : 'none'
+      if (ladosSuma)    ladosSuma.style.display    = cantidad > 0 ? 'block' : 'none'
+    }
+
+    if (cantInput) {
+      cantInput.addEventListener('input', () => generarFilas(parseInt(cantInput.value) || 0))
+      if (cantLadosInicial > 0) generarFilas(cantLadosInicial)
+    }
+
+    // ── Ángulos ─────────────────────────────────────────────────────────
+    const cantAngulosInput = document.getElementById(`cant_angulos_${idx}`)
+    const angulosSection   = document.getElementById(`angulos_section_${idx}`)
+    const angulosRows      = document.getElementById(`angulos_rows_${idx}`)
+    const angulosVisor     = document.getElementById(`angulos_visor_${idx}`)
+
+    function actualizarVisor() {
+      if (!angulosVisor || !angulosRows) return
+      const entradas = angulosRows.querySelectorAll('[data-angulo-valor]')
+      const datosAng = []
+      entradas.forEach((inp, i) => {
+        const p = parsearAngulo(inp.value)
+        if (p && (p.grados || p.minutos || p.segundos)) datosAng.push({ num: i + 1, ...p })
+      })
+      if (!datosAng.length) { angulosVisor.style.display = 'none'; return }
+
+      let totalSeg = 0
+      datosAng.forEach(d => { totalSeg += d.grados * 3600 + d.minutos * 60 + d.segundos })
+      const sumG = Math.floor(totalSeg / 3600)
+      const sumM = Math.floor((totalSeg % 3600) / 60)
+      const sumS = totalSeg % 60
+      const pad  = n => String(n).padStart(2, '0')
+
+      const listaHtml = datosAng.map(d =>
+        `<div style="display:flex;align-items:center;gap:0.45rem">
+          <span style="font-weight:700;color:#1B2E5E;font-size:0.78rem;min-width:22px">A${d.num}</span>
+          <span style="font-family:monospace;font-size:0.85rem;color:#1A1A2E">${d.grados}° ${pad(d.minutos)}' ${pad(d.segundos)}"</span>
+        </div>`
+      ).join('')
+
+      angulosVisor.innerHTML = `
+        <div style="background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:0.875rem 1rem;box-shadow:0 1px 4px rgba(27,46,94,.07)">
+          <div style="display:flex;align-items:center;gap:1.25rem">
+            <div>
+              <div style="font-size:0.7rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.45rem">Resumen de ángulos</div>
+              <div style="display:flex;flex-direction:column;gap:0.2rem;margin-bottom:0.45rem">${listaHtml}</div>
+              <div style="font-size:0.82rem;font-weight:600;color:#1B2E5E;border-top:1px solid #E2E8F0;padding-top:0.375rem">∑ = ${sumG}° ${pad(sumM)}' ${pad(sumS)}"</div>
+            </div>
+            ${svgAngulos(datosAng, totalSeg)}
+          </div>
+        </div>`
+      angulosVisor.style.display = 'block'
+    }
+
+    function generarFilasAngulos(cantidad) {
+      if (!angulosRows) return
+      angulosRows.innerHTML = ''
+      for (let i = 1; i <= cantidad; i++) {
+        const exist = angulosExistentes.find(a => a.orden === i) || {}
+        const valorDisplay = formatearValorAngulo(exist.grados, exist.minutos, exist.segundos)
+        const fila = document.createElement('div')
+        fila.className = 'lado-fila'
+        fila.innerHTML = `
+          <span class="lado-num">A${i}</span>
+          <input class="input" name="pol_${idx}_angulo_${i}_valor"
+            value="${valorDisplay}" placeholder="Ej: 90.3010" data-angulo-valor />
+          <input class="input" name="pol_${idx}_angulo_${i}_valor_letras"
+            value="${exist.valor_letras ?? ''}" placeholder="En letras" data-angulo-letras readonly tabindex="-1"
+            style="color:var(--color-primary);font-weight:600;background:var(--color-border);cursor:default" />
+        `
+        angulosRows.appendChild(fila)
+      }
+      angulosRows.querySelectorAll('[data-angulo-valor]').forEach(inp => {
+        inp.addEventListener('input', function() {
+          const letrasInput = this.closest('.lado-fila')?.querySelector('[data-angulo-letras]')
+          if (letrasInput) letrasInput.value = anguloALetras(this.value)
+          actualizarVisor()
+        })
+      })
+      actualizarVisor()
+      if (angulosSection) angulosSection.style.display = cantidad > 0 ? 'block' : 'none'
+    }
+
+    if (cantAngulosInput) {
+      cantAngulosInput.addEventListener('input', () => generarFilasAngulos(parseInt(cantAngulosInput.value) || 0))
+      if (cantAngulosInicial > 0) generarFilasAngulos(cantAngulosInicial)
+    }
+
+    camposSumatoria.push({ idx, cantAngulosInput, angulosRows })
+
+    // ── Numeración de parcela (label live) ───────────────────────────────
+    const desdeInput = document.querySelector(`[data-pol-desde="${idx}"]`)
+    const hastaInput  = document.querySelector(`[data-pol-hasta="${idx}"]`)
+    if (desdeInput) desdeInput.addEventListener('input', () => actualizarLabelPoligono(idx))
+    if (hastaInput)  hastaInput.addEventListener('input', () => actualizarLabelPoligono(idx))
   }
 
-  if (cantAngulosInput) {
-    cantAngulosInput.addEventListener('input', () => generarFilasAngulos(parseInt(cantAngulosInput.value) || 0))
-    if (cantAngulosInicial > 0) generarFilasAngulos(cantAngulosInicial)
-  }
+  poligonosVars.forEach((datos, idx) => initPoligonoCard(idx, datos))
 
-  // ── Validación sumatoria angular al submit ──────────────────────────────
+  // ── Validación sumatoria angular al submit (todas las cards) ────────────
   const mensuraForm = document.querySelector('input[name="_action"][value="guardar_mensura"]')?.closest('form')
   const errorSumatoria = document.getElementById('error_sumatoria')
 
   if (mensuraForm) {
     mensuraForm.addEventListener('submit', function(e) {
       if (!errorSumatoria) return
-      const nAngulos = parseInt(cantAngulosInput?.value || '0') || 0
-      if (nAngulos < 3) { errorSumatoria.style.display = 'none'; return }
-
-      let sumSeg = 0
-      document.querySelectorAll('[data-angulo-valor]').forEach(function(inp) {
-        const p = parsearAngulo(inp.value)
-        if (p) sumSeg += p.grados * 3600 + p.minutos * 60 + p.segundos
-      })
-      if (sumSeg === 0) { errorSumatoria.style.display = 'none'; return }
-
-      const expectedSeg = (nAngulos - 2) * 180 * 3600
-      if (sumSeg === expectedSeg) { errorSumatoria.style.display = 'none'; return }
-
-      e.preventDefault()
       function fmt(s) {
         return Math.floor(s/3600) + '° ' + String(Math.floor((s%3600)/60)).padStart(2,'0') + "' " + String(s%60).padStart(2,'0') + '"'
       }
-      const diff = sumSeg - expectedSeg
-      const sign = diff > 0 ? '+' : '-'
-      errorSumatoria.textContent =
-        `La suma de ángulos no coincide con el polígono de ${nAngulos} ángulos.  ` +
-        `Actual: ${fmt(sumSeg)}  ·  Esperado: ${fmt(expectedSeg)}  ·  Diferencia: ${sign}${fmt(Math.abs(diff))}`
-      errorSumatoria.style.display = 'block'
-      errorSumatoria.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      for (const campo of camposSumatoria) {
+        const nAngulos = parseInt(campo.cantAngulosInput?.value || '0') || 0
+        if (nAngulos < 3 || !campo.angulosRows) continue
+
+        let sumSeg = 0
+        campo.angulosRows.querySelectorAll('[data-angulo-valor]').forEach(function(inp) {
+          const p = parsearAngulo(inp.value)
+          if (p) sumSeg += p.grados * 3600 + p.minutos * 60 + p.segundos
+        })
+        if (sumSeg === 0) continue
+
+        const expectedSeg = (nAngulos - 2) * 180 * 3600
+        if (sumSeg === expectedSeg) continue
+
+        e.preventDefault()
+        const diff = sumSeg - expectedSeg
+        const sign = diff > 0 ? '+' : '-'
+        errorSumatoria.textContent =
+          `Polígono ${campo.idx + 1}: la suma de ángulos no coincide con el polígono de ${nAngulos} ángulos.  ` +
+          `Actual: ${fmt(sumSeg)}  ·  Esperado: ${fmt(expectedSeg)}  ·  Diferencia: ${sign}${fmt(Math.abs(diff))}`
+        errorSumatoria.style.display = 'block'
+        errorSumatoria.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        return
+      }
+      errorSumatoria.style.display = 'none'
     })
   }
 
@@ -1481,29 +1618,31 @@ const datosValidacion = {
     return partes.join(', ')
   }
 
-  var inputSupM2 = document.getElementById('superficie_m2')
-  var supLetras  = document.getElementById('superficie_letras')
-  var inputHa    = document.getElementById('sup_ha')
-  var inputA     = document.getElementById('sup_a')
-  var inputCa    = document.getElementById('sup_ca')
+  poligonosVars.forEach(function(_datos, idx) {
+    var inputSupM2 = document.getElementById('superficie_m2_' + idx)
+    var supLetras  = document.getElementById('superficie_letras_' + idx)
+    var inputHa    = document.getElementById('sup_ha_' + idx)
+    var inputA     = document.getElementById('sup_a_' + idx)
+    var inputCa    = document.getElementById('sup_ca_' + idx)
 
-  if (inputSupM2 && supLetras) {
-    inputSupM2.addEventListener('input', function() {
-      supLetras.value = superficieALetrasM2(inputSupM2.value)
-    })
-  }
+    if (inputSupM2 && supLetras) {
+      inputSupM2.addEventListener('input', function() {
+        supLetras.value = superficieALetrasM2(inputSupM2.value)
+      })
+    }
 
-  function actualizarLetrasRural() {
-    if (!supLetras) return
-    var ha = parseFloat(inputHa?.value) || 0
-    var a  = parseFloat(inputA?.value)  || 0
-    var ca = parseFloat(inputCa?.value) || 0
-    supLetras.value = superficieHaALetras(ha, a, ca)
-  }
+    function actualizarLetrasRural() {
+      if (!supLetras) return
+      var ha = parseFloat(inputHa?.value) || 0
+      var a  = parseFloat(inputA?.value)  || 0
+      var ca = parseFloat(inputCa?.value) || 0
+      supLetras.value = superficieHaALetras(ha, a, ca)
+    }
 
-  if (inputHa) inputHa.addEventListener('input', actualizarLetrasRural)
-  if (inputA)  inputA.addEventListener('input',  actualizarLetrasRural)
-  if (inputCa) inputCa.addEventListener('input', actualizarLetrasRural)
+    if (inputHa) inputHa.addEventListener('input', actualizarLetrasRural)
+    if (inputA)  inputA.addEventListener('input',  actualizarLetrasRural)
+    if (inputCa) inputCa.addEventListener('input', actualizarLetrasRural)
+  })
 </script>
 
 <script>
@@ -1908,6 +2047,9 @@ const datosValidacion = {
 .form-section summary { cursor:pointer; font-weight:500; color:var(--color-primary); font-size:0.9rem; }
 .tab-btn { text-decoration:none; }
 .input-file { font-size:0.8rem; color:var(--color-text-secondary); max-width:180px; }
+.poligono-card { border:1px solid var(--color-border); border-radius:var(--radius-md); padding:1rem 1.125rem; margin-bottom:1.25rem; background:var(--color-bg); }
+.poligono-card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem; }
+.poligono-card-label { font-weight:700; font-size:0.95rem; color:var(--color-primary); }
 .lados-header { display:grid; grid-template-columns:48px 1fr 1fr; gap:0.5rem; padding:0.25rem 0; font-size:0.75rem; font-weight:600; color:var(--color-text-secondary); text-transform:uppercase; letter-spacing:0.04em; }
 .lado-fila { display:grid; grid-template-columns:48px 1fr 1fr; gap:0.5rem; margin-bottom:0.5rem; align-items:center; }
 .lado-num { font-weight:700; color:var(--color-primary); font-size:0.875rem; }

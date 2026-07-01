@@ -5,7 +5,7 @@
 
 ## ✅ Funcionalidades implementadas (demo-ready)
 
-> Última actualización: **30 Junio 2026 · v0.5**
+> Última actualización: **1 Julio 2026 · v0.6**
 
 ### Autenticación
 - Login con email + password (Supabase Auth)
@@ -28,7 +28,7 @@
 |-----|-----------|--------|
 | 1. Comitente | Buscar existente o crear nuevo, asignar rol, quitar, subir DNI escaneado | ✅ |
 | 2. Inmueble | Departamento, localidad, **Partida Inmobiliaria**, **Matrícula Registro de la Propiedad**, tipo | ✅ |
-| 3. Mensura | Tipo, nº expediente, fecha, polígono completo (superficie, lados dinámicos, ángulos dinámicos), linderos | ✅ |
+| 3. Mensura | Tipo, nº expediente, fecha, **uno o varios polígonos** (cards: superficie, lados dinámicos, ángulos dinámicos), linderos | ✅ |
 | 4. Testigos | Buscar existente o crear nuevo | ✅ |
 | 5. Documentos | Generar 12 tipos de PDFs, tabla de generados con estado y descarga | ✅ |
 
@@ -75,6 +75,42 @@
 
 ### Perfil
 - Formulario con datos del profesional (nombre, matrícula, domicilio, etc.)
+
+---
+
+## 📋 Cambios de la sesión — 1 Julio 2026 (v0.6)
+
+Implementación del **Ítem 11 — Múltiples polígonos por expediente**, analizado en la sesión anterior (ver sección de análisis más abajo, con las preguntas a Franco). Se armó en 5 pasos independientes, cada uno probado antes de pasar al siguiente, para no romper en ningún momento el caso existente de un solo polígono. **Falta la vuelta de Franco con feedback** antes de dar el ítem por cerrado — quedan preguntas abiertas sobre cómo deben tratar la superficie el resto de los documentos (no solo Memoria/Planilla).
+
+### 1. Esquema de base de datos
+- `poligono` pasa de 1:1 a 1:N con `expediente_id` (se sacó el `unique` de la columna, que lo impedía físicamente)
+- Columnas nuevas: `parcela_desde`, `parcela_hasta` (default 1/1, así los polígonos existentes quedan como "Parcela 1" sin tocar nada)
+
+```sql
+ALTER TABLE poligono DROP CONSTRAINT IF EXISTS poligono_expediente_id_key;
+ALTER TABLE poligono ADD COLUMN IF NOT EXISTS parcela_desde integer;
+ALTER TABLE poligono ADD COLUMN IF NOT EXISTS parcela_hasta integer;
+UPDATE poligono SET parcela_desde = 1, parcela_hasta = 1 WHERE parcela_desde IS NULL;
+ALTER TABLE poligono ALTER COLUMN parcela_desde SET DEFAULT 1;
+ALTER TABLE poligono ALTER COLUMN parcela_hasta SET DEFAULT 1;
+```
+
+### 2. Tab 3 Mensura — cards por polígono
+- El formulario único de "Polígono" pasa a ser una lista de **cards**, una por polígono/parcela, con el mismo contenido de siempre (superficie, lados y ángulos dinámicos, visor SVG) pero scoped por índice de card
+- Encabezado de cada card autocalculado en vivo: "Parcela 3" o "Parcelas 3 a 7" según los campos "Nº Parcela (desde)" / "(hasta)"
+- Botón **"+ Agregar polígono"**: guarda lo que ya estaba cargado en las cards existentes y agrega una card nueva vacía, con numeración sugerida (siguiente a la última cargada)
+- Botón **"Eliminar"** por card (solo visible si hay más de una), borra ese polígono puntual — sus lados/ángulos se van en cascada por FK
+- Los tres campos "en letras" (superficie, lados, ángulos) quedaron **de solo lectura** (`readonly`, no `disabled`, para que el valor se siga mandando al guardar) — no tenía sentido que el usuario los edite a mano si son autogenerados
+- Estilo: la card tiene fondo gris claro para distinguirse del resto del formulario; los campos "en letras" de solo lectura quedan en un gris un poco más oscuro, para diferenciarse de los campos editables (blancos)
+
+### 3. Backend de guardado
+- "Guardar mensura" pasa de manejar un payload a **N payloads** (uno por card, con campos prefijados `pol_{i}_...`), con validación de sumatoria angular de cada polígono antes de guardar cualquiera de ellos
+- Acciones nuevas: `agregar_poligono` (guarda todo lo cargado + inserta una fila vacía) y `eliminar_pol_id` (borra un polígono puntual, sin tocar el resto)
+
+### 4. Generación de documentos (`generar.ts`)
+- **Memoria de Mensura** y **Planilla de Cálculos**: con un solo polígono el formato queda idéntico al de siempre (una página, "POLIGONO GENERAL"); con 2 o más, cada uno va en su propia página, titulada "PARCELA N" o "PARCELAS N A M"
+- Probado generando ambos documentos con 3 polígonos cargados (una parcela individual + un rango agrupado "Parcelas 3 a 6") — Franco lo revisa mañana
+- **Pendiente:** el resto de los documentos (Carátula, Nota de Elevación, Acta de Mensura, Capítulo de Extensión, Formularios U/SOR/E1) todavía usan solo el primer polígono — depende de las respuestas de Franco (ver preguntas pendientes en la sección de análisis)
 
 ---
 
@@ -163,7 +199,93 @@ ALTER TABLE inmuebles ADD COLUMN IF NOT EXISTS inscripcion_mayor_extension boole
 ```
 
 ### Ítem pendiente
-- **Ítem 11 — Múltiples polígonos**: complejo, requiere cambios de esquema de BD y UI con cards. Se analiza y planifica en la próxima sección.
+- **Ítem 11 — Múltiples polígonos**: ✅ implementado (ver changelog v0.6 más abajo y detalle en la sección **"🔍 Análisis: Ítem 11 — Múltiples polígonos por expediente"**). Falta la vuelta de Franco con feedback y confirmar las preguntas pendientes antes de dar el ítem por cerrado.
+
+---
+
+## 🔍 Análisis: Ítem 11 — Múltiples polígonos por expediente
+
+> **Estado: ✅ implementado (1 Julio 2026, v0.6)** — el análisis y el plan de abajo se mantienen como referencia de las decisiones de diseño. El detalle de qué se construyó está en el changelog v0.6. Sigue pendiente la vuelta de Franco con feedback y las preguntas de la última sección.
+
+**Planteo:** un expediente puede tener más de un polígono (ej. una división en varias parcelas). Antes de esta sesión el sistema asumía **un solo polígono por expediente** (`poligono` era 1:1 con `expediente_id`, `.maybeSingle()` en el código).
+
+### Preguntas a Franco y su respuesta
+
+| Pregunta | Respuesta de Franco |
+|---|---|
+| ¿Nombre libre ("Parcela A/B") o numeración automática (P1, P2...)? | **Numeración consecutiva** (Parcela 1, Parcela 2, ..., Parcela-n) |
+| ¿Cuántos polígonos puede tener un expediente en casos complejos? | **No suelen ser trabajos grandes** — pocos polígonos por expediente |
+| — (aporte extra de Franco) | Catastro permite **agrupar polígonos/parcelas con medidas iguales en una misma planilla**, indicando el rango de parcelas que abarca. Aplica tanto a la **Memoria de Mensura** como a la **Planilla de Cálculos**. |
+
+Este último punto cambia el modelo: no conviene guardar "una fila por parcela", sino **una fila por conjunto de medidas**, que puede cubrir una sola parcela o un rango consecutivo.
+
+### Modelo de datos propuesto
+
+- `poligono` pasa de 1:1 a **1:N** con `expediente_id` (se elimina el supuesto de `.maybeSingle()`).
+- Nuevas columnas en `poligono`:
+  - `parcela_desde` integer
+  - `parcela_hasta` integer
+- Si `parcela_desde = parcela_hasta` → es una parcela individual ("Parcela 3"). Si difieren → es un grupo agrupado ("Parcelas 3 a 7").
+- `lados` y `angulos` **no cambian** — ya cuelgan de `poligono_id`, así que cada fila/grupo tiene automáticamente su propio juego de lados y ángulos.
+- Numeración automática: cada polígono nuevo sugiere `parcela_desde` = `parcela_hasta` del anterior + 1. El usuario indica "cuántas parcelas abarca" (default 1) y el sistema calcula `parcela_hasta`.
+
+```sql
+ALTER TABLE poligono ADD COLUMN IF NOT EXISTS parcela_desde integer;
+ALTER TABLE poligono ADD COLUMN IF NOT EXISTS parcela_hasta integer;
+UPDATE poligono SET parcela_desde = 1, parcela_hasta = 1 WHERE parcela_desde IS NULL;
+```
+
+### Compatibilidad con el caso actual (un solo polígono)
+
+**El caso de un único polígono sigue siendo el caso mínimo/por defecto** — no desaparece ni se vuelve más complicado. Un expediente con un solo polígono es simplemente una fila con `parcela_desde = parcela_hasta = 1`, que es exactamente el estado de todos los expedientes existentes hoy tras la migración. La UI con "cards" arranca siempre con una card visible (no hace falta tocar nada para el caso simple), y el botón "+ Agregar polígono" es opcional para los casos de división.
+
+### UI propuesta (Tab 3 Mensura)
+
+- El formulario único pasa a ser una **lista de cards**, una por polígono/grupo, con el mismo contenido que existe hoy (superficie, cantidad de lados/ángulos, filas dinámicas, visor SVG de ángulos), namespaced por card (ids únicos por índice).
+- Encabezado de cada card: "Parcela 3" o "Parcelas 3 a 7" (calculado a partir de `parcela_desde`/`parcela_hasta`).
+- Botón **"+ Agregar polígono"** al pie de la lista.
+- Botón **"Eliminar"** por card (con confirmación), renumera automáticamente las cards siguientes.
+
+### Guardado (backend)
+
+- El POST de Tab 3 pasa de manejar **un payload** a manejar un **array de payloads** (uno por card).
+- Se hace diff contra lo existente en BD: `update` de los que ya tienen id, `insert` de los nuevos, `delete` de los que se quitaron.
+- Se reutiliza la lógica actual de borrar + reinsertar `lados`/`angulos` por cada `poligono_id`.
+
+### Generación de documentos (`generar.ts`)
+
+- La consulta de `poligono` deja de usar `.maybeSingle()` y trae un **array** ordenado por `parcela_desde`.
+- **Memoria de Mensura** y **Planilla de Cálculos**: en vez de una sola sección de lados/ángulos/superficie, iteran el array e imprimen un subtítulo **"PARCELA N"** / **"PARCELAS N A M"** antes de cada tabla — formato que acepta Catastro según lo indicado por Franco.
+- Los demás documentos (Carátula, Nota de Elevación, Acta de Mensura, Capítulo de Extensión, Formularios U/SOR/E1) hoy hablan de "una superficie total" — con más de un polígono hay que decidir si suman todas las parcelas o desglosan. Ver preguntas pendientes abajo.
+
+### Plan de implementación (paso a paso, sin romper lo existente)
+
+1. ✅ **Migración de esquema** (columnas nuevas con backfill `1/1`) — no cambió comportamiento, todo siguió funcionando igual.
+2. ✅ **Backend de lectura**: `.maybeSingle()` → array ordenado por `parcela_desde`.
+3. ✅ **UI**: cards por polígono + botón "+ Agregar polígono" (ver detalle en changelog v0.6, incluye ajustes que no estaban en el plan original: campos "en letras" readonly, numeración en vivo, estilo visual de la card).
+4. ✅ **Backend de guardado**: N payloads (`pol_{i}_...`) con validación de sumatoria angular por polígono + acciones `agregar_poligono` / `eliminar_pol_id`.
+5. ✅ **`generar.ts`**: Memoria de Mensura y Planilla de Cálculos iteran por polígono, con subtítulo de parcela/rango. Probado con 3 polígonos (1 individual + 1 rango agrupado) — pendiente de que Franco lo revise.
+6. ⏳ **Pendiente** — revisar uno por uno los demás tipos de documento (Carátula, Nota de Elevación, Acta de Mensura, Capítulo, Formularios U/SOR/E1) para definir cómo tratan la superficie cuando hay más de un polígono. Depende de las respuestas de Franco.
+
+Cada paso fue independiente y no rompió el funcionamiento del paso anterior — se probó y confirmó entre paso y paso (incluida una prueba real en browser tras cada uno).
+
+### Preguntas pendientes para confirmar con Franco
+
+> Franco va a probar la funcionalidad y dar feedback. Estas preguntas quedan para esa devolución, además de cualquier ajuste que surja de la prueba.
+
+- Para los documentos que hoy hablan de "una superficie total" (Carátula, Nota de Elevación, Acta de Mensura, Capítulo de Extensión, Formularios U/SOR/E1): cuando hay más de una parcela, ¿el texto debe usar la **superficie total sumada** de todas las parcelas, o debe **desglosar por parcela**?
+- En la Planilla de Cálculo y la Memoria de Mensura, ¿el encabezado de un grupo agrupado se escribe literalmente **"PARCELAS 3 A 7"**, o hay una convención distinta (ej. "PARCELAS 3 AL 7", "PARCELA 3-7")?
+- Los **linderos** (Norte/Sur/Este/Oeste) hoy son una sola tabla por expediente (`linderos`, 1:1). Cuando se agrupan parcelas con medidas iguales, ¿los linderos también se repiten igual para todo el grupo, o pueden variar entre parcelas de un mismo grupo?
+- Numeración: ¿siempre arranca en 1, o a veces el expediente ya trae una numeración preexistente de Catastro que hay que respetar (ej. parcela madre "12" se divide en "12a", "12b")?
+- ¿Puede haber casos donde cada parcela resultante de la división tenga **comitentes distintos** (ej. herencia dividida entre hermanos), o los comitentes siempre aplican al expediente completo?
+
+### Preguntas adicionales que surgieron durante la implementación
+
+Decisiones de diseño que tomé por mi cuenta al construir esto (elegí la opción que rompía menos o requería menos esfuerzo) y que conviene que Franco confirme o corrija con el uso real:
+
+- **Renumeración al eliminar:** si se borra una card del medio (ej. Parcela 2 de 1, 2, 3), las que quedan **no se renumeran automáticamente** — quedan "Parcela 1" y "Parcela 3", y el usuario tendría que corregir el número a mano si quiere que quede consecutivo. ¿Conviene que el sistema renumere solo, o prefiere control manual (por si el hueco es intencional)?
+- **Una página por polígono en los PDF:** en Memoria de Mensura y Planilla de Cálculos, cada polígono/parcela adicional genera una **página nueva** (en vez de todo corrido en una sola página o planilla continua). ¿Es el formato que espera Catastro, o prefiere todo en una sola página mientras entre?
+- **Rango "hasta" sin validación cruzada:** el campo "Nº Parcela (hasta)" de cada card es de carga libre — el sistema no valida que los rangos entre cards no se solapen o salteen números (ej. que la card 2 diga "hasta 5" y la card 3 arranque en "3"). Por ahora se confía en que el usuario lo cargue bien. ¿Vale la pena agregar una validación, o es un caso tan raro que no hace falta?
 
 ---
 

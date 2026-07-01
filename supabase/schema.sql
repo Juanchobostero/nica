@@ -200,9 +200,14 @@ create policy "Inmuebles: acceso via expediente propio"
 
 
 -- ── poligono ──────────────────────────────────────────────
+-- Nota: un expediente puede tener varios polígonos (división en parcelas).
+-- Cada fila cubre una parcela o un rango de parcelas con medidas idénticas
+-- (parcela_desde = parcela_hasta para una parcela individual).
 create table if not exists poligono (
   id                  uuid primary key default gen_random_uuid(),
-  expediente_id       uuid references expedientes(id) on delete cascade not null unique,
+  expediente_id       uuid references expedientes(id) on delete cascade not null,
+  parcela_desde       int default 1,
+  parcela_hasta       int default 1,
   superficie_m2       numeric(14,4),
   superficie_letras   text,
   cantidad_lados      int default 0,

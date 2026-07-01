@@ -455,13 +455,25 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const { data: inmueble } = await db
     .from('inmuebles').select('*').eq('expediente_id', expedienteId).maybeSingle()
 
-  const { data: poligono } = await db
+  // Un expediente puede tener varios polígonos (división en parcelas). Memoria de
+  // Mensura y Planilla de Cálculos iteran todos; el resto de los documentos (Carátula,
+  // Nota de Elevación, Acta, Capítulo, Formularios U/SOR/E1) todavía usan solo el primero
+  // — pendiente de confirmar con Franco cómo deben tratar la superficie con más de uno
+  // (ver ESTADO_PROYECTO.md, sección "Ítem 11").
+  const { data: poligonosRaw } = await db
     .from('poligono')
-    .select('superficie_m2, superficie_letras, lados(orden, valor_m, valor_letras), angulos(orden, grados, minutos, segundos)')
-    .eq('expediente_id', expedienteId).maybeSingle()
+    .select('parcela_desde, parcela_hasta, superficie_m2, superficie_letras, lados(orden, valor_m, valor_letras), angulos(orden, grados, minutos, segundos)')
+    .eq('expediente_id', expedienteId)
+    .order('parcela_desde', { ascending: true, nullsFirst: true })
 
-  const ladosOrdenados = ((poligono as any)?.lados ?? []).slice().sort((a: any, b: any) => a.orden - b.orden)
-  const angulosOrdenados = ((poligono as any)?.angulos ?? []).slice().sort((a: any, b: any) => a.orden - b.orden)
+  const poligonos = poligonosRaw ?? []
+  const poligono = poligonos[0] ?? null
+
+  function labelParcela(pol: any, idx: number): string {
+    const desde = pol?.parcela_desde ?? (idx + 1)
+    const hasta = pol?.parcela_hasta ?? desde
+    return desde === hasta ? `PARCELA ${desde}` : `PARCELAS ${desde} A ${hasta}`
+  }
 
   const { data: linderos } = await db
     .from('linderos')
@@ -969,65 +981,113 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
     } else if (tipo === 'memoria_mensura') {
       // ── Memoria de Mensura ──────────────────────────────────────────────
+      // Con un solo polígono se mantiene el formato original ("POLIGONO GENERAL", una
+      // sola página). Con varios, cada uno va en su propia página titulada con su
+      // parcela/rango ("PARCELA N" o "PARCELAS N A M").
       const margenX = 55
       const anchoTexto = width - margenX * 2
+      const listaPoligonos = poligonos.length > 0 ? poligonos : [null as any]
+      const datosEncabezadoComun = {
+        objeto: tipoMensuraTexto, comitente: nombreComitente, ubicacion: ubicacionCompleta,
+        profesional: `Agrimensor ${nombreProfesional}`, email: profile?.email, telefono: profile?.telefono,
+      }
 
       page.drawText('MEMORIA DE LAS OPERACIONES:', { x: margenX, y: yEncabezadoFin - 30, size: 13, font: bold, color: azul })
 
-      let y = yEncabezadoFin - 55
-      page.drawText('POLIGONO GENERAL', { x: margenX, y, size: 11, font: bold, color: negro })
-      y -= 26
+      listaPoligonos.forEach((pol: any, idx: number) => {
+        const pag = idx === 0
+          ? { page, yEncabezadoFin }
+          : crearPaginaConEncabezado(pdfDoc, { font, bold }, datosEncabezadoComun)
 
-      page.drawText('LADOS:', { x: margenX, y, size: 11, font: bold, color: negro })
-      y -= 20
-      if (!ladosOrdenados.length) {
-        page.drawText('—', { x: margenX, y, size: 11, font, color: negro })
-        y -= 18
-      }
-      ladosOrdenados.forEach((lado: any) => {
-        const valorM = lado.valor_m != null ? Number(lado.valor_m).toFixed(2).replace('.', ',') : '—'
-        const texto = `${valorM} m = ${lado.valor_letras ?? '—'}`
-        y = dibujarParrafo(page, texto, margenX, y, anchoTexto, 11, font, negro, undefined, 0)
-        y -= 4
+        const ladosPol = (pol?.lados ?? []).slice().sort((a: any, b: any) => a.orden - b.orden)
+        const angulosPol = (pol?.angulos ?? []).slice().sort((a: any, b: any) => a.orden - b.orden)
+
+        let y = pag.yEncabezadoFin - (idx === 0 ? 55 : 30)
+        if (idx > 0) {
+          pag.page.drawText('MEMORIA DE LAS OPERACIONES (continuación):', { x: margenX, y, size: 13, font: bold, color: azul })
+          y -= 25
+        }
+        const tituloPoligono = listaPoligonos.length > 1 ? labelParcela(pol, idx) : 'POLIGONO GENERAL'
+        pag.page.drawText(tituloPoligono, { x: margenX, y, size: 11, font: bold, color: negro })
+        y -= 26
+
+        pag.page.drawText('LADOS:', { x: margenX, y, size: 11, font: bold, color: negro })
+        y -= 20
+        if (!ladosPol.length) {
+          pag.page.drawText('—', { x: margenX, y, size: 11, font, color: negro })
+          y -= 18
+        }
+        ladosPol.forEach((lado: any) => {
+          const valorM = lado.valor_m != null ? Number(lado.valor_m).toFixed(2).replace('.', ',') : '—'
+          const texto = `${valorM} m = ${lado.valor_letras ?? '—'}`
+          y = dibujarParrafo(pag.page, texto, margenX, y, anchoTexto, 11, font, negro, undefined, 0)
+          y -= 4
+        })
+        y -= 16
+
+        pag.page.drawText('ANGULOS:', { x: margenX, y, size: 11, font: bold, color: negro })
+        y -= 20
+        if (!angulosPol.length) {
+          pag.page.drawText('—', { x: margenX, y, size: 11, font, color: negro })
+          y -= 18
+        }
+        angulosPol.forEach((ang: any) => {
+          const g = ang.grados ?? 0, m = ang.minutos ?? 0, s = ang.segundos ?? 0
+          const texto = `${formatearDMS(g, m, s)} (${anguloALetrasConComa(g, m, s)}).`
+          pag.page.drawText(texto, { x: margenX, y, size: 11, font, color: negro })
+          y -= 18
+        })
+        y -= 20
+
+        const superficieTexto = pol?.superficie_m2
+          ? `${pol.superficie_m2} metros cuadrados${pol.superficie_letras ? ` (${pol.superficie_letras.toUpperCase()})` : ''}`
+          : '—'
+        const labelSup = 'SUPERFICIE TOTAL: '
+        pag.page.drawText(labelSup, { x: margenX, y, size: 11, font: bold, color: negro })
+        const wLabelSup = bold.widthOfTextAtSize(labelSup, 11)
+        dibujarParrafo(pag.page, superficieTexto, margenX + wLabelSup, y, anchoTexto - wLabelSup, 11, font, negro, undefined, 0)
       })
-      y -= 16
-
-      page.drawText('ANGULOS:', { x: margenX, y, size: 11, font: bold, color: negro })
-      y -= 20
-      if (!angulosOrdenados.length) {
-        page.drawText('—', { x: margenX, y, size: 11, font, color: negro })
-        y -= 18
-      }
-      angulosOrdenados.forEach((ang: any) => {
-        const g = ang.grados ?? 0, m = ang.minutos ?? 0, s = ang.segundos ?? 0
-        const texto = `${formatearDMS(g, m, s)} (${anguloALetrasConComa(g, m, s)}).`
-        page.drawText(texto, { x: margenX, y, size: 11, font, color: negro })
-        y -= 18
-      })
-      y -= 20
-
-      const superficieTexto = poligono?.superficie_m2
-        ? `${poligono.superficie_m2} metros cuadrados${poligono.superficie_letras ? ` (${poligono.superficie_letras.toUpperCase()})` : ''}`
-        : '—'
-      const labelSup = 'SUPERFICIE TOTAL: '
-      page.drawText(labelSup, { x: margenX, y, size: 11, font: bold, color: negro })
-      const wLabelSup = bold.widthOfTextAtSize(labelSup, 11)
-      dibujarParrafo(page, superficieTexto, margenX + wLabelSup, y, anchoTexto - wLabelSup, 11, font, negro, undefined, 0)
 
     } else if (tipo === 'planilla_calculos') {
       // ── Planilla de Cálculo de Coordenadas y Superficie ─────────────────
+      // Igual que la Memoria: un solo polígono mantiene el formato original de una
+      // sola página; con varios, cada uno va en su propia página apaisada.
       const margenX = 25
-      const calc = calcularPoligonal(ladosOrdenados, angulosOrdenados)
+      const listaPoligonos = poligonos.length > 0 ? poligonos : [null as any]
+      const datosEncabezadoComun = {
+        objeto: tipoMensuraTexto, comitente: nombreComitente, ubicacion: ubicacionCompleta,
+        profesional: `Agrimensor ${nombreProfesional}`, email: profile?.email, telefono: profile?.telefono,
+      }
 
-      page.drawText('PLANILLA DE CALCULO DE COORDENADAS Y SUPERFICIE', {
-        x: margenX, y: yEncabezadoFin - 22, size: 12, font: bold, color: azul,
-      })
+      listaPoligonos.forEach((pol: any, idx: number) => {
+        let pag: { page: PDFPage; width: number; yEncabezadoFin: number }
+        if (idx === 0) {
+          pag = { page, width, yEncabezadoFin }
+        } else {
+          const nuevaPagina = pdfDoc.addPage([841.89, 595.28])
+          const { width: w2, height: h2 } = nuevaPagina.getSize()
+          const yFin2 = dibujarEncabezado(nuevaPagina, w2, h2, { font, bold }, datosEncabezadoComun)
+          pag = { page: nuevaPagina, width: w2, yEncabezadoFin: yFin2 }
+        }
 
-      if (!calc) {
-        page.drawText('Cargá los lados y ángulos del polígono en la pestaña Mensura para generar esta planilla.', {
-          x: margenX, y: yEncabezadoFin - 50, size: 10, font, color: negro,
+        const ladosPol = (pol?.lados ?? []).slice().sort((a: any, b: any) => a.orden - b.orden)
+        const angulosPol = (pol?.angulos ?? []).slice().sort((a: any, b: any) => a.orden - b.orden)
+        const calc = calcularPoligonal(ladosPol, angulosPol)
+
+        const tituloPlanilla = listaPoligonos.length > 1
+          ? `PLANILLA DE CALCULO DE COORDENADAS Y SUPERFICIE — ${labelParcela(pol, idx)}`
+          : 'PLANILLA DE CALCULO DE COORDENADAS Y SUPERFICIE'
+        pag.page.drawText(tituloPlanilla, {
+          x: margenX, y: pag.yEncabezadoFin - 22, size: 12, font: bold, color: azul,
         })
-      } else {
+
+        if (!calc) {
+          pag.page.drawText('Cargá los lados y ángulos del polígono en la pestaña Mensura para generar esta planilla.', {
+            x: margenX, y: pag.yEncabezadoFin - 50, size: 10, font, color: negro,
+          })
+          return
+        }
+
         const { n, azimuts, dx, dy, x, y: yCoord, dxc, dyc, xc, yc, sumDX, sumDY, error } = calc
         const etiquetas = generarEtiquetasLados(n)
         const fmt = (v: number) => v.toFixed(2)
@@ -1040,46 +1100,46 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         // Subtítulos de grupo (sin grilla) sobre las columnas de ángulos
         const xAngulo = margenX + anchos[0]
         const wAngulo = anchos[1] + anchos[2] + anchos[3]
-        page.drawText('ANGULO', { x: xAngulo + (wAngulo - bold.widthOfTextAtSize('ANGULO', 7)) / 2, y: yEncabezadoFin - 38, size: 7, font: bold, color: negro })
+        pag.page.drawText('ANGULO', { x: xAngulo + (wAngulo - bold.widthOfTextAtSize('ANGULO', 7)) / 2, y: pag.yEncabezadoFin - 38, size: 7, font: bold, color: negro })
         const xCalc = margenX + anchos.slice(0, 5).reduce((a, w) => a + w, 0)
         const wCalc = anchos[5] + anchos[6] + anchos[7]
-        page.drawText('ANG. DE CALCULO', { x: xCalc + (wCalc - bold.widthOfTextAtSize('ANG. DE CALCULO', 7)) / 2, y: yEncabezadoFin - 38, size: 7, font: bold, color: negro })
+        pag.page.drawText('ANG. DE CALCULO', { x: xCalc + (wCalc - bold.widthOfTextAtSize('ANG. DE CALCULO', 7)) / 2, y: pag.yEncabezadoFin - 38, size: 7, font: bold, color: negro })
 
         const filas: string[][] = []
         for (let i = 0; i < n; i++) {
-          const ang = angulosOrdenados[i] ?? {}
+          const ang = angulosPol[i] ?? {}
           const [ag, am, as_] = fmtAng(ang.grados ?? 0, ang.minutos ?? 0, ang.segundos ?? 0)
           const azRad = azimuts[i]
           const azGrados = Math.floor(azRad)
           const azMinutos = Math.round((azRad - azGrados) * 60)
           filas.push([
             etiquetas[i], ag, am, as_,
-            fmt(Number(ladosOrdenados[i]?.valor_m ?? 0)),
+            fmt(Number(ladosPol[i]?.valor_m ?? 0)),
             String(azGrados), String(azMinutos), '0',
             fmt(dx[i]), fmt(dy[i]), fmt(x[i]), fmt(yCoord[i]),
             fmt(dxc[i]), fmt(dyc[i]), fmt(xc[i]), fmt(yc[i]),
           ])
         }
         // Fila de totales
-        const sumLado = ladosOrdenados.reduce((a: number, l: any) => a + Number(l?.valor_m ?? 0), 0)
-        const sumGrados = angulosOrdenados.reduce((a: number, an: any) => a + (an.grados ?? 0), 0)
+        const sumLado = ladosPol.reduce((a: number, l: any) => a + Number(l?.valor_m ?? 0), 0)
+        const sumGrados = angulosPol.reduce((a: number, an: any) => a + (an.grados ?? 0), 0)
         filas.push(['', String(sumGrados), '0', '0', fmt(sumLado), '', '', '', fmt(sumDX), fmt(sumDY), '', '', fmt(0), fmt(0), '', ''])
 
-        const yDespuesTabla = dibujarTabla(page, margenX, yEncabezadoFin - 42, anchos, encabezados, filas, { font, bold }, negro, 13, 7)
+        const yDespuesTabla = dibujarTabla(pag.page, margenX, pag.yEncabezadoFin - 42, anchos, encabezados, filas, { font, bold }, negro, 13, 7)
 
         let yPie = yDespuesTabla - 16
-        page.drawText('ERROR TOTAL: ', { x: margenX + 300, y: yPie, size: 9, font: bold, color: negro })
-        page.drawText(error.toFixed(2), { x: margenX + 380, y: yPie, size: 9, font, color: negro })
+        pag.page.drawText('ERROR TOTAL: ', { x: margenX + 300, y: yPie, size: 9, font: bold, color: negro })
+        pag.page.drawText(error.toFixed(2), { x: margenX + 380, y: yPie, size: 9, font, color: negro })
         yPie -= 14
-        page.drawText('TOLERANCIA: ', { x: margenX + 300, y: yPie, size: 9, font: bold, color: negro })
-        page.drawText('0.10', { x: margenX + 380, y: yPie, size: 9, font, color: negro })
+        pag.page.drawText('TOLERANCIA: ', { x: margenX + 300, y: yPie, size: 9, font: bold, color: negro })
+        pag.page.drawText('0.10', { x: margenX + 380, y: yPie, size: 9, font, color: negro })
         yPie -= 20
 
-        const superficieValor = poligono?.superficie_m2 ? Number(poligono.superficie_m2).toFixed(2) : '—'
-        page.drawRectangle({ x: margenX, y: yPie - 18, width: width - margenX * 2, height: 22, color: rgb(0.92, 0.92, 0.92) })
-        page.drawText('SUPERFICIE:', { x: margenX + 300, y: yPie - 12, size: 10, font: bold, color: negro })
-        page.drawText(`${superficieValor}   m2`, { x: margenX + 390, y: yPie - 12, size: 10, font, color: negro })
-      }
+        const superficieValor = pol?.superficie_m2 ? Number(pol.superficie_m2).toFixed(2) : '—'
+        pag.page.drawRectangle({ x: margenX, y: yPie - 18, width: pag.width - margenX * 2, height: 22, color: rgb(0.92, 0.92, 0.92) })
+        pag.page.drawText('SUPERFICIE:', { x: margenX + 300, y: yPie - 12, size: 10, font: bold, color: negro })
+        pag.page.drawText(`${superficieValor}   m2`, { x: margenX + 390, y: yPie - 12, size: 10, font, color: negro })
+      })
 
     } else {
       // Título del documento
