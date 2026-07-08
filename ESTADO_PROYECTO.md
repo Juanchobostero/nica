@@ -78,6 +78,24 @@
 
 ---
 
+## 📋 Cambios de la sesión — 6 Julio 2026 (v0.7)
+
+### Tab 3 Mensura — Linderos Mensura deshabilitado (pedido de Franco)
+
+Franco marcó que la carga de **Linderos Mensura** en la Tab 3 Mensura es redundante: la Tab 2 Inmueble ya tiene una sección **"Referencias para notificación a linderos"** (propietario anterior, calle de frente, entre calles) pensada para el mismo fin.
+
+**Decisión de Franco:** no eliminar la sección, sino dejarla visible pero **deshabilitada**, con una aclaración de que la carga real se hace desde Tab 2 Inmueble. **Solo aplica a "Linderos Mensura"** — "Linderos Citación" y el checkbox "Linderos de citación iguales a mensura" quedan exactamente como estaban, totalmente editables.
+
+**Cambio realizado** (`src/pages/expedientes/[id].astro`):
+- Los 4 campos de **Linderos Mensura** (Norte/Sur/Este/Oeste) se muestran con `disabled` (solo lectura). Para no perder el valor ya guardado al enviar el formulario (un input `disabled` no viaja en el POST), cada uno tiene un `<input type="hidden">` en paralelo con el mismo `name` y el valor real, así "Guardar linderos" sigue guardando Linderos Citación sin pisar Linderos Mensura con vacío.
+- Se agregó un cartel aclaratorio arriba de esos 4 campos indicando que la carga se hace desde Inmueble → Referencias para notificación a linderos.
+- **Linderos Citación** y el checkbox de "iguales a mensura" no se tocaron: siguen editables e igual de funcionales que antes.
+- **No se tocó** la tabla `linderos` en la base de datos, ni el endpoint `guardar_linderos`, ni la validación `linderosCompletos`, ni la generación de PDFs (`generar.ts`).
+
+**⚠️ A confirmar con Franco:** los campos de "Referencias para notificación a linderos" en Tab 2 (propietario anterior, calle de frente, entre calles) **no son los mismos datos** que Norte/Sur/Este/Oeste de mensura en Tab 3 (que identifican quién linda con el inmueble en cada punto cardinal, y se usan tal cual en los documentos de notificación). Como el campo quedó de solo lectura, para expedientes nuevos que todavía no tengan esos 4 valores cargados, no va a quedar ninguna pantalla desde donde cargarlos — esos documentos van a mostrar "—" en su lugar salvo que se cargue directo en la base de datos. Si Franco efectivamente necesita seguir completando Norte/Sur/Este/Oeste de mensura en algún lugar, hay que definir dónde.
+
+---
+
 ## 📋 Cambios de la sesión — 1 Julio 2026 (v0.6)
 
 Implementación del **Ítem 11 — Múltiples polígonos por expediente**, analizado en la sesión anterior (ver sección de análisis más abajo, con las preguntas a Franco). Se armó en 5 pasos independientes, cada uno probado antes de pasar al siguiente, para no romper en ningún momento el caso existente de un solo polígono. **Falta la vuelta de Franco con feedback** antes de dar el ítem por cerrado — quedan preguntas abiertas sobre cómo deben tratar la superficie el resto de los documentos (no solo Memoria/Planilla).

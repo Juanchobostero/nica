@@ -917,11 +917,31 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
           <input type="hidden" name="_tab" value="mensura" />
 
           <div class="section-label">Linderos mensura</div>
+          <div style="background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:0.5rem 0.75rem;margin-bottom:1rem;font-size:0.85rem;color:var(--color-text-secondary)">
+            Estos valores se cargan desde la pestaña <strong>Inmueble → Referencias para notificación a linderos</strong>.
+            Los campos quedan deshabilitados acá para evitar duplicar la carga.
+          </div>
           <div class="form-grid form-grid-2" style="margin-bottom:1rem">
-            <div class="field"><label>Norte</label><input class="input" name="norte_mensura" value={linderos?.norte_mensura ?? ''} /></div>
-            <div class="field"><label>Sur</label><input class="input" name="sur_mensura" value={linderos?.sur_mensura ?? ''} /></div>
-            <div class="field"><label>Este</label><input class="input" name="este_mensura" value={linderos?.este_mensura ?? ''} /></div>
-            <div class="field"><label>Oeste</label><input class="input" name="oeste_mensura" value={linderos?.oeste_mensura ?? ''} /></div>
+            <div class="field">
+              <label>Norte</label>
+              <input class="input" value={linderos?.norte_mensura ?? ''} disabled />
+              <input type="hidden" name="norte_mensura" value={linderos?.norte_mensura ?? ''} />
+            </div>
+            <div class="field">
+              <label>Sur</label>
+              <input class="input" value={linderos?.sur_mensura ?? ''} disabled />
+              <input type="hidden" name="sur_mensura" value={linderos?.sur_mensura ?? ''} />
+            </div>
+            <div class="field">
+              <label>Este</label>
+              <input class="input" value={linderos?.este_mensura ?? ''} disabled />
+              <input type="hidden" name="este_mensura" value={linderos?.este_mensura ?? ''} />
+            </div>
+            <div class="field">
+              <label>Oeste</label>
+              <input class="input" value={linderos?.oeste_mensura ?? ''} disabled />
+              <input type="hidden" name="oeste_mensura" value={linderos?.oeste_mensura ?? ''} />
+            </div>
           </div>
 
           <label style="display:flex;align-items:center;gap:8px;margin-bottom:1rem;font-weight:400">
