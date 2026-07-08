@@ -1,6 +1,7 @@
 ---
 import AppLayout from '../../layouts/AppLayout.astro'
 import { supabase, getSupabase } from '../../lib/supabase'
+import { calcularPoligonal, calcularSuperficie } from '../../lib/poligonal'
 
 const token = Astro.cookies.get('sb-access-token')?.value ?? ''
 const { data: { user } } = await supabase.auth.getUser(token)
@@ -89,6 +90,18 @@ if (Astro.request.method === 'POST') {
     const { error } = inmueble
       ? await db.from('inmuebles').update(payload).eq('expediente_id', id)
       : await db.from('inmuebles').insert(payload)
+
+    // Linderos de citación: se cargan acá (etapa previa a la mensura), no en Tab Mensura.
+    const citacionPayload = {
+      expediente_id: id,
+      norte_citacion: form.get('norte_citacion') || null,
+      sur_citacion: form.get('sur_citacion') || null,
+      este_citacion: form.get('este_citacion') || null,
+      oeste_citacion: form.get('oeste_citacion') || null,
+    }
+    if (linderos) await db.from('linderos').update(citacionPayload).eq('expediente_id', id)
+    else await db.from('linderos').insert(citacionPayload)
+
     if (error) errorMsg = error.message
     else successMsg = 'Inmueble guardado.'
   }
@@ -151,13 +164,40 @@ if (Astro.request.method === 'POST') {
         const parcelaHasta = parseInt(form.get(`pol_${p}_parcela_hasta`) as string) || parcelaDesde
         maxParcelaHasta = Math.max(maxParcelaHasta, parcelaDesde, parcelaHasta)
 
-        // Superficie: si es rural usar Ha/A/Ca, si es urbano usar m² directo
-        let superficieM2: number | null = parseFloat(form.get(`pol_${p}_superficie_m2`) as string) || null
-        if (inmueble?.tipo_inmueble === 'rural') {
-          const ha = parseFloat(form.get(`pol_${p}_superficie_ha`) as string) || 0
-          const a  = parseFloat(form.get(`pol_${p}_superficie_a`)  as string) || 0
-          const ca = parseFloat(form.get(`pol_${p}_superficie_ca`) as string) || 0
-          if (ha > 0 || a > 0 || ca > 0) superficieM2 = ha * 10000 + a * 100 + ca
+        const superficieManual = form.get(`pol_${p}_superficie_manual`) === 'on'
+
+        // Superficie: manual = lo tipeado por el agrimensor; automática (default) = recalculada
+        // acá a partir de lados/ángulos con el mismo método que la Planilla de Cálculos (Gauss/
+        // shoelace sobre coordenadas compensadas) — no se confía en los campos numéricos del
+        // form, que llegan deshabilitados y no se envían cuando no está en modo manual.
+        let superficieM2: number | null
+        if (superficieManual) {
+          superficieM2 = parseFloat(form.get(`pol_${p}_superficie_m2`) as string) || null
+          if (inmueble?.tipo_inmueble === 'rural') {
+            const ha = parseFloat(form.get(`pol_${p}_superficie_ha`) as string) || 0
+            const a  = parseFloat(form.get(`pol_${p}_superficie_a`)  as string) || 0
+            const ca = parseFloat(form.get(`pol_${p}_superficie_ca`) as string) || 0
+            if (ha > 0 || a > 0 || ca > 0) superficieM2 = ha * 10000 + a * 100 + ca
+          }
+        } else {
+          const ladosForm = []
+          for (let i = 1; i <= cantLados; i++) {
+            ladosForm.push({ valor_m: parseFloat(form.get(`pol_${p}_lado_${i}_valor_m`) as string) || 0 })
+          }
+          const angulosForm = []
+          for (let i = 1; i <= cantAngulos; i++) {
+            const va = (form.get(`pol_${p}_angulo_${i}_valor`) as string) || ''
+            const [gradosPart, decimalPart = ''] = va.split('.')
+            const decStr = decimalPart.padEnd(4, '0')
+            angulosForm.push({
+              grados: parseInt(gradosPart) || 0,
+              minutos: parseInt(decStr.substring(0, 2)) || 0,
+              segundos: parseInt(decStr.substring(2, 4)) || 0,
+            })
+          }
+          const n = Math.max(ladosForm.length, angulosForm.length)
+          const calc = n >= 3 ? calcularPoligonal(ladosForm, angulosForm) : null
+          superficieM2 = calc ? calcularSuperficie(calc) : null
         }
 
         const polPayload = {
@@ -166,6 +206,7 @@ if (Astro.request.method === 'POST') {
           parcela_hasta: parcelaHasta,
           superficie_m2: superficieM2,
           superficie_letras: form.get(`pol_${p}_superficie_letras`) || null,
+          superficie_manual: superficieManual,
           cantidad_lados: cantLados,
           cantidad_angulos: cantAngulos,
         }
@@ -234,17 +275,17 @@ if (Astro.request.method === 'POST') {
   }
 
   if (action === 'guardar_linderos') {
+    // Los linderos de citación se cargan en Tab Inmueble (action guardar_inmueble).
+    // Acá solo se guardan los de mensura: si "iguales" está tildado, se fuerzan iguales
+    // a los de citación ya guardados (no se confía en los inputs deshabilitados del form).
+    const iguales = form.get('linderos_iguales') === 'on'
     const lPayload = {
       expediente_id: id,
-      norte_mensura: form.get('norte_mensura'),
-      sur_mensura: form.get('sur_mensura'),
-      este_mensura: form.get('este_mensura'),
-      oeste_mensura: form.get('oeste_mensura'),
-      linderos_iguales: form.get('linderos_iguales') === 'on',
-      norte_citacion: form.get('norte_citacion') || null,
-      sur_citacion: form.get('sur_citacion') || null,
-      este_citacion: form.get('este_citacion') || null,
-      oeste_citacion: form.get('oeste_citacion') || null,
+      linderos_iguales: iguales,
+      norte_mensura: iguales ? (linderos?.norte_citacion ?? null) : (form.get('norte_mensura') || null),
+      sur_mensura:   iguales ? (linderos?.sur_citacion   ?? null) : (form.get('sur_mensura')   || null),
+      este_mensura:  iguales ? (linderos?.este_citacion  ?? null) : (form.get('este_mensura')  || null),
+      oeste_mensura: iguales ? (linderos?.oeste_citacion ?? null) : (form.get('oeste_mensura') || null),
     }
     if (linderos) await db.from('linderos').update(lPayload).eq('expediente_id', id)
     else await db.from('linderos').insert(lPayload)
@@ -748,6 +789,15 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
           </div>
         </div>
 
+        <!-- Linderos (citación) -->
+        <div class="section-label" style="margin-top:0.5rem">Linderos</div>
+        <div class="form-grid form-grid-2" style="margin-bottom:1.5rem">
+          <div class="field"><label>Norte</label><input class="input" name="norte_citacion" value={linderos?.norte_citacion ?? ''} /></div>
+          <div class="field"><label>Sur</label><input class="input" name="sur_citacion" value={linderos?.sur_citacion ?? ''} /></div>
+          <div class="field"><label>Este</label><input class="input" name="este_citacion" value={linderos?.este_citacion ?? ''} /></div>
+          <div class="field"><label>Oeste</label><input class="input" name="oeste_citacion" value={linderos?.oeste_citacion ?? ''} /></div>
+        </div>
+
         <!-- Antecedentes técnicos -->
         <div class="field" style="margin-bottom:1.5rem">
           <label>Antecedentes Técnicos</label>
@@ -829,22 +879,38 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
                   </div>
 
                   <div class="form-grid form-grid-2" style="margin-bottom:1rem">
+                    <div class="field" style="grid-column:1/-1;margin-bottom:0">
+                      <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;font-size:0.85rem">
+                        <input type="checkbox" id={`chk_superficie_manual_${idx}`}
+                          style="width:14px;height:14px;accent-color:var(--color-primary)"
+                          checked={(pol as any)?.superficie_manual === true} />
+                        Corregir superficie manualmente
+                      </label>
+                      <p style="font-size:0.76rem;color:var(--color-text-secondary);margin:0.15rem 0 0.6rem 22px">
+                        Por defecto se calcula sola a partir de los lados y ángulos cargados abajo.
+                      </p>
+                      <input type="hidden" name={`pol_${idx}_superficie_manual`} id={`superficie_manual_${idx}`}
+                        value={(pol as any)?.superficie_manual === true ? 'on' : ''} />
+                    </div>
                     {inmueble?.tipo_inmueble === 'rural' ? (
                       <>
                         <div class="field">
                           <label>Superficie — Hectáreas</label>
                           <input class="input" type="number" step="1" min="0" name={`pol_${idx}_superficie_ha`} id={`sup_ha_${idx}`}
-                            value={pol?.superficie_m2 != null ? Math.floor((pol.superficie_m2 as number) / 10000) : ''} />
+                            value={pol?.superficie_m2 != null ? Math.floor((pol.superficie_m2 as number) / 10000) : ''}
+                            disabled={(pol as any)?.superficie_manual !== true} />
                         </div>
                         <div class="field">
                           <label>Áreas</label>
                           <input class="input" type="number" step="1" min="0" max="99" name={`pol_${idx}_superficie_a`} id={`sup_a_${idx}`}
-                            value={pol?.superficie_m2 != null ? Math.floor(((pol.superficie_m2 as number) % 10000) / 100) : ''} />
+                            value={pol?.superficie_m2 != null ? Math.floor(((pol.superficie_m2 as number) % 10000) / 100) : ''}
+                            disabled={(pol as any)?.superficie_manual !== true} />
                         </div>
                         <div class="field">
                           <label>Centiáreas</label>
                           <input class="input" type="number" step="0.01" min="0" max="99.99" name={`pol_${idx}_superficie_ca`} id={`sup_ca_${idx}`}
-                            value={pol?.superficie_m2 != null ? Number(((pol.superficie_m2 as number) % 100).toFixed(2)) : ''} />
+                            value={pol?.superficie_m2 != null ? Number(((pol.superficie_m2 as number) % 100).toFixed(2)) : ''}
+                            disabled={(pol as any)?.superficie_manual !== true} />
                         </div>
                         <div class="field" style="grid-column:1/-1">
                           <label>Superficie en letras <span style="font-weight:400;font-size:0.78rem;color:var(--color-text-secondary)">(auto)</span></label>
@@ -858,7 +924,8 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
                         <div class="field">
                           <label>Superficie total (m²)</label>
                           <input class="input" type="number" step="0.0001" name={`pol_${idx}_superficie_m2`} id={`superficie_m2_${idx}`}
-                            value={pol?.superficie_m2 ?? ''} />
+                            value={pol?.superficie_m2 ?? ''}
+                            disabled={(pol as any)?.superficie_manual !== true} />
                         </div>
                         <div class="field">
                           <label>Superficie en letras <span style="font-weight:400;font-size:0.78rem;color:var(--color-text-secondary)">(auto)</span></label>
@@ -916,48 +983,32 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
           <input type="hidden" name="_action" value="guardar_linderos" />
           <input type="hidden" name="_tab" value="mensura" />
 
-          <div class="section-label">Linderos mensura</div>
+          <div class="section-label">Linderos</div>
           <div style="background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:0.5rem 0.75rem;margin-bottom:1rem;font-size:0.85rem;color:var(--color-text-secondary)">
-            Estos valores se cargan desde la pestaña <strong>Inmueble → Referencias para notificación a linderos</strong>.
-            Los campos quedan deshabilitados acá para evitar duplicar la carga.
+            Por defecto son los mismos linderos cargados en la pestaña <strong>Inmueble</strong>. Si al hacer la mensura encontrás que cambió alguno, destildá la opción de abajo para corregirlo acá.
           </div>
           <div class="form-grid form-grid-2" style="margin-bottom:1rem">
-            <div class="field">
-              <label>Norte</label>
-              <input class="input" value={linderos?.norte_mensura ?? ''} disabled />
-              <input type="hidden" name="norte_mensura" value={linderos?.norte_mensura ?? ''} />
-            </div>
-            <div class="field">
-              <label>Sur</label>
-              <input class="input" value={linderos?.sur_mensura ?? ''} disabled />
-              <input type="hidden" name="sur_mensura" value={linderos?.sur_mensura ?? ''} />
-            </div>
-            <div class="field">
-              <label>Este</label>
-              <input class="input" value={linderos?.este_mensura ?? ''} disabled />
-              <input type="hidden" name="este_mensura" value={linderos?.este_mensura ?? ''} />
-            </div>
-            <div class="field">
-              <label>Oeste</label>
-              <input class="input" value={linderos?.oeste_mensura ?? ''} disabled />
-              <input type="hidden" name="oeste_mensura" value={linderos?.oeste_mensura ?? ''} />
-            </div>
+            {(['norte', 'sur', 'este', 'oeste'] as const).map(dir => {
+              const citacionVal = (linderos as any)?.[`${dir}_citacion`] ?? ''
+              const mensuraVal = (linderos as any)?.[`${dir}_mensura`] ?? ''
+              const auto = linderos?.linderos_iguales !== false
+              const valorInicial = auto ? citacionVal : mensuraVal
+              const label = dir.charAt(0).toUpperCase() + dir.slice(1)
+              return (
+                <div class="field">
+                  <label>{label}</label>
+                  <input class="input" id={`lind_${dir}_visible`} value={valorInicial} disabled={auto}
+                    data-citacion={citacionVal} />
+                  <input type="hidden" name={`${dir}_mensura`} id={`lind_${dir}_hidden`} value={valorInicial} />
+                </div>
+              )
+            })}
           </div>
 
           <label style="display:flex;align-items:center;gap:8px;margin-bottom:1rem;font-weight:400">
-            <input type="checkbox" name="linderos_iguales" id="lind_iguales" checked={linderos?.linderos_iguales} />
-            Linderos de citación iguales a mensura
+            <input type="checkbox" name="linderos_iguales" id="lind_iguales" checked={linderos?.linderos_iguales !== false} />
+            Usar los mismos linderos que en la citación (Tab Inmueble)
           </label>
-
-          <div id="linderos_citacion" style={linderos?.linderos_iguales ? 'display:none' : ''}>
-            <div class="section-label">Linderos citación</div>
-            <div class="form-grid form-grid-2" style="margin-bottom:1rem">
-              <div class="field"><label>Norte</label><input class="input" name="norte_citacion" value={linderos?.norte_citacion ?? ''} /></div>
-              <div class="field"><label>Sur</label><input class="input" name="sur_citacion" value={linderos?.sur_citacion ?? ''} /></div>
-              <div class="field"><label>Este</label><input class="input" name="este_citacion" value={linderos?.este_citacion ?? ''} /></div>
-              <div class="field"><label>Oeste</label><input class="input" name="oeste_citacion" value={linderos?.oeste_citacion ?? ''} /></div>
-            </div>
-          </div>
 
           <button type="submit" class="btn btn-primary">Guardar linderos</button>
         </form>
@@ -1224,11 +1275,29 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
   // leer `datosValidacion` directamente — hay que colgarlo de window.
   window.datosValidacion = datosValidacion
 
-  // Linderos checkbox
-  const chk = document.getElementById('lind_iguales')
-  const divCit = document.getElementById('linderos_citacion')
-  if (chk && divCit) {
-    chk.addEventListener('change', () => { divCit.style.display = chk.checked ? 'none' : '' })
+  // Linderos: si "iguales" está tildado, los 4 campos de mensura quedan deshabilitados
+  // y muestran el valor de citación; si se destilda, se habilitan para corregir a mano.
+  const lindChk = document.getElementById('lind_iguales')
+  const LIND_DIRS = ['norte', 'sur', 'este', 'oeste']
+  function aplicarModoLinderos(auto) {
+    LIND_DIRS.forEach(d => {
+      const visible = document.getElementById(`lind_${d}_visible`)
+      const hidden  = document.getElementById(`lind_${d}_hidden`)
+      if (!visible || !hidden) return
+      visible.disabled = auto
+      if (auto) {
+        visible.value = visible.dataset.citacion || ''
+        hidden.value = visible.value
+      }
+    })
+  }
+  if (lindChk) {
+    lindChk.addEventListener('change', () => aplicarModoLinderos(lindChk.checked))
+    LIND_DIRS.forEach(d => {
+      const visible = document.getElementById(`lind_${d}_visible`)
+      const hidden  = document.getElementById(`lind_${d}_hidden`)
+      if (visible && hidden) visible.addEventListener('input', () => { hidden.value = visible.value })
+    })
   }
 
   // ── Helpers compartidos de conversión numérica ──────────────────────────
@@ -1372,6 +1441,55 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
   // validar la sumatoria angular de TODAS al hacer submit del formulario.
   const camposSumatoria = []
 
+  // Superficie de la poligonal cerrada (fórmula de Gauss/shoelace sobre coordenadas
+  // compensadas por regla de la brújula) — puerto en JS plano de src/lib/poligonal.ts,
+  // que es la fuente de verdad (usada también al guardar, del lado del servidor, y en
+  // la Planilla de Cálculos). Este script no puede importar TS de proyecto.
+  function calcularSuperficieVanilla(ladosVals, angulosVals) {
+    const n = Math.max(ladosVals.length, angulosVals.length)
+    if (n < 3) return null
+
+    const azimuts = []
+    for (let i = 0; i < n; i++) {
+      const ang = angulosVals[i] || { grados: 0, minutos: 0, segundos: 0 }
+      const angDecimal = ang.grados + ang.minutos / 60 + ang.segundos / 3600
+      if (i === 0) azimuts.push(90)
+      else {
+        const az = azimuts[i - 1] - (180 - angDecimal)
+        azimuts.push(((az % 360) + 360) % 360)
+      }
+    }
+
+    const dx = [], dy = []
+    for (let i = 0; i < n; i++) {
+      const L = ladosVals[i] || 0
+      const rad = (azimuts[i] * Math.PI) / 180
+      dx.push(L * Math.cos(rad))
+      dy.push(L * Math.sin(rad))
+    }
+    const sumDX = dx.reduce((a, b) => a + b, 0)
+    const sumDY = dy.reduce((a, b) => a + b, 0)
+    const totalLength = ladosVals.reduce((a, b) => a + (b || 0), 0)
+
+    const xc = [], yc = []
+    let cumXC = 0, cumYC = 0
+    for (let i = 0; i < n; i++) {
+      const L = ladosVals[i] || 0
+      const corrX = totalLength ? -sumDX * (L / totalLength) : 0
+      const corrY = totalLength ? -sumDY * (L / totalLength) : 0
+      xc.push(cumXC); yc.push(cumYC)
+      cumXC += dx[i] + corrX
+      cumYC += dy[i] + corrY
+    }
+
+    let area = 0
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n
+      area += xc[i] * yc[j] - xc[j] * yc[i]
+    }
+    return Math.abs(area) / 2
+  }
+
   function initPoligonoCard(idx, datos) {
     const ladosExistentes    = datos.lados
     const cantLadosInicial   = datos.cantLados
@@ -1504,6 +1622,53 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     }
 
     camposSumatoria.push({ idx, cantAngulosInput, angulosRows })
+
+    // ── Superficie autocalculada ─────────────────────────────────────────
+    const chkSupManual    = document.getElementById(`chk_superficie_manual_${idx}`)
+    const hiddenSupManual = document.getElementById(`superficie_manual_${idx}`)
+    const inputM2         = document.getElementById(`superficie_m2_${idx}`)
+    const inputHa         = document.getElementById(`sup_ha_${idx}`)
+    const inputA          = document.getElementById(`sup_a_${idx}`)
+    const inputCa         = document.getElementById(`sup_ca_${idx}`)
+    const inputSupLetras  = document.getElementById(`superficie_letras_${idx}`)
+    const esRural         = !!inputHa
+
+    function estaEnModoManual() {
+      return !!(chkSupManual && chkSupManual.checked)
+    }
+
+    function recalcularSuperficie() {
+      if (!ladosRows || !angulosRows || estaEnModoManual()) return
+      const ladosVals = Array.from(ladosRows.querySelectorAll('[data-lado-m]')).map(inp => parseFloat(inp.value) || 0)
+      const angulosVals = Array.from(angulosRows.querySelectorAll('[data-angulo-valor]'))
+        .map(inp => parsearAngulo(inp.value) || { grados: 0, minutos: 0, segundos: 0 })
+      const areaM2 = calcularSuperficieVanilla(ladosVals, angulosVals)
+      if (areaM2 == null) return
+
+      if (esRural) {
+        const ha = Math.floor(areaM2 / 10000)
+        const a  = Math.floor((areaM2 % 10000) / 100)
+        const ca = Number((areaM2 % 100).toFixed(2))
+        if (inputHa) inputHa.value = ha
+        if (inputA)  inputA.value  = a
+        if (inputCa) inputCa.value = ca
+        if (inputSupLetras) inputSupLetras.value = superficieHaALetras(ha, a, ca)
+      } else {
+        if (inputM2) inputM2.value = areaM2.toFixed(4)
+        if (inputSupLetras) inputSupLetras.value = superficieALetrasM2(areaM2.toFixed(2))
+      }
+    }
+
+    function aplicarModoSuperficie(manual) {
+      ;[inputM2, inputHa, inputA, inputCa].forEach(el => { if (el) el.disabled = !manual })
+      if (hiddenSupManual) hiddenSupManual.value = manual ? 'on' : ''
+      if (!manual) recalcularSuperficie()
+    }
+
+    if (chkSupManual) chkSupManual.addEventListener('change', () => aplicarModoSuperficie(chkSupManual.checked))
+    if (ladosRows)    ladosRows.addEventListener('input', recalcularSuperficie)
+    if (angulosRows)  angulosRows.addEventListener('input', recalcularSuperficie)
+    recalcularSuperficie()
 
     // ── Numeración de parcela (label live) ───────────────────────────────
     const desdeInput = document.querySelector(`[data-pol-desde="${idx}"]`)

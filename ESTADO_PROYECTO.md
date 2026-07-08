@@ -78,6 +78,41 @@
 
 ---
 
+## 📋 Cambios de la sesión — 8 Julio 2026 (v0.8)
+
+### 1. Linderos: se resolvió el punto pendiente de la sesión anterior
+
+Franco aclaró cómo es el proceso real: primero se releva quién linda con el inmueble para armar la **citación** (notificación previa a los vecinos), y después, el día de la mensura, se vuelve a constatar en el lugar — normalmente son los mismos linderos, salvo algún caso excepcional (ej. un ocupante ilegal).
+
+**Cambio de tabs** (`src/pages/expedientes/[id].astro`):
+- **Tab 2 Inmueble**: ahora tiene la carga completa de "Linderos" (Norte/Sur/Este/Oeste), junto a "Referencias para notificación a linderos". Es el único lugar donde se cargan los linderos de citación.
+- **Tab 3 Mensura**: el bloque de linderos dejó de estar dividido en "Linderos Mensura" / "Linderos Citación". Ahora es un solo bloque **"Linderos"** que por defecto muestra los mismos valores cargados en Inmueble, deshabilitados. Hay un checkbox **"Usar los mismos linderos que en la citación"**, tildado por defecto — si al hacer la mensura encontrás que cambió alguno, lo destildás y podés corregir esos 4 campos a mano, sin afectar lo cargado en Inmueble.
+
+**Por qué sigue funcionando bien en los documentos:** "Notificación a Linderos" y "Acta de Ausencia de Linderos" (documentos de la etapa previa) usan los valores de citación (cargados en Inmueble). "Acta de Mensura" y el "Capítulo" (documentos de la mensura en el lugar) usan los valores de mensura — que son los mismos que citación salvo que se haya corregido a mano. De paso se corrigió un detalle interno (`valorLindero` en `generar.ts`) que, con el flujo nuevo, podía dejar la Notificación a Linderos vacía en lugar de mostrar el valor recién cargado en Inmueble.
+
+Con esto queda cerrado el punto que había quedado abierto en la sesión del 6/7 (ver más abajo): los campos de "Referencias" en Inmueble y los linderos ya no son dos cargas separadas — es un solo dato, cargado una sola vez.
+
+### 2. Superficie autocalculada, con opción de corrección manual
+
+Pedido de Franco: que la superficie de cada polígono se calcule sola a partir de los lados y ángulos ya cargados (mismo método que usa la Planilla de Cálculos para cerrar la poligonal), para no tener que calcularla a mano y evitar errores de cálculo — pero con la posibilidad de forzar un valor propio si el resultado no coincide con lo esperado.
+
+**Cómo quedó:**
+- El campo de superficie (m² en urbano; Hectáreas/Áreas/Centiáreas en rural) se recalcula solo, en vivo, a medida que se cargan los lados y ángulos del polígono. Por defecto aparece bloqueado (no se puede tipear).
+- Checkbox **"Corregir superficie manualmente"**: al tildarlo se desbloquea el campo y se puede escribir un valor propio. Al destildarlo, vuelve a calcularse solo.
+- El cálculo usa el mismo método que ya usaba la Planilla de Cálculos (cierre de la poligonal por regla de la brújula + fórmula de superficie de Gauss), así que el número que aparece en Mensura y el que aparece en la Planilla van a coincidir, salvo que se haya forzado un valor manual.
+- El cálculo se rehace también del lado del servidor al guardar (no solo en el navegador), así que el valor guardado siempre queda consistente con los lados y ángulos cargados, incluso si algo falla en el navegador.
+- Se aprovechó para sacar la fórmula de cálculo de la poligonal (antes solo vivía en la generación de PDFs) a un archivo compartido (`src/lib/poligonal.ts`), usado tanto por la Planilla de Cálculos como por este autocálculo — un solo lugar con la fórmula, sin duplicar.
+
+**Cambio de base de datos** (ejecutar a mano en Supabase, mismo procedimiento que las migraciones anteriores):
+```sql
+ALTER TABLE poligono ADD COLUMN IF NOT EXISTS superficie_manual boolean DEFAULT false;
+```
+Es aditivo y no afecta expedientes existentes: todos quedan en modo "automático" por defecto. Si el número calculado no coincide con lo que ya tenían cargado, se va a ver el valor recalculado la próxima vez que abran esa mensura — se puede corregir con el checkbox si hace falta.
+
+**Pendiente (nota interna, no bloqueante):** la tolerancia de la Planilla de Cálculos sigue fija en 0.10 — Franco todavía tiene que pasar la fórmula real que usa Catastro para eso.
+
+---
+
 ## 📋 Cambios de la sesión — 6 Julio 2026 (v0.7)
 
 ### Tab 3 Mensura — Linderos Mensura deshabilitado (pedido de Franco)

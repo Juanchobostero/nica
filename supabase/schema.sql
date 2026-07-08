@@ -211,7 +211,10 @@ create table if not exists poligono (
   superficie_m2       numeric(14,4),
   superficie_letras   text,
   cantidad_lados      int default 0,
-  cantidad_angulos    int default 0
+  cantidad_angulos    int default 0,
+  -- false (default): superficie_m2 se recalcula solo a partir de lados/ángulos (fórmula de Gauss).
+  -- true: el agrimensor forzó un valor manual y no se pisa con el cálculo automático.
+  superficie_manual   boolean default false
 );
 
 alter table poligono enable row level security;

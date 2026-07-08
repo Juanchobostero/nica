@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro'
 import { supabase, getSupabase } from '../../../lib/supabase'
+import { calcularPoligonal } from '../../../lib/poligonal'
 import { PDFDocument, StandardFonts, rgb, degrees, type PDFFont, type PDFPage } from 'pdf-lib'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -324,57 +325,6 @@ function generarEtiquetasLados(n: number): string[] {
   return vertices.map((v, i) => v + vertices[(i + 1) % n])
 }
 
-// Calcula la poligonal: azimuts, proyecciones DX/DY, coordenadas X/Y, y su corrección por cierre (regla de la brújula)
-function calcularPoligonal(lados: any[], angulos: any[]) {
-  const n = Math.max(lados.length, angulos.length)
-  if (n === 0) return null
-
-  const azimuts: number[] = []
-  for (let i = 0; i < n; i++) {
-    const ang = angulos[i] ?? {}
-    const angDecimal = (ang.grados ?? 0) + (ang.minutos ?? 0) / 60 + (ang.segundos ?? 0) / 3600
-    if (i === 0) {
-      azimuts.push(90)
-    } else {
-      const az = azimuts[i - 1] - (180 - angDecimal)
-      azimuts.push(((az % 360) + 360) % 360)
-    }
-  }
-
-  const dx: number[] = [], dy: number[] = [], x: number[] = [], y: number[] = []
-  let cumX = 0, cumY = 0
-  for (let i = 0; i < n; i++) {
-    x.push(cumX); y.push(cumY)
-    const L = Number(lados[i]?.valor_m ?? 0)
-    const rad = (azimuts[i] * Math.PI) / 180
-    const dxi = L * Math.cos(rad)
-    const dyi = L * Math.sin(rad)
-    dx.push(dxi); dy.push(dyi)
-    cumX += dxi; cumY += dyi
-  }
-
-  const sumDX = dx.reduce((a, b) => a + b, 0)
-  const sumDY = dy.reduce((a, b) => a + b, 0)
-  const totalLength = lados.reduce((a, l) => a + Number(l?.valor_m ?? 0), 0)
-  const error = Math.sqrt(sumDX * sumDX + sumDY * sumDY)
-
-  // Corrección proporcional al largo de cada lado (regla de la brújula), para que el polígono cierre exacto
-  const dxc: number[] = [], dyc: number[] = [], xc: number[] = [], yc: number[] = []
-  let cumXC = 0, cumYC = 0
-  for (let i = 0; i < n; i++) {
-    const L = Number(lados[i]?.valor_m ?? 0)
-    const corrX = totalLength ? -sumDX * (L / totalLength) : 0
-    const corrY = totalLength ? -sumDY * (L / totalLength) : 0
-    const dxci = dx[i] + corrX
-    const dyci = dy[i] + corrY
-    xc.push(cumXC); yc.push(cumYC)
-    dxc.push(dxci); dyc.push(dyci)
-    cumXC += dxci; cumYC += dyci
-  }
-
-  return { n, azimuts, dx, dy, x, y, dxc, dyc, xc, yc, sumDX, sumDY, totalLength, error }
-}
-
 // Dibuja una tabla con grilla: encabezado en negrita + filas de datos
 function dibujarTabla(
   page: PDFPage, x0: number, yTop: number,
@@ -419,12 +369,12 @@ function formatearFechaCorta(fechaISO: string | null | undefined): string {
   return `${pad(d.getDate())} / ${pad(d.getMonth() + 1)} / ${d.getFullYear()}`
 }
 
-// Devuelve el lindero de citación; si no se cargó (o "linderos iguales" está marcado), usa el de mensura
+// La citación se carga primero (Tab Inmueble) y es la fuente para los documentos de esa
+// etapa; si un expediente viejo no tiene citación cargada, cae al valor de mensura.
 function valorLindero(linderos: any, lado: 'norte' | 'sur' | 'este' | 'oeste'): string {
   const citacion = linderos?.[`${lado}_citacion`]
   const mensura = linderos?.[`${lado}_mensura`]
-  const valor = (linderos?.linderos_iguales || !citacion) ? mensura : citacion
-  return valor ?? '—'
+  return citacion ?? mensura ?? '—'
 }
 
 export const POST: APIRoute = async ({ request, cookies, redirect }) => {
