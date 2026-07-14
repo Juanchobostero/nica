@@ -78,6 +78,44 @@
 
 ---
 
+## 📋 Cambios de la sesión — 8 Julio 2026 (v0.9) — Declaraciones Juradas, piloto Formulario U
+
+Retomamos el punto pendiente "🔍 Análisis: Punto 6 — Revisión de DDJJ" (más abajo) ahora que tenemos las 3 plantillas reales de Franco (`FORMULARIO_U.pdf`, `FORMULARIO_SOR.pdf`, `FORMULARIO_E1.pdf`). Confirmado por código: los 3 son PDF planos, sin campos rellenables (AcroForm = 0 campos) — se generan dibujando el texto encima en coordenadas fijas, la plantilla se guarda tal cual en `public/pdf-templates/`.
+
+**Diseño acordado:**
+- Formulario U (urbano) y SOR (rural) no se eligen a mano: se auto-determinan por `inmueble.tipo_inmueble`.
+- Formulario E1 (características constructivas) no es una alternativa, es un adicional para cuando el inmueble tiene construcciones — queda pendiente para la próxima etapa.
+- Nueva **Tab 6 "DDJJ"** en la página de expediente, con los campos que estos formularios piden y que hoy no existían en NICA (agua corriente, cloacas, cantidad de personas, % de condominio, domicilio estructurado del comitente, etc.) — sin duplicar carga: son columnas nuevas en `inmuebles`, `comitentes` y `exp_comitentes`, no una sección aparte.
+
+**Implementado en esta sesión — Formulario U completo, de punta a punta:**
+- Tab 6 DDJJ: campos nuevos de Inmueble + un bloque por cada comitente ya cargado, con action `guardar_ddjj`.
+- `generar.ts`: nuevo camino en el generador de PDFs — para `formulario_u` (y ya preparado para `formulario_sor`/`formulario_e1`), en vez de crear una hoja en blanco con membrete NICA, carga la plantilla oficial de Catastro y dibuja los datos encima en las coordenadas medidas. El resto de los 9 documentos existentes sigue exactamente igual (mismo camino de código que antes, solo se movió de lugar).
+- Coordenadas calibradas contra la plantilla real en 3 rondas de prueba visual — quedaron bien ubicadas: Localidad, Calle/Fracción/Manzana/Lote, Tomo/Folio/Año, Superficie del terreno (toma directo el valor autocalculado de la sesión anterior), Agua corriente/Cloacas, cantidad de personas, último año pagado, receptoría, datos del propietario (Rubro 3, hasta 2 titulares — el formulario oficial no admite más sin su propio "Anexo A"), nombre del propietario anterior, y la declaración jurada de la página 3 (nombre, nacionalidad, documento, carácter, fecha).
+
+**SQL a correr a mano en Supabase** (mismo procedimiento que las migraciones anteriores):
+```sql
+ALTER TABLE inmuebles ADD COLUMN IF NOT EXISTS agua_corriente boolean;
+ALTER TABLE inmuebles ADD COLUMN IF NOT EXISTS cloacas boolean;
+ALTER TABLE inmuebles ADD COLUMN IF NOT EXISTS personas_habitan int;
+ALTER TABLE inmuebles ADD COLUMN IF NOT EXISTS ultimo_anio_pago_impuesto text;
+ALTER TABLE inmuebles ADD COLUMN IF NOT EXISTS receptoria text;
+
+ALTER TABLE comitentes ADD COLUMN IF NOT EXISTS nacionalidad text;
+ALTER TABLE comitentes ADD COLUMN IF NOT EXISTS tipo_documento text DEFAULT 'DNI';
+ALTER TABLE comitentes ADD COLUMN IF NOT EXISTS domicilio_calle text;
+ALTER TABLE comitentes ADD COLUMN IF NOT EXISTS domicilio_numero text;
+ALTER TABLE comitentes ADD COLUMN IF NOT EXISTS domicilio_localidad text;
+ALTER TABLE comitentes ADD COLUMN IF NOT EXISTS domicilio_provincia text;
+
+ALTER TABLE exp_comitentes ADD COLUMN IF NOT EXISTS porcentaje_condominio numeric(5,2) DEFAULT 100;
+ALTER TABLE exp_comitentes ADD COLUMN IF NOT EXISTS ausente_pais boolean DEFAULT false;
+```
+Aditivo, no afecta nada existente — todos los expedientes actuales quedan con estos campos vacíos hasta que se carguen desde la Tab DDJJ.
+
+**Pendiente para la próxima sesión:** replicar el mismo mecanismo para Formulario SOR (mismas tablas, ya extendidas — solo cambian los campos de ubicación rural y sus coordenadas) y armar Formulario E1 (tabla nueva `edificacion`, grilla de características constructivas). Ver plan completo guardado en la sesión.
+
+---
+
 ## 📋 Cambios de la sesión — 8 Julio 2026 (v0.8)
 
 ### 1. Linderos: se resolvió el punto pendiente de la sesión anterior
@@ -91,6 +129,8 @@ Franco aclaró cómo es el proceso real: primero se releva quién linda con el i
 **Por qué sigue funcionando bien en los documentos:** "Notificación a Linderos" y "Acta de Ausencia de Linderos" (documentos de la etapa previa) usan los valores de citación (cargados en Inmueble). "Acta de Mensura" y el "Capítulo" (documentos de la mensura en el lugar) usan los valores de mensura — que son los mismos que citación salvo que se haya corregido a mano. De paso se corrigió un detalle interno (`valorLindero` en `generar.ts`) que, con el flujo nuevo, podía dejar la Notificación a Linderos vacía en lugar de mostrar el valor recién cargado en Inmueble.
 
 Con esto queda cerrado el punto que había quedado abierto en la sesión del 6/7 (ver más abajo): los campos de "Referencias" en Inmueble y los linderos ya no son dos cargas separadas — es un solo dato, cargado una sola vez.
+
+**⚠️ Nota sobre expedientes de prueba viejos:** el checkbox "iguales" es la misma columna (`linderos_iguales`) que ya existía, pero le dimos vuelta el sentido (antes controlaba si citación copiaba a mensura; ahora controla si mensura copia a citación). En expedientes de prueba creados antes de este cambio, el valor guardado de esa columna puede quedar "invertido" respecto a lo que se ve ahora — por eso puede aparecer Tab Mensura con un valor viejo distinto al de Tab Inmueble, aunque el dato en sí no se perdió. Se soluciona tildando y guardando una vez en Tab Mensura. Como todos los expedientes actuales son de prueba, no afecta datos reales — pero vale tenerlo presente si algo se ve "desincronizado" al revisar casos viejos.
 
 ### 2. Superficie autocalculada, con opción de corrección manual
 
@@ -436,6 +476,8 @@ ALTER TABLE inmuebles   ADD COLUMN IF NOT EXISTS antecedentes_tecnicos text;
 ---
 
 ## 🔍 Análisis: Punto 6 — Revisión de DDJJ (Declaraciones Juradas)
+
+> **Estado: 🔶 en curso (8 Julio 2026, v0.9)** — Formulario U ya implementado de punta a punta (ver changelog v0.9 más arriba). Formulario SOR y E1 quedan para la próxima sesión. El análisis de abajo se mantiene como referencia; terminó siendo el **Enfoque B** (plantilla plana, sin AcroForm).
 
 **Planteo de Franco:** tomar un PDF de Declaración Jurada ya prediseñado (plantilla oficial fija) y completarlo automáticamente con los datos que se van cargando en el sistema (comitente, inmueble, polígono, etc.), permitiendo luego descargar el PDF ya rellenado.
 

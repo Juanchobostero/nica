@@ -292,6 +292,35 @@ if (Astro.request.method === 'POST') {
     successMsg = 'Linderos guardados.'
   }
 
+  if (action === 'guardar_ddjj') {
+    if (inmueble) {
+      await db.from('inmuebles').update({
+        agua_corriente: form.get('agua_corriente') === 'on',
+        cloacas: form.get('cloacas') === 'on',
+        personas_habitan: parseInt(form.get('personas_habitan') as string) || null,
+        ultimo_anio_pago_impuesto: form.get('ultimo_anio_pago_impuesto') || null,
+        receptoria: form.get('receptoria') || null,
+      }).eq('expediente_id', id)
+    }
+
+    for (const ec of (expComitentes ?? []) as any[]) {
+      await db.from('comitentes').update({
+        nacionalidad: form.get(`com_${ec.id}_nacionalidad`) || null,
+        tipo_documento: form.get(`com_${ec.id}_tipo_documento`) || 'DNI',
+        domicilio_calle: form.get(`com_${ec.id}_domicilio_calle`) || null,
+        domicilio_numero: form.get(`com_${ec.id}_domicilio_numero`) || null,
+        domicilio_localidad: form.get(`com_${ec.id}_domicilio_localidad`) || null,
+        domicilio_provincia: form.get(`com_${ec.id}_domicilio_provincia`) || null,
+      }).eq('id', ec.comitente_id)
+
+      await db.from('exp_comitentes').update({
+        porcentaje_condominio: parseFloat(form.get(`com_${ec.id}_porcentaje`) as string) || 100,
+        ausente_pais: form.get(`com_${ec.id}_ausente`) === 'on',
+      }).eq('id', ec.id)
+    }
+    successMsg = 'Declaración Jurada guardada.'
+  }
+
   if (action === 'agregar_comitente') {
     const comitenteId = form.get('comitente_id') as string
     const rol = form.get('rol') as string
@@ -456,6 +485,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
         { key: 'mensura',   label: '3. Mensura' },
         { key: 'testigos',  label: '4. Testigos' },
         { key: 'documentos',label: '5. Documentos' },
+        { key: 'ddjj',      label: '6. DDJJ' },
       ].map(t => (
         <a href={`/expedientes/${id}?tab=${t.key}`} class={`tab-btn ${activeTab === t.key ? 'active' : ''}`}>
           {t.label}
@@ -1197,6 +1227,115 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
             </div>
           )}
         </div>
+      </div>
+    )}
+
+    <!-- TAB 6: DDJJ -->
+    {activeTab === 'ddjj' && (
+      <div>
+        <h3 style="margin-bottom:0.25rem">Declaración Jurada — Formulario {inmueble?.tipo_inmueble === 'rural' ? 'SOR' : 'U'}</h3>
+        <p style="font-size:0.875rem;color:var(--color-text-secondary);margin-bottom:1.5rem">
+          Datos adicionales que pide Catastro para la Declaración Jurada, además de lo ya cargado en Inmueble y Comitente.
+        </p>
+
+        {!inmueble && (
+          <div class="alert alert-error" style="margin-bottom:1rem">Completá primero la Tab 2 Inmueble.</div>
+        )}
+
+        <form method="POST">
+          <input type="hidden" name="_action" value="guardar_ddjj" />
+          <input type="hidden" name="_tab" value="ddjj" />
+
+          <div class="section-label">Datos del inmueble</div>
+          <div class="form-grid form-grid-2" style="margin-bottom:1.25rem">
+            <div class="field">
+              <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer">
+                <input type="checkbox" name="agua_corriente" checked={(inmueble as any)?.agua_corriente === true} />
+                Agua corriente
+              </label>
+            </div>
+            <div class="field">
+              <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer">
+                <input type="checkbox" name="cloacas" checked={(inmueble as any)?.cloacas === true} />
+                Cloacas
+              </label>
+            </div>
+            <div class="field">
+              <label>Cantidad de personas que habitan la propiedad</label>
+              <input class="input" type="number" min="0" name="personas_habitan" value={(inmueble as any)?.personas_habitan ?? ''} />
+            </div>
+            <div class="field">
+              <label>Último año pagado de impuesto inmobiliario</label>
+              <input class="input" name="ultimo_anio_pago_impuesto" value={(inmueble as any)?.ultimo_anio_pago_impuesto ?? ''} />
+            </div>
+            <div class="field" style="grid-column:1/-1">
+              <label>Receptoría donde desea pagar el impuesto</label>
+              <input class="input" name="receptoria" value={(inmueble as any)?.receptoria ?? ''} />
+            </div>
+          </div>
+
+          <div class="section-label">Datos de los propietarios (Rubro 3)</div>
+          {(expComitentes ?? []).length === 0 && (
+            <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:1rem">
+              No hay comitentes cargados todavía — agregalos en la Tab 1 Comitente.
+            </p>
+          )}
+          {(expComitentes ?? []).map((ec: any) => {
+            const c = ec.comitentes
+            return (
+              <div class="poligono-card" style="margin-bottom:1rem">
+                <div class="poligono-card-header">
+                  <span class="poligono-card-label">{c?.apellido}, {c?.nombre} ({ec.rol})</span>
+                </div>
+                <div class="form-grid form-grid-2" style="margin-bottom:0.75rem">
+                  <div class="field">
+                    <label>Nacionalidad</label>
+                    <input class="input" name={`com_${ec.id}_nacionalidad`} value={c?.nacionalidad ?? ''} />
+                  </div>
+                  <div class="field">
+                    <label>Tipo de documento</label>
+                    <select class="input" name={`com_${ec.id}_tipo_documento`}>
+                      {['DNI', 'LC', 'LE'].map(t => (
+                        <option value={t} selected={(c?.tipo_documento ?? 'DNI') === t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>% de condominio</label>
+                    <input class="input" type="number" step="0.01" min="0" max="100"
+                      name={`com_${ec.id}_porcentaje`} value={ec.porcentaje_condominio ?? 100} />
+                  </div>
+                  <div class="field">
+                    <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;margin-top:1.6rem">
+                      <input type="checkbox" name={`com_${ec.id}_ausente`} checked={ec.ausente_pais === true} />
+                      Ausente del país
+                    </label>
+                  </div>
+                </div>
+                <div class="form-grid form-grid-2">
+                  <div class="field">
+                    <label>Domicilio — Calle</label>
+                    <input class="input" name={`com_${ec.id}_domicilio_calle`} value={c?.domicilio_calle ?? ''} />
+                  </div>
+                  <div class="field">
+                    <label>Domicilio — Número</label>
+                    <input class="input" name={`com_${ec.id}_domicilio_numero`} value={c?.domicilio_numero ?? ''} />
+                  </div>
+                  <div class="field">
+                    <label>Domicilio — Localidad</label>
+                    <input class="input" name={`com_${ec.id}_domicilio_localidad`} value={c?.domicilio_localidad ?? ''} />
+                  </div>
+                  <div class="field">
+                    <label>Domicilio — Provincia</label>
+                    <input class="input" name={`com_${ec.id}_domicilio_provincia`} value={c?.domicilio_provincia ?? ''} />
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+
+          <button type="submit" class="btn btn-primary" style="margin-top:0.5rem">Guardar Declaración Jurada</button>
+        </form>
       </div>
     )}
   </div>

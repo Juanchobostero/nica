@@ -455,29 +455,114 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const ubicacionCompleta = `${construirUbicacion(inmueble)}${inmueble?.departamento ? ', ' + inmueble.departamento : ''}`
 
   for (const tipo of tipos) {
-    const pdfDoc  = await PDFDocument.create()
-    const esApaisado = tipo === 'planilla_calculos'
-    const page    = pdfDoc.addPage(esApaisado ? [841.89, 595.28] : [595.28, 841.89]) // A4 (apaisado para la planilla, tabla ancha)
-    const font       = await pdfDoc.embedFont(StandardFonts.Helvetica)
-    const bold       = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
-    const boldItalic = await pdfDoc.embedFont(StandardFonts.HelveticaBoldOblique)
-    const { width, height } = page.getSize()
+    const esDDJJ = tipo === 'formulario_u' || tipo === 'formulario_sor' || tipo === 'formulario_e1'
+
+    let pdfDoc: PDFDocument
+    let page: PDFPage
+    let font: PDFFont
+    let bold: PDFFont
+    let boldItalic: PDFFont
+    let width: number, height: number
+    let yEncabezadoFin = 0
 
     const azul   = rgb(0.106, 0.180, 0.369)
     const gris   = rgb(0.42, 0.45, 0.50)
     const negro  = rgb(0.10, 0.10, 0.10)
 
-    // Encabezado tipo membrete (logo + datos del expediente)
-    const yEncabezadoFin = dibujarEncabezado(page, width, height, { font, bold }, {
-      objeto: tipoMensuraTexto,
-      comitente: nombreComitente,
-      ubicacion: ubicacionCompleta,
-      profesional: `Agrimensor ${nombreProfesional}`,
-      email: profile?.email,
-      telefono: profile?.telefono,
-    })
+    if (esDDJJ) {
+      // ── Declaraciones Juradas: PDF oficial de Catastro, sin membrete propio ──
+      const plantillaBytes = await readFile(join(process.cwd(), 'public', 'pdf-templates', `${tipo}.pdf`))
+      pdfDoc = await PDFDocument.load(plantillaBytes)
+      page = pdfDoc.getPages()[0]
+      font = await pdfDoc.embedFont(StandardFonts.Helvetica)
+      bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+      boldItalic = await pdfDoc.embedFont(StandardFonts.HelveticaBoldOblique)
+      ;({ width, height } = page.getSize())
+    } else {
+      pdfDoc = await PDFDocument.create()
+      const esApaisado = tipo === 'planilla_calculos'
+      page = pdfDoc.addPage(esApaisado ? [841.89, 595.28] : [595.28, 841.89]) // A4 (apaisado para la planilla, tabla ancha)
+      font = await pdfDoc.embedFont(StandardFonts.Helvetica)
+      bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+      boldItalic = await pdfDoc.embedFont(StandardFonts.HelveticaBoldOblique)
+      ;({ width, height } = page.getSize())
 
-    if (tipo === 'caratula') {
+      // Encabezado tipo membrete (logo + datos del expediente)
+      yEncabezadoFin = dibujarEncabezado(page, width, height, { font, bold }, {
+        objeto: tipoMensuraTexto,
+        comitente: nombreComitente,
+        ubicacion: ubicacionCompleta,
+        profesional: `Agrimensor ${nombreProfesional}`,
+        email: profile?.email,
+        telefono: profile?.telefono,
+      })
+    }
+
+    if (tipo === 'formulario_u') {
+      // ── Formulario U — Declaración Jurada (Inmueble Urbano) ─────────────
+      // Coordenadas medidas contra public/pdf-templates/formulario_u.pdf (612x1008pt).
+      const f = 8
+      const marcar = (valor: boolean | null | undefined, xSi: number, xNo: number, y: number) => {
+        page.drawText('X', { x: valor ? xSi : xNo, y, size: f, font: bold, color: negro })
+      }
+      page.drawText(inmueble?.localidad ?? '', { x: 472, y: 855, size: f, font, color: negro })
+
+      // Inc. a) Designación según título
+      page.drawText(inmueble?.calle_frente ?? '', { x: 155, y: 767, size: f, font, color: negro })
+      page.drawText(inmueble?.fraccion ?? '', { x: 428, y: 767, size: f, font, color: negro })
+      page.drawText(inmueble?.manzana ?? '', { x: 468, y: 767, size: f, font, color: negro })
+      page.drawText(inmueble?.parcela ?? '', { x: 513, y: 767, size: f, font, color: negro })
+
+      // Inc. c) Registro de la Propiedad
+      page.drawText((inmueble as any)?.registro_tomo ?? '', { x: 178, y: 695, size: f, font, color: negro })
+      page.drawText((inmueble as any)?.registro_folio ?? '', { x: 220, y: 695, size: f, font, color: negro })
+      page.drawText((inmueble as any)?.registro_anio ?? '', { x: 302, y: 695, size: f, font, color: negro })
+
+      // Inc. e) Superficie del terreno (según plano de mensura, ya autocalculada)
+      page.drawText(poligono?.superficie_m2 != null ? String(poligono.superficie_m2) : '', { x: 340, y: 667, size: f, font, color: negro })
+
+      // Inc. f) Otras informaciones adicionales
+      marcar((inmueble as any)?.agua_corriente, 253, 271, 560)
+      marcar((inmueble as any)?.cloacas, 335, 350, 560)
+      page.drawText((inmueble as any)?.personas_habitan != null ? String((inmueble as any).personas_habitan) : '', { x: 365, y: 540, size: f, font, color: negro })
+      page.drawText((inmueble as any)?.ultimo_anio_pago_impuesto ?? '', { x: 375, y: 520, size: f, font, color: negro })
+      page.drawText((inmueble as any)?.receptoria ?? '', { x: 393, y: 496, size: f, font, color: negro })
+
+      // Rubro 3 — Datos del propietario (hasta 2 filas, a y b — el formulario no admite más sin Anexo A)
+      const filasY = [468, 400]
+      ;(expComitentes ?? []).slice(0, 2).forEach((ec: any, i: number) => {
+        const c = ec.comitentes
+        const y = filasY[i]
+        page.drawText(`${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase(), { x: 158, y, size: f, font, color: negro })
+        page.drawText(ec.porcentaje_condominio != null ? String(ec.porcentaje_condominio) : '', { x: 428, y, size: f, font, color: negro })
+        page.drawText(c?.tipo_documento ?? 'DNI', { x: 460, y, size: f, font, color: negro })
+        page.drawText(c?.dni ?? '', { x: 493, y, size: f, font, color: negro })
+        page.drawText(c?.domicilio_calle ?? '', { x: 158, y: y - 16, size: f, font, color: negro })
+        page.drawText(c?.domicilio_numero ?? '', { x: 283, y: y - 16, size: f, font, color: negro })
+        page.drawText(c?.domicilio_localidad ?? '', { x: 320, y: y - 16, size: f, font, color: negro })
+        page.drawText(c?.domicilio_provincia ?? '', { x: 465, y: y - 16, size: f, font, color: negro })
+        marcar(ec.ausente_pais, 548, 563, y - 16)
+      })
+
+      page.drawText(inmueble?.propietario_anterior ?? '', { x: 285, y: 348, size: f, font, color: negro })
+
+      // Página 3: declaración jurada (comitente principal)
+      const paginas = pdfDoc.getPages()
+      if (paginas[2]) {
+        const p3 = paginas[2]
+        const declarante = expComitentes?.[0]?.comitentes as any
+        p3.drawText(declarante ? `${declarante.nombre ?? ''} ${declarante.apellido ?? ''}`.toUpperCase() : '', { x: 195, y: 833, size: f, font, color: negro })
+        p3.drawText(declarante?.nacionalidad ?? '', { x: 383, y: 833, size: f, font, color: negro })
+        p3.drawText(declarante?.dni ?? '', { x: 268, y: 818, size: f, font, color: negro })
+        p3.drawText(rolComitente ?? '', { x: 178, y: 803, size: f, font, color: negro })
+        const fechaHoy = new Date().toLocaleDateString('es-AR', { day: 'numeric', month: 'long', year: 'numeric' })
+        p3.drawText(fechaHoy, { x: 60, y: 690, size: f, font, color: negro })
+        if (declarante) {
+          p3.drawText(`${declarante.nombre ?? ''} ${declarante.apellido ?? ''}`.toUpperCase(), { x: 480, y: 598, size: f, font, color: negro })
+        }
+      }
+
+    } else if (tipo === 'caratula') {
       // ── Carátula con datos reales del expediente ──────────────────────
       const tituloLineas = partirEnLineas(tipoMensuraTexto, width - 100, 22, boldItalic)
       let yTitulo = yEncabezadoFin - 60
@@ -1128,14 +1213,17 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       )
     }
 
-    // Pie de página (en todas las páginas del documento, por si es multipágina)
-    pdfDoc.getPages().forEach(p => {
-      const { width: pw } = p.getSize()
-      p.drawLine({
-        start: { x: 40, y: 60 }, end: { x: pw - 40, y: 60 },
-        thickness: 1, color: rgb(0.88, 0.91, 0.95),
+    // Pie de página (en todas las páginas del documento, por si es multipágina).
+    // No aplica a las DDJJ: son el PDF oficial de Catastro tal cual, sin nada de NICA encima.
+    if (!esDDJJ) {
+      pdfDoc.getPages().forEach(p => {
+        const { width: pw } = p.getSize()
+        p.drawLine({
+          start: { x: 40, y: 60 }, end: { x: pw - 40, y: 60 },
+          thickness: 1, color: rgb(0.88, 0.91, 0.95),
+        })
       })
-    })
+    }
 
     const pdfBytes = await pdfDoc.save()
     const storagePath = `${expedienteId}/${tipo}_${Date.now()}.pdf`

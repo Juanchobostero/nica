@@ -41,7 +41,15 @@ create table if not exists comitentes (
   email       text,
   dni_scan_path        text,
   dni_scan_path_dorso  text,
-  created_at  timestamptz default now()
+  created_at  timestamptz default now(),
+  -- Para Declaraciones Juradas (Formulario U / SOR): datos de la persona, se
+  -- reusan solos entre expedientes distintos del mismo comitente.
+  nacionalidad          text,
+  tipo_documento        text default 'DNI', -- 'DNI' | 'LC' | 'LE'
+  domicilio_calle       text,
+  domicilio_numero      text,
+  domicilio_localidad   text,
+  domicilio_provincia   text
 );
 
 alter table comitentes enable row level security;
@@ -106,7 +114,11 @@ create table if not exists exp_comitentes (
   expediente_id   uuid references expedientes(id) on delete cascade not null,
   comitente_id    uuid references comitentes(id) on delete cascade not null,
   rol             text default 'titular' check (rol in ('titular','apoderado','heredero','poseedor')),
-  orden           int default 1
+  orden           int default 1,
+  -- Para Declaraciones Juradas: propios de esta relación expediente↔comitente,
+  -- no de la persona en general (el mismo comitente puede tener % distinto en otro expediente).
+  porcentaje_condominio  numeric(5,2) default 100,
+  ausente_pais           boolean default false
 );
 
 alter table exp_comitentes enable row level security;
@@ -178,7 +190,13 @@ create table if not exists inmuebles (
   tipo_inmueble                 text check (tipo_inmueble in ('urbano','rural')),
   tipo_inscripcion_registro     text default 'matricula',  -- 'matricula' | 'tomo'
   registro_finca                text,                      -- para inscripción por tomo (anterior al 87)
-  inscripcion_mayor_extension   boolean default false      -- inscripto en mayor extensión
+  inscripcion_mayor_extension   boolean default false,     -- inscripto en mayor extensión
+  -- Para Declaraciones Juradas (Formulario U / SOR)
+  agua_corriente                 boolean,
+  cloacas                        boolean,
+  personas_habitan               int,
+  ultimo_anio_pago_impuesto      text,
+  receptoria                     text
 );
 
 alter table inmuebles enable row level security;
