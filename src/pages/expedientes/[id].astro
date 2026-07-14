@@ -438,6 +438,9 @@ const datosValidacion = {
   linderosCompletos: !!(linderos?.norte_mensura && linderos?.sur_mensura && linderos?.este_mensura && linderos?.oeste_mensura),
   cantLados: (poligono as any)?.lados?.length ?? 0,
   cantAngulos: (poligono as any)?.angulos?.length ?? 0,
+  inmuebleEsUrbano: (inmueble as any)?.tipo_inmueble === 'urbano',
+  comitenteNacionalidad: !!(primerComitente as any)?.nacionalidad,
+  comitenteDomicilio: !!((primerComitente as any)?.domicilio_calle && (primerComitente as any)?.domicilio_localidad),
 }
 
 // Tab 3 Mensura: un expediente puede tener varios polígonos (división en parcelas).
@@ -475,6 +478,9 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
 
   {ok      && <div class="alert alert-success" style="margin-bottom:1rem">Guardado correctamente.</div>}
   {warn === 'sin_seleccion' && <div class="alert alert-error" style="margin-bottom:1rem">Seleccioná al menos un documento para generar.</div>}
+  {warn === 'ddjj_no_implementada' && <div class="alert alert-error" style="margin-bottom:1rem">Ese formulario de Declaración Jurada todavía no está implementado.</div>}
+  {warn === 'ddjj_falta_inmueble' && <div class="alert alert-error" style="margin-bottom:1rem">Completá primero la Tab 2 Inmueble antes de generar la Declaración Jurada.</div>}
+  {warn === 'ddjj_tipo_incorrecto' && <div class="alert alert-error" style="margin-bottom:1rem">El Formulario U es solo para inmuebles urbanos — este expediente está cargado como rural.</div>}
   {errorMsg && <div class="alert alert-error" style="margin-bottom:1rem">{errorMsg}</div>}
 
   <div class="card">
@@ -484,8 +490,8 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
         { key: 'inmueble',  label: '2. Inmueble' },
         { key: 'mensura',   label: '3. Mensura' },
         { key: 'testigos',  label: '4. Testigos' },
-        { key: 'documentos',label: '5. Documentos' },
-        { key: 'ddjj',      label: '6. DDJJ' },
+        { key: 'ddjj',      label: '5. DDJJ' },
+        { key: 'documentos',label: '6. Documentos' },
       ].map(t => (
         <a href={`/expedientes/${id}?tab=${t.key}`} class={`tab-btn ${activeTab === t.key ? 'active' : ''}`}>
           {t.label}
@@ -1159,16 +1165,27 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
 
           <div class="section-label">Declaraciones juradas por parcela</div>
           <div style="display:flex;flex-direction:column;gap:0.625rem;margin-bottom:1.5rem">
-            {[
-              { value: 'formulario_u',   label: 'Formulario "U" — Inmueble urbano' },
-              { value: 'formulario_sor', label: 'Formulario "SOR" — Suburbano o rural' },
-              { value: 'formulario_e1',  label: 'Formulario "E1" — Con construcciones' },
-            ].map(doc => (
+            {!inmueble && (
+              <p style="font-size:0.85rem;color:var(--color-text-secondary)">
+                Completá primero la Tab 2 Inmueble — el tipo de formulario (Urbano o Rural) se determina según el tipo de inmueble cargado ahí.
+              </p>
+            )}
+            {inmueble && (inmueble as any).tipo_inmueble !== 'rural' && (
               <label style="display:flex;align-items:center;gap:10px;font-weight:400;cursor:pointer">
-                <input type="checkbox" name="tipos[]" value={doc.value} />
-                {doc.label}
+                <input type="checkbox" name="tipos[]" value="formulario_u" />
+                Formulario "U" — Declaración Jurada (Inmueble urbano)
               </label>
-            ))}
+            )}
+            {inmueble && (inmueble as any).tipo_inmueble === 'rural' && (
+              <label style="display:flex;align-items:center;gap:10px;font-weight:400;color:var(--color-text-secondary);cursor:not-allowed">
+                <input type="checkbox" disabled />
+                Formulario "SOR" — Suburbano o rural <em>(todavía no implementado)</em>
+              </label>
+            )}
+            <label style="display:flex;align-items:center;gap:10px;font-weight:400;color:var(--color-text-secondary);cursor:not-allowed">
+              <input type="checkbox" disabled />
+              Formulario "E1" — Con construcciones <em>(todavía no implementado)</em>
+            </label>
           </div>
 
           <button type="submit" class="btn btn-primary">Generar seleccionados</button>
@@ -2145,6 +2162,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     acta_ausencia_linderos: 'Acta de Ausencia de Linderos y Autoridades',
     memoria_mensura: 'Memoria de Mensura',
     planilla_calculos: 'Planilla de Cálculos',
+    formulario_u: 'Formulario "U" — Declaración Jurada',
   }
 
   const datosValidacion = window.datosValidacion || {}
@@ -2210,6 +2228,15 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
       { ok: datosValidacion.cantLados > 0, label: 'Lados del polígono cargados (Tab 3 Mensura)' },
       { ok: datosValidacion.cantAngulos > 0, label: 'Ángulos del polígono cargados (Tab 3 Mensura)' },
       { ok: datosValidacion.superficie, label: 'Superficie del polígono (Tab 3 Mensura)' },
+    ],
+    formulario_u: [
+      { ok: datosValidacion.inmuebleEsUrbano, label: 'Inmueble cargado como "Urbano" (Tab 2 Inmueble)' },
+      { ok: datosValidacion.tieneComitente, label: 'Comitente cargado (Tab 1 Comitente)' },
+      { ok: datosValidacion.comitenteDni, label: 'DNI del comitente (Tab 1 Comitente)' },
+      { ok: datosValidacion.inmuebleLocalidad, label: 'Localidad del inmueble (Tab 2 Inmueble)' },
+      { ok: datosValidacion.superficie, label: 'Superficie del polígono (Tab 3 Mensura)' },
+      { ok: datosValidacion.comitenteNacionalidad, label: 'Nacionalidad del comitente (Tab 5 DDJJ)' },
+      { ok: datosValidacion.comitenteDomicilio, label: 'Domicilio del comitente (Tab 5 DDJJ)' },
     ],
   }
 
@@ -2280,7 +2307,15 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
       })
         .then(function(res) { return res.json() })
         .then(function(data) {
-          if (!data.ok) { alert('No se pudieron generar los documentos.'); return }
+          if (!data.ok) {
+            const mensajesGenerar = {
+              ddjj_no_implementada: 'Ese formulario de Declaración Jurada todavía no está implementado.',
+              ddjj_falta_inmueble: 'Completá primero la Tab 2 Inmueble antes de generar la Declaración Jurada.',
+              ddjj_tipo_incorrecto: 'El Formulario U es solo para inmuebles urbanos — este expediente está cargado como rural.',
+            }
+            alert(mensajesGenerar[data.warn] || 'No se pudieron generar los documentos.')
+            return
+          }
           const tbody = document.getElementById('documentos_tbody')
           const vacio = document.getElementById('documentos_vacio')
           if (vacio) vacio.remove()

@@ -394,6 +394,17 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       : redirect(`/expedientes/${expedienteId}?tab=documentos&warn=sin_seleccion`)
   }
 
+  // Formulario SOR y E1 todavía no tienen su propio dibujo en el generador (ver formulario_u
+  // más abajo) — sin este freno caerían en la rama placeholder genérica y saldrían con texto
+  // invisible. La UI de la Tab Documentos ya no ofrece tildarlos, pero se valida también acá
+  // por si llega una petición directa.
+  const DDJJ_NO_IMPLEMENTADAS = new Set(['formulario_sor', 'formulario_e1'])
+  if (tipos.some(t => DDJJ_NO_IMPLEMENTADAS.has(t))) {
+    return isAjax
+      ? new Response(JSON.stringify({ ok: false, warn: 'ddjj_no_implementada' }), { status: 400 })
+      : redirect(`/expedientes/${expedienteId}?tab=documentos&warn=ddjj_no_implementada`)
+  }
+
   const documentosCreados: { id: string; tipo_documento: string; storage_path: string | null; estado: string; generado_at: string }[] = []
 
   const { data: exp } = await db
@@ -404,6 +415,22 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
   const { data: inmueble } = await db
     .from('inmuebles').select('*').eq('expediente_id', expedienteId).maybeSingle()
+
+  // El Formulario U es solo para inmuebles urbanos y necesita que la Tab 2 Inmueble ya
+  // esté cargada (usa localidad, calle, registro, etc.) — sin esto el PDF sale con
+  // casilleros vacíos sin ninguna pista de por qué.
+  if (tipos.includes('formulario_u')) {
+    if (!inmueble) {
+      return isAjax
+        ? new Response(JSON.stringify({ ok: false, warn: 'ddjj_falta_inmueble' }), { status: 400 })
+        : redirect(`/expedientes/${expedienteId}?tab=documentos&warn=ddjj_falta_inmueble`)
+    }
+    if ((inmueble as any).tipo_inmueble === 'rural') {
+      return isAjax
+        ? new Response(JSON.stringify({ ok: false, warn: 'ddjj_tipo_incorrecto' }), { status: 400 })
+        : redirect(`/expedientes/${expedienteId}?tab=documentos&warn=ddjj_tipo_incorrecto`)
+    }
+  }
 
   // Un expediente puede tener varios polígonos (división en parcelas). Memoria de
   // Mensura y Planilla de Cálculos iteran todos; el resto de los documentos (Carátula,
@@ -431,7 +458,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
     .eq('expediente_id', expedienteId).maybeSingle()
 
   const { data: expComitentes } = await db
-    .from('exp_comitentes').select('orden, rol, comitentes(nombre, apellido, dni, telefono, email, domicilio, dni_scan_path, dni_scan_path_dorso)')
+    .from('exp_comitentes').select('orden, rol, porcentaje_condominio, ausente_pais, comitentes(nombre, apellido, dni, telefono, email, domicilio, dni_scan_path, dni_scan_path_dorso, nacionalidad, tipo_documento, domicilio_calle, domicilio_numero, domicilio_localidad, domicilio_provincia)')
     .eq('expediente_id', expedienteId).order('orden')
 
   const { data: expTestigos } = await db
@@ -501,64 +528,78 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
     if (tipo === 'formulario_u') {
       // ── Formulario U — Declaración Jurada (Inmueble Urbano) ─────────────
       // Coordenadas medidas contra public/pdf-templates/formulario_u.pdf (612x1008pt).
+      // La plantilla ya viene limpiada (ver .tmp_clean_template.cjs / historial): las marcas de
+      // referencia y el texto de ejemplo que traía originalmente el PDF de Catastro se taparon
+      // una sola vez, a nivel de archivo — acá simplemente se escribe encima, igual que en el
+      // resto de los documentos.
       const f = 8
-      const marcar = (valor: boolean | null | undefined, xSi: number, xNo: number, y: number) => {
-        page.drawText('X', { x: valor ? xSi : xNo, y, size: f, font: bold, color: negro })
+      const marcar = (valor: boolean | null | undefined, xSi: number, xNo: number, y: number, size = f) => {
+        page.drawText('X', { x: valor ? xSi : xNo, y, size, font: bold, color: negro })
       }
-      page.drawText(inmueble?.localidad ?? '', { x: 472, y: 855, size: f, font, color: negro })
+      const campo = (valor: string, x: number, y: number) => {
+        page.drawText(valor, { x, y, size: f, font, color: negro })
+      }
+
+      campo(inmueble?.localidad ?? '', 430, 830)
 
       // Inc. a) Designación según título
-      page.drawText(inmueble?.calle_frente ?? '', { x: 155, y: 767, size: f, font, color: negro })
-      page.drawText(inmueble?.fraccion ?? '', { x: 428, y: 767, size: f, font, color: negro })
-      page.drawText(inmueble?.manzana ?? '', { x: 468, y: 767, size: f, font, color: negro })
-      page.drawText(inmueble?.parcela ?? '', { x: 513, y: 767, size: f, font, color: negro })
+      campo(inmueble?.calle_frente ?? '', 225, 776)
+      campo(inmueble?.fraccion ?? '', 366, 765)
+      campo(inmueble?.manzana ?? '', 396, 765)
+      campo(inmueble?.parcela ?? '', 443, 765)
 
       // Inc. c) Registro de la Propiedad
-      page.drawText((inmueble as any)?.registro_tomo ?? '', { x: 178, y: 695, size: f, font, color: negro })
-      page.drawText((inmueble as any)?.registro_folio ?? '', { x: 220, y: 695, size: f, font, color: negro })
-      page.drawText((inmueble as any)?.registro_anio ?? '', { x: 302, y: 695, size: f, font, color: negro })
+      campo((inmueble as any)?.registro_tomo ?? '', 100, 694)
+      campo((inmueble as any)?.registro_folio ?? '', 155, 694)
+      campo((inmueble as any)?.registro_anio ?? '', 275, 694)
 
       // Inc. e) Superficie del terreno (según plano de mensura, ya autocalculada)
-      page.drawText(poligono?.superficie_m2 != null ? String(poligono.superficie_m2) : '', { x: 340, y: 667, size: f, font, color: negro })
+      campo(poligono?.superficie_m2 != null ? Number(poligono.superficie_m2).toFixed(2) : '', 290, 637)
 
       // Inc. f) Otras informaciones adicionales
-      marcar((inmueble as any)?.agua_corriente, 253, 271, 560)
-      marcar((inmueble as any)?.cloacas, 335, 350, 560)
-      page.drawText((inmueble as any)?.personas_habitan != null ? String((inmueble as any).personas_habitan) : '', { x: 365, y: 540, size: f, font, color: negro })
-      page.drawText((inmueble as any)?.ultimo_anio_pago_impuesto ?? '', { x: 375, y: 520, size: f, font, color: negro })
-      page.drawText((inmueble as any)?.receptoria ?? '', { x: 393, y: 496, size: f, font, color: negro })
+      marcar((inmueble as any)?.agua_corriente, 149, 160, 563, 6)
+      marcar((inmueble as any)?.cloacas, 269, 281, 563, 6)
+      campo((inmueble as any)?.personas_habitan != null ? String((inmueble as any).personas_habitan) : '', 270, 544)
+      campo((inmueble as any)?.ultimo_anio_pago_impuesto ?? '', 258, 523)
+      campo((inmueble as any)?.receptoria ?? '', 235, 487)
 
       // Rubro 3 — Datos del propietario (hasta 2 filas, a y b — el formulario no admite más sin Anexo A)
-      const filasY = [468, 400]
+      const filasY = [435, 377]
       ;(expComitentes ?? []).slice(0, 2).forEach((ec: any, i: number) => {
         const c = ec.comitentes
         const y = filasY[i]
-        page.drawText(`${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase(), { x: 158, y, size: f, font, color: negro })
-        page.drawText(ec.porcentaje_condominio != null ? String(ec.porcentaje_condominio) : '', { x: 428, y, size: f, font, color: negro })
-        page.drawText(c?.tipo_documento ?? 'DNI', { x: 460, y, size: f, font, color: negro })
-        page.drawText(c?.dni ?? '', { x: 493, y, size: f, font, color: negro })
-        page.drawText(c?.domicilio_calle ?? '', { x: 158, y: y - 16, size: f, font, color: negro })
-        page.drawText(c?.domicilio_numero ?? '', { x: 283, y: y - 16, size: f, font, color: negro })
-        page.drawText(c?.domicilio_localidad ?? '', { x: 320, y: y - 16, size: f, font, color: negro })
-        page.drawText(c?.domicilio_provincia ?? '', { x: 465, y: y - 16, size: f, font, color: negro })
-        marcar(ec.ausente_pais, 548, 563, y - 16)
+        campo(`${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase(), 182, y)
+        campo(ec.porcentaje_condominio != null ? String(ec.porcentaje_condominio) : '', 386, y)
+        campo(c?.tipo_documento ?? 'DNI', 429, y)
+        campo(c?.dni ?? '', 460, y)
+        campo(c?.domicilio_calle ?? '', 152, y - 29)
+        campo(c?.domicilio_numero ?? '', 242, y - 29)
+        campo(c?.domicilio_localidad ?? '', 303, y - 29)
+        campo(c?.domicilio_provincia ?? '', 459, y - 29)
+        marcar(ec.ausente_pais, 517, 529, y - 29)
       })
 
-      page.drawText(inmueble?.propietario_anterior ?? '', { x: 285, y: 348, size: f, font, color: negro })
+      campo(inmueble?.propietario_anterior ?? '', 260, 316)
 
-      // Página 3: declaración jurada (comitente principal)
+      // Página 3: declaración jurada (comitente principal). El párrafo original de la plantilla
+      // (que traía una oración de ejemplo completa con nombre y DNI de otra persona) se borró
+      // al limpiar el archivo — acá se escribe directamente el texto real, en el mismo lugar.
       const paginas = pdfDoc.getPages()
       if (paginas[2]) {
         const p3 = paginas[2]
         const declarante = expComitentes?.[0]?.comitentes as any
-        p3.drawText(declarante ? `${declarante.nombre ?? ''} ${declarante.apellido ?? ''}`.toUpperCase() : '', { x: 195, y: 833, size: f, font, color: negro })
-        p3.drawText(declarante?.nacionalidad ?? '', { x: 383, y: 833, size: f, font, color: negro })
-        p3.drawText(declarante?.dni ?? '', { x: 268, y: 818, size: f, font, color: negro })
-        p3.drawText(rolComitente ?? '', { x: 178, y: 803, size: f, font, color: negro })
+        const nombreDeclarante = declarante ? `${declarante.nombre ?? ''} ${declarante.apellido ?? ''}`.toUpperCase() : ''
+        const parrafo = `El que suscribe ${nombreDeclarante} nacionalidad ${declarante?.nacionalidad ?? ''} documento de identidad ${declarante?.tipo_documento ?? 'DNI'} Nº ${declarante?.dni ?? ''} en su carácter de ${(rolComitente ?? '').toUpperCase()} declara bajo juramento que es verdad toda información suministrada por el y transcripta en el presente formulario y que tiene conocimiento de las penalidades establecidas por omision, falsedad y toda transgresión a las disposiciones legales.`
+
+        const lineasParrafo = partirEnLineas(parrafo, 500, f, font)
+        lineasParrafo.slice(0, 4).forEach((linea, i) => {
+          p3.drawText(linea, { x: 59, y: 825 - i * 12.5, size: f, font, color: negro })
+        })
+
         const fechaHoy = new Date().toLocaleDateString('es-AR', { day: 'numeric', month: 'long', year: 'numeric' })
-        p3.drawText(fechaHoy, { x: 60, y: 690, size: f, font, color: negro })
+        p3.drawText(fechaHoy, { x: 60, y: 745, size: f, font, color: negro })
         if (declarante) {
-          p3.drawText(`${declarante.nombre ?? ''} ${declarante.apellido ?? ''}`.toUpperCase(), { x: 480, y: 598, size: f, font, color: negro })
+          p3.drawText(nombreDeclarante, { x: 390, y: 683, size: f, font, color: negro })
         }
       }
 
