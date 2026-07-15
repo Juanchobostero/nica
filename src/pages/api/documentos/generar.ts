@@ -532,6 +532,10 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       // referencia y el texto de ejemplo que traía originalmente el PDF de Catastro se taparon
       // una sola vez, a nivel de archivo — acá simplemente se escribe encima, igual que en el
       // resto de los documentos.
+      // La plantilla trae 3 páginas, pero la del medio no tiene contenido propio (sin texto,
+      // solo una línea suelta) — se descarta acá para no entregar una hoja vacía suelta.
+      // Después de esto la página de RUBRO 4 / declaración jurada pasa a ser la índice 1.
+      pdfDoc.removePage(1)
       const f = 8
       const marcar = (valor: boolean | null | undefined, xSi: number, xNo: number, y: number, size = f) => {
         page.drawText('X', { x: valor ? xSi : xNo, y, size, font: bold, color: negro })
@@ -581,23 +585,26 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
       campo(inmueble?.propietario_anterior ?? '', 260, 316)
 
-      // Página 3: declaración jurada (comitente principal). El párrafo original de la plantilla
-      // (que traía una oración de ejemplo completa con nombre y DNI de otra persona) se borró
-      // al limpiar el archivo — acá se escribe directamente el texto real, en el mismo lugar.
+      // Última página (RUBRO 4 + declaración jurada; índice 1 tras sacar la hoja en blanco del
+      // medio). El párrafo original de la plantilla (que traía una oración de ejemplo completa
+      // con nombre y DNI de otra persona) se borró al limpiar el archivo — acá se escribe
+      // directamente el texto real, en el mismo lugar.
       const paginas = pdfDoc.getPages()
-      if (paginas[2]) {
-        const p3 = paginas[2]
+      if (paginas[1]) {
+        const p3 = paginas[1]
         const declarante = expComitentes?.[0]?.comitentes as any
         const nombreDeclarante = declarante ? `${declarante.nombre ?? ''} ${declarante.apellido ?? ''}`.toUpperCase() : ''
         const parrafo = `El que suscribe ${nombreDeclarante} nacionalidad ${declarante?.nacionalidad ?? ''} documento de identidad ${declarante?.tipo_documento ?? 'DNI'} Nº ${declarante?.dni ?? ''} en su carácter de ${(rolComitente ?? '').toUpperCase()} declara bajo juramento que es verdad toda información suministrada por el y transcripta en el presente formulario y que tiene conocimiento de las penalidades establecidas por omision, falsedad y toda transgresión a las disposiciones legales.`
 
-        const lineasParrafo = partirEnLineas(parrafo, 500, f, font)
+        // El recuadro de la declaración va de x≈55 a x≈539 (medido en el content stream del PDF)
+        // — con ancho 500 el párrafo se pasaba del borde derecho de la caja en las líneas largas.
+        const lineasParrafo = partirEnLineas(parrafo, 465, f, font)
         lineasParrafo.slice(0, 4).forEach((linea, i) => {
-          p3.drawText(linea, { x: 59, y: 825 - i * 12.5, size: f, font, color: negro })
+          p3.drawText(linea, { x: 62, y: 825 - i * 12.5, size: f, font, color: negro })
         })
 
         const fechaHoy = new Date().toLocaleDateString('es-AR', { day: 'numeric', month: 'long', year: 'numeric' })
-        p3.drawText(fechaHoy, { x: 60, y: 745, size: f, font, color: negro })
+        p3.drawText(fechaHoy, { x: 62, y: 745, size: f, font, color: negro })
         if (declarante) {
           p3.drawText(nombreDeclarante, { x: 390, y: 683, size: f, font, color: negro })
         }
