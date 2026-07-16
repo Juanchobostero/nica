@@ -534,31 +534,53 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       // resto de los documentos.
       // La plantilla trae 3 páginas, pero la del medio no tiene contenido propio (sin texto,
       // solo una línea suelta) — se descarta acá para no entregar una hoja vacía suelta.
-      // Después de esto la página de RUBRO 4 / declaración jurada pasa a ser la índice 1.
+      // OJO: pdf-lib cachea el array de getPages() y removePage() no invalida ese caché (ver
+      // node_modules/pdf-lib/cjs/api/PDFDocument.js — insertPage sí llama pageCache.invalidate(),
+      // removePage no). Como más arriba ya se llamó pdfDoc.getPages()[0] para la variable `page`,
+      // cualquier getPages() posterior devuelve el array viejo de 3 páginas (con la del medio
+      // todavía en el índice 1, aunque ya esté desconectada del árbol real del PDF). Por eso acá
+      // se guarda la referencia a la página de RUBRO 4 (índice 2 en el array original) ANTES de
+      // remover, en vez de volver a pedir getPages() después y asumir que se reindexó.
+      const paginaDeclaracion = pdfDoc.getPages()[2]
       pdfDoc.removePage(1)
       const f = 8
       const marcar = (valor: boolean | null | undefined, xSi: number, xNo: number, y: number, size = f) => {
         page.drawText('X', { x: valor ? xSi : xNo, y, size, font: bold, color: negro })
       }
+      // En negrita: para que los datos cargados desde el expediente se distingan de un
+      // vistazo del texto impreso de la plantilla (que va en fuente regular).
       const campo = (valor: string, x: number, y: number) => {
-        page.drawText(valor, { x, y, size: f, font, color: negro })
+        page.drawText(valor, { x, y, size: f, font: bold, color: negro })
       }
 
-      campo(inmueble?.localidad ?? '', 430, 830)
+      // La plantilla trae "LOCALIDAD" impreso en rojo, pegado contra los 3 casilleros de
+      // código de la derecha — con localidades largas el valor queda muy apretado. Se tapa
+      // con un rectángulo blanco y se redibuja como "LOCALIDAD: valor" en un solo texto,
+      // corrido a la izquierda para tener más lugar, con su propia línea debajo.
+      page.drawRectangle({ x: 170, y: 820, width: 318, height: 22, color: rgb(1, 1, 1) })
+      page.drawLine({ start: { x: 182, y: 826 }, end: { x: 486, y: 826 }, thickness: 1, color: negro })
+      campo(`LOCALIDAD: ${inmueble?.localidad ?? ''}`, 182, 830)
 
-      // Inc. a) Designación según título
-      campo(inmueble?.calle_frente ?? '', 225, 776)
-      campo(inmueble?.fraccion ?? '', 366, 765)
-      campo(inmueble?.manzana ?? '', 396, 765)
-      campo(inmueble?.parcela ?? '', 443, 765)
+      // Inc. a) Designación según título — "UBICACIÓN: Calle" es la fila de encabezado (con
+      // NUMERO/CHACRA/FRAC/MANZANA/LOTE/P.HORIZONT como títulos de columna); los valores van
+      // en la fila de abajo, dentro del recuadro. Esa fila además viene con un tramo borrado
+      // en su línea doble inferior (misma falla de limpieza que la página de la declaración,
+      // ver más abajo) — se repara acá.
+      page.drawLine({ start: { x: 178, y: 765 }, end: { x: 212, y: 765 }, thickness: 1.5, color: negro })
+      campo(inmueble?.calle_frente ?? '', 225, 768)
+      campo(inmueble?.fraccion ?? '', 366, 768)
+      campo(inmueble?.manzana ?? '', 396, 768)
+      campo(inmueble?.parcela ?? '', 443, 768)
 
       // Inc. c) Registro de la Propiedad
       campo((inmueble as any)?.registro_tomo ?? '', 100, 694)
-      campo((inmueble as any)?.registro_folio ?? '', 155, 694)
+      // x=175 en vez de 155: la etiqueta "FOLIO" se parte en dos líneas ("FOLI" / "O") por lo
+      // angosto del casillero, y con 155 el valor quedaba pegado contra esa "O".
+      campo((inmueble as any)?.registro_folio ?? '', 175, 694)
       campo((inmueble as any)?.registro_anio ?? '', 275, 694)
 
       // Inc. e) Superficie del terreno (según plano de mensura, ya autocalculada)
-      campo(poligono?.superficie_m2 != null ? Number(poligono.superficie_m2).toFixed(2) : '', 290, 637)
+      campo(poligono?.superficie_m2 != null ? Number(poligono.superficie_m2).toFixed(2) : '', 217, 637)
 
       // Inc. f) Otras informaciones adicionales
       marcar((inmueble as any)?.agua_corriente, 149, 160, 563, 6)
@@ -585,13 +607,20 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
       campo(inmueble?.propietario_anterior ?? '', 260, 316)
 
-      // Última página (RUBRO 4 + declaración jurada; índice 1 tras sacar la hoja en blanco del
-      // medio). El párrafo original de la plantilla (que traía una oración de ejemplo completa
-      // con nombre y DNI de otra persona) se borró al limpiar el archivo — acá se escribe
-      // directamente el texto real, en el mismo lugar.
-      const paginas = pdfDoc.getPages()
-      if (paginas[1]) {
-        const p3 = paginas[1]
+      // Última página (RUBRO 4 + declaración jurada). El párrafo original de la plantilla (que
+      // traía una oración de ejemplo completa con nombre y DNI de otra persona) se borró al
+      // limpiar el archivo — acá se escribe directamente el texto real, en el mismo lugar.
+      if (paginaDeclaracion) {
+        const p3 = paginaDeclaracion
+
+        // Esta página ya venía con un hueco en el borde vertical izquierdo/derecho del
+        // recuadro, justo en la franja donde va el párrafo — falla preexistente de cuando
+        // se tapó con blanco el texto de ejemplo original al limpiar el archivo (ver
+        // comentario más arriba), no algo que rompe este código. Se redibuja acá para que
+        // el recuadro se vea continuo alrededor del párrafo.
+        p3.drawLine({ start: { x: 56, y: 775 }, end: { x: 56, y: 840 }, thickness: 2, color: negro })
+        p3.drawLine({ start: { x: 539, y: 775 }, end: { x: 539, y: 840 }, thickness: 2, color: negro })
+
         const declarante = expComitentes?.[0]?.comitentes as any
         const nombreDeclarante = declarante ? `${declarante.nombre ?? ''} ${declarante.apellido ?? ''}`.toUpperCase() : ''
         const parrafo = `El que suscribe ${nombreDeclarante} nacionalidad ${declarante?.nacionalidad ?? ''} documento de identidad ${declarante?.tipo_documento ?? 'DNI'} Nº ${declarante?.dni ?? ''} en su carácter de ${(rolComitente ?? '').toUpperCase()} declara bajo juramento que es verdad toda información suministrada por el y transcripta en el presente formulario y que tiene conocimiento de las penalidades establecidas por omision, falsedad y toda transgresión a las disposiciones legales.`
@@ -603,10 +632,15 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
           p3.drawText(linea, { x: 62, y: 825 - i * 12.5, size: f, font, color: negro })
         })
 
-        const fechaHoy = new Date().toLocaleDateString('es-AR', { day: 'numeric', month: 'long', year: 'numeric' })
-        p3.drawText(fechaHoy, { x: 62, y: 745, size: f, font, color: negro })
+        // La plantilla trae su propio "___ de ___     ___.-" con tres huecos separados
+        // (día / mes / año) — antes se pisaban todos poniendo la fecha entera en el primer
+        // hueco, quedando duplicada contra el "de" impreso. Se reparte acá, uno por hueco.
+        const hoy = new Date()
+        p3.drawText(String(hoy.getDate()), { x: 65, y: 745, size: f, font, color: negro })
+        p3.drawText(MESES[hoy.getMonth()], { x: 162, y: 745, size: f, font, color: negro })
+        p3.drawText(String(hoy.getFullYear()), { x: 270, y: 745, size: f, font, color: negro })
         if (declarante) {
-          p3.drawText(nombreDeclarante, { x: 390, y: 683, size: f, font, color: negro })
+          p3.drawText(nombreDeclarante, { x: 390, y: 683, size: f, font: bold, color: negro })
         }
       }
 
