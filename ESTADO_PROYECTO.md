@@ -112,6 +112,14 @@ ALTER TABLE exp_comitentes ADD COLUMN IF NOT EXISTS ausente_pais boolean DEFAULT
 ```
 Aditivo, no afecta nada existente — todos los expedientes actuales quedan con estos campos vacíos hasta que se carguen desde la Tab DDJJ.
 
+**Ajuste posterior — limpieza de las referencias en rojo de la plantilla:** la plantilla original de Catastro trae, en rojo, los números de referencia que Franco fue marcando al analizar qué dato va en cada casillero ("2.3", "3.6", etc. — son 11 en total). Se probó taparlos con rectángulos blancos calculando su posición a mano, pero medir esas coordenadas contra la imagen no daba la precisión necesaria y en un intento incluso se llegó a tapar por error parte de un encabezado real. La solución que quedó, mucho más robusta: se abrió el archivo `formulario_u.pdf`, se ubicó el color de relleno que usa ese texto en rojo (`1.0 0 0` en el content stream del PDF) y se cambió por blanco (`1.0 1.0 1.0`) directamente ahí — mismo texto, mismas coordenadas, ahora invisible, sin depender de acertar ninguna posición ni tocar ninguna línea de la grilla. El único rectángulo que sigue en el código es el del párrafo de ejemplo de la página de la declaración (que es texto negro, no rojo, y sí necesita taparse a mano porque se reemplaza por el párrafo real). Esta misma técnica es la que conviene usar directamente para SOR y E1 cuando se les llegue el turno, en vez de repetir el proceso de prueba y error con rectángulos.
+
+**Pulido posterior (mismo día):**
+- Los datos escritos (Calle/Fracción/Manzana/Lote, Tomo/Folio/Año, Superficie, Rubro 3) se corrieron unos puntos para quedar centrados dentro de su casillero — antes quedaban pegados contra el borde superior.
+- Los tildes de Sí/No (agua corriente, cloacas, ausente del país) dejaron de marcarse con una "X" y ahora pintan de gris el casillero de la opción correspondiente.
+- La plantilla trae impreso en negro (no en rojo, por eso no lo tapaba la limpieza de más arriba) un "100" y un "DNI" de ejemplo en Rubro 3 — al centrar el texto real se veían duplicados ("100 100", "DNI DNI"); se tapan puntualmente esos dos textos de ejemplo antes de escribir el dato real.
+- Pendiente de confirmar: un corte/espacio en blanco que se veía en una línea de Rubro 3 en un screenshot — probado contra la plantilla sin ningún agregado de código no aparece, así que no viene de acá; a revisar con el PDF real generado por la app si sigue apareciendo.
+
 **Pendiente para la próxima sesión:** replicar el mismo mecanismo para Formulario SOR (mismas tablas, ya extendidas — solo cambian los campos de ubicación rural y sus coordenadas) y armar Formulario E1 (tabla nueva `edificacion`, grilla de características constructivas). Ver plan completo guardado en la sesión.
 
 ---
