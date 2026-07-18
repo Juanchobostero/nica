@@ -2,6 +2,7 @@
 import AppLayout from '../../layouts/AppLayout.astro'
 import { supabase, getSupabase } from '../../lib/supabase'
 import { calcularPoligonal, calcularSuperficie } from '../../lib/poligonal'
+import { CATEGORIAS_E1, INCISOS_E1, DESTINOS_E1 } from '../../lib/edificacionE1'
 
 const token = Astro.cookies.get('sb-access-token')?.value ?? ''
 const { data: { user } } = await supabase.auth.getUser(token)
@@ -30,6 +31,7 @@ const [
   { data: expTestigos },
   { data: poligonosRaw },
   { data: linderos },
+  { data: edificacion },
   { data: documentos, count: documentosCount },
   { data: comitentesAll },
   { data: testigosAll },
@@ -40,6 +42,7 @@ const [
   db.from('exp_testigos').select('*, testigos(*)').eq('expediente_id', id),
   db.from('poligono').select('*, lados(*), angulos(*)').eq('expediente_id', id).order('parcela_desde', { ascending: true, nullsFirst: true }),
   db.from('linderos').select('*').eq('expediente_id', id).maybeSingle(),
+  db.from('edificacion').select('*').eq('expediente_id', id).maybeSingle(),
   db.from('documentos_generados').select('*', { count: 'exact' }).eq('expediente_id', id).order('generado_at', { ascending: false }).range(docFrom, docTo),
   db.from('comitentes').select('id,nombre,apellido,dni').eq('user_id', uid).order('apellido'),
   db.from('testigos').select('id,nombre,apellido,dni').eq('user_id', uid).order('apellido'),
@@ -321,6 +324,35 @@ if (Astro.request.method === 'POST') {
     successMsg = 'Declaración Jurada guardada.'
   }
 
+  if (action === 'guardar_ddjj_e1') {
+    const caracteristicas: Record<string, string> = {}
+    for (const cat of CATEGORIAS_E1) {
+      const valor = form.get(`car_${cat.key}`) as string
+      if (valor && INCISOS_E1.includes(valor)) caracteristicas[cat.key] = valor
+    }
+    const payload = {
+      expediente_id: id,
+      destino_edificio: form.get('destino_edificio') || null,
+      destino_otros_detalle: form.get('destino_otros_detalle') || null,
+      estado_conservacion: form.get('estado_conservacion') || null,
+      edad_edificio: parseInt(form.get('edad_edificio') as string) || null,
+      superficie_cubierta: parseFloat(form.get('superficie_cubierta') as string) || null,
+      superficie_semicubierta: parseFloat(form.get('superficie_semicubierta') as string) || null,
+      superficie_negocios: parseFloat(form.get('superficie_negocios') as string) || null,
+      banos_principales: parseInt(form.get('banos_principales') as string) || null,
+      toilettes: parseInt(form.get('toilettes') as string) || null,
+      pileta_natacion: parseFloat(form.get('pileta_natacion') as string) || null,
+      agua_caliente_central: parseInt(form.get('agua_caliente_central') as string) || null,
+      ascensores: parseInt(form.get('ascensores') as string) || null,
+      instalaciones_incendio: parseInt(form.get('instalaciones_incendio') as string) || null,
+      cantidad_habitaciones: parseInt(form.get('cantidad_habitaciones') as string) || null,
+      caracteristicas,
+    }
+    if (edificacion) await db.from('edificacion').update(payload).eq('expediente_id', id)
+    else await db.from('edificacion').insert(payload)
+    successMsg = 'Características del edificio guardadas.'
+  }
+
   if (action === 'agregar_comitente') {
     const comitenteId = form.get('comitente_id') as string
     const rol = form.get('rol') as string
@@ -439,8 +471,11 @@ const datosValidacion = {
   cantLados: (poligono as any)?.lados?.length ?? 0,
   cantAngulos: (poligono as any)?.angulos?.length ?? 0,
   inmuebleEsUrbano: (inmueble as any)?.tipo_inmueble === 'urbano',
+  inmuebleEsRural: (inmueble as any)?.tipo_inmueble === 'rural',
   comitenteNacionalidad: !!(primerComitente as any)?.nacionalidad,
   comitenteDomicilio: !!((primerComitente as any)?.domicilio_calle && (primerComitente as any)?.domicilio_localidad),
+  edificacionCargada: !!edificacion,
+  edificacionCaracteristicas: Object.keys((edificacion as any)?.caracteristicas ?? {}).length > 0,
 }
 
 // Tab 3 Mensura: un expediente puede tener varios polígonos (división en parcelas).
@@ -480,7 +515,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
   {warn === 'sin_seleccion' && <div class="alert alert-error" style="margin-bottom:1rem">Seleccioná al menos un documento para generar.</div>}
   {warn === 'ddjj_no_implementada' && <div class="alert alert-error" style="margin-bottom:1rem">Ese formulario de Declaración Jurada todavía no está implementado.</div>}
   {warn === 'ddjj_falta_inmueble' && <div class="alert alert-error" style="margin-bottom:1rem">Completá primero la Tab 2 Inmueble antes de generar la Declaración Jurada.</div>}
-  {warn === 'ddjj_tipo_incorrecto' && <div class="alert alert-error" style="margin-bottom:1rem">El Formulario U es solo para inmuebles urbanos — este expediente está cargado como rural.</div>}
+  {warn === 'ddjj_tipo_incorrecto' && <div class="alert alert-error" style="margin-bottom:1rem">El Formulario U es solo para inmuebles urbanos y el SOR solo para rurales — revisá el tipo de inmueble cargado en la Tab 2.</div>}
   {errorMsg && <div class="alert alert-error" style="margin-bottom:1rem">{errorMsg}</div>}
 
   <div class="card">
@@ -1177,14 +1212,14 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
               </label>
             )}
             {inmueble && (inmueble as any).tipo_inmueble === 'rural' && (
-              <label style="display:flex;align-items:center;gap:10px;font-weight:400;color:var(--color-text-secondary);cursor:not-allowed">
-                <input type="checkbox" disabled />
-                Formulario "SOR" — Suburbano o rural <em>(todavía no implementado)</em>
+              <label style="display:flex;align-items:center;gap:10px;font-weight:400;cursor:pointer">
+                <input type="checkbox" name="tipos[]" value="formulario_sor" />
+                Formulario "SOR" — Declaración Jurada (Suburbano o rural)
               </label>
             )}
-            <label style="display:flex;align-items:center;gap:10px;font-weight:400;color:var(--color-text-secondary);cursor:not-allowed">
-              <input type="checkbox" disabled />
-              Formulario "E1" — Con construcciones <em>(todavía no implementado)</em>
+            <label style="display:flex;align-items:center;gap:10px;font-weight:400;cursor:pointer">
+              <input type="checkbox" name="tipos[]" value="formulario_e1" />
+              Formulario "E1" — Con construcciones
             </label>
           </div>
 
@@ -1352,6 +1387,79 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
           })}
 
           <button type="submit" class="btn btn-primary" style="margin-top:0.5rem">Guardar Declaración Jurada</button>
+        </form>
+
+        <div class="section-label" style="margin-top:1.5rem">Formulario E1 — Características constructivas</div>
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:1rem;font-weight:400;cursor:pointer">
+          <input type="checkbox" id="chk_tiene_construcciones" checked={!!edificacion} />
+          ¿El inmueble tiene construcciones?
+        </label>
+
+        <form method="POST" id="form_e1" style={edificacion ? '' : 'display:none'}>
+          <input type="hidden" name="_action" value="guardar_ddjj_e1" />
+          <input type="hidden" name="_tab" value="ddjj" />
+
+          <div class="form-grid form-grid-2" style="margin-bottom:1rem">
+            <div class="field">
+              <label>Destino del edificio</label>
+              <select class="input" name="destino_edificio">
+                <option value="">Seleccionar...</option>
+                {DESTINOS_E1.map(d => (
+                  <option value={d.value} selected={(edificacion as any)?.destino_edificio === d.value}>{d.label}</option>
+                ))}
+              </select>
+            </div>
+            <div class="field">
+              <label>Detalle (si eligió "Otros")</label>
+              <input class="input" name="destino_otros_detalle" value={(edificacion as any)?.destino_otros_detalle ?? ''} />
+            </div>
+          </div>
+
+          <div class="section-label">Rubro 1 — Características (elegí el inciso que corresponda en cada categoría)</div>
+          <div style="display:flex;flex-direction:column;gap:0.6rem;margin-bottom:1.25rem">
+            {CATEGORIAS_E1.map(cat => {
+              const seleccion = ((edificacion as any)?.caracteristicas ?? {})[cat.key]
+              return (
+                <div class="field" style="margin-bottom:0">
+                  <label style="margin-bottom:0.25rem">{cat.label}</label>
+                  <div style="display:flex;gap:1rem">
+                    {INCISOS_E1.map(inciso => (
+                      <label style="display:flex;align-items:center;gap:5px;font-weight:400;font-size:0.85rem;cursor:pointer">
+                        <input type="radio" name={`car_${cat.key}`} value={inciso} checked={seleccion === inciso} />
+                        {inciso.toUpperCase()}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <div class="section-label">Rubro 2 — Otros datos</div>
+          <div class="form-grid form-grid-2" style="margin-bottom:1.25rem">
+            <div class="field">
+              <label>Estado de conservación</label>
+              <select class="input" name="estado_conservacion">
+                <option value="">Seleccionar...</option>
+                {['bueno', 'regular', 'malo'].map(e => (
+                  <option value={e} selected={(edificacion as any)?.estado_conservacion === e}>{e}</option>
+                ))}
+              </select>
+            </div>
+            <div class="field"><label>Edad del edificio (años)</label><input class="input" type="number" min="0" name="edad_edificio" value={(edificacion as any)?.edad_edificio ?? ''} /></div>
+            <div class="field"><label>Superficie cubierta (m²)</label><input class="input" type="number" step="0.01" name="superficie_cubierta" value={(edificacion as any)?.superficie_cubierta ?? ''} /></div>
+            <div class="field"><label>Superficie semicubierta (m²)</label><input class="input" type="number" step="0.01" name="superficie_semicubierta" value={(edificacion as any)?.superficie_semicubierta ?? ''} /></div>
+            <div class="field"><label>Superficie destinada a negocios (m²)</label><input class="input" type="number" step="0.01" name="superficie_negocios" value={(edificacion as any)?.superficie_negocios ?? ''} /></div>
+            <div class="field"><label>Baños principales completos</label><input class="input" type="number" min="0" name="banos_principales" value={(edificacion as any)?.banos_principales ?? ''} /></div>
+            <div class="field"><label>Toilettes / baños de servicio</label><input class="input" type="number" min="0" name="toilettes" value={(edificacion as any)?.toilettes ?? ''} /></div>
+            <div class="field"><label>Pileta de natación (m²)</label><input class="input" type="number" step="0.01" name="pileta_natacion" value={(edificacion as any)?.pileta_natacion ?? ''} /></div>
+            <div class="field"><label>Agua caliente central (cant. de baños)</label><input class="input" type="number" min="0" name="agua_caliente_central" value={(edificacion as any)?.agua_caliente_central ?? ''} /></div>
+            <div class="field"><label>Ascensores</label><input class="input" type="number" min="0" name="ascensores" value={(edificacion as any)?.ascensores ?? ''} /></div>
+            <div class="field"><label>Instalaciones contra incendio (bocas)</label><input class="input" type="number" min="0" name="instalaciones_incendio" value={(edificacion as any)?.instalaciones_incendio ?? ''} /></div>
+            <div class="field"><label>Cantidad de habitaciones</label><input class="input" type="number" min="0" name="cantidad_habitaciones" value={(edificacion as any)?.cantidad_habitaciones ?? ''} /></div>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Guardar características del edificio</button>
         </form>
       </div>
     )}
@@ -1940,6 +2048,15 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     })
   }
 
+  // ── Toggle Formulario E1 (¿tiene construcciones?) ───────────────────────
+  var chkConstrucciones = document.getElementById('chk_tiene_construcciones')
+  var formE1 = document.getElementById('form_e1')
+  if (chkConstrucciones && formE1) {
+    chkConstrucciones.addEventListener('change', function() {
+      formE1.style.display = chkConstrucciones.checked ? '' : 'none'
+    })
+  }
+
   // ── Auto-conversión superficie a letras (Tab 3) ───────────────────────
   function superficieALetrasM2(valor) {
     if (!valor || isNaN(parseFloat(valor))) return ''
@@ -2163,6 +2280,8 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     memoria_mensura: 'Memoria de Mensura',
     planilla_calculos: 'Planilla de Cálculos',
     formulario_u: 'Formulario "U" — Declaración Jurada',
+    formulario_sor: 'Formulario "SOR" — Declaración Jurada',
+    formulario_e1: 'Formulario "E1" — Características constructivas',
   }
 
   const datosValidacion = window.datosValidacion || {}
@@ -2238,6 +2357,19 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
       { ok: datosValidacion.comitenteNacionalidad, label: 'Nacionalidad del comitente (Tab 5 DDJJ)' },
       { ok: datosValidacion.comitenteDomicilio, label: 'Domicilio del comitente (Tab 5 DDJJ)' },
     ],
+    formulario_sor: [
+      { ok: datosValidacion.inmuebleEsRural, label: 'Inmueble cargado como "Rural" (Tab 2 Inmueble)' },
+      { ok: datosValidacion.tieneComitente, label: 'Comitente cargado (Tab 1 Comitente)' },
+      { ok: datosValidacion.comitenteDni, label: 'DNI del comitente (Tab 1 Comitente)' },
+      { ok: datosValidacion.inmuebleLocalidad, label: 'Localidad del inmueble (Tab 2 Inmueble)' },
+      { ok: datosValidacion.comitenteDomicilio, label: 'Domicilio del comitente (Tab 5 DDJJ)' },
+    ],
+    formulario_e1: [
+      { ok: datosValidacion.tieneComitente, label: 'Comitente cargado (Tab 1 Comitente)' },
+      { ok: datosValidacion.inmuebleLocalidad, label: 'Localidad del inmueble (Tab 2 Inmueble)' },
+      { ok: datosValidacion.edificacionCargada, label: '¿El inmueble tiene construcciones? tildado (Tab 5 DDJJ)' },
+      { ok: datosValidacion.edificacionCaracteristicas, label: 'Al menos una característica de Rubro 1 cargada (Tab 5 DDJJ)' },
+    ],
   }
 
   const overlayValidacion = document.getElementById('modal-overlay-validacion')
@@ -2311,7 +2443,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
             const mensajesGenerar = {
               ddjj_no_implementada: 'Ese formulario de Declaración Jurada todavía no está implementado.',
               ddjj_falta_inmueble: 'Completá primero la Tab 2 Inmueble antes de generar la Declaración Jurada.',
-              ddjj_tipo_incorrecto: 'El Formulario U es solo para inmuebles urbanos — este expediente está cargado como rural.',
+              ddjj_tipo_incorrecto: 'El Formulario U es solo para inmuebles urbanos y el SOR solo para rurales — revisá el tipo de inmueble cargado en la Tab 2.',
             }
             alert(mensajesGenerar[data.warn] || 'No se pudieron generar los documentos.')
             return

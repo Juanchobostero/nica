@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro'
 import { supabase, getSupabase } from '../../../lib/supabase'
 import { calcularPoligonal } from '../../../lib/poligonal'
+import { CATEGORIAS_E1, INCISOS_E1, DESTINOS_E1 } from '../../../lib/edificacionE1'
 import { PDFDocument, StandardFonts, rgb, degrees, type PDFFont, type PDFPage } from 'pdf-lib'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -394,17 +395,6 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       : redirect(`/expedientes/${expedienteId}?tab=documentos&warn=sin_seleccion`)
   }
 
-  // Formulario SOR y E1 todavía no tienen su propio dibujo en el generador (ver formulario_u
-  // más abajo) — sin este freno caerían en la rama placeholder genérica y saldrían con texto
-  // invisible. La UI de la Tab Documentos ya no ofrece tildarlos, pero se valida también acá
-  // por si llega una petición directa.
-  const DDJJ_NO_IMPLEMENTADAS = new Set(['formulario_sor', 'formulario_e1'])
-  if (tipos.some(t => DDJJ_NO_IMPLEMENTADAS.has(t))) {
-    return isAjax
-      ? new Response(JSON.stringify({ ok: false, warn: 'ddjj_no_implementada' }), { status: 400 })
-      : redirect(`/expedientes/${expedienteId}?tab=documentos&warn=ddjj_no_implementada`)
-  }
-
   const documentosCreados: { id: string; tipo_documento: string; storage_path: string | null; estado: string; generado_at: string }[] = []
 
   const { data: exp } = await db
@@ -426,6 +416,20 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         : redirect(`/expedientes/${expedienteId}?tab=documentos&warn=ddjj_falta_inmueble`)
     }
     if ((inmueble as any).tipo_inmueble === 'rural') {
+      return isAjax
+        ? new Response(JSON.stringify({ ok: false, warn: 'ddjj_tipo_incorrecto' }), { status: 400 })
+        : redirect(`/expedientes/${expedienteId}?tab=documentos&warn=ddjj_tipo_incorrecto`)
+    }
+  }
+
+  // Formulario SOR es el espejo de U para inmuebles rurales — misma validación, sentido inverso.
+  if (tipos.includes('formulario_sor')) {
+    if (!inmueble) {
+      return isAjax
+        ? new Response(JSON.stringify({ ok: false, warn: 'ddjj_falta_inmueble' }), { status: 400 })
+        : redirect(`/expedientes/${expedienteId}?tab=documentos&warn=ddjj_falta_inmueble`)
+    }
+    if ((inmueble as any).tipo_inmueble !== 'rural') {
       return isAjax
         ? new Response(JSON.stringify({ ok: false, warn: 'ddjj_tipo_incorrecto' }), { status: 400 })
         : redirect(`/expedientes/${expedienteId}?tab=documentos&warn=ddjj_tipo_incorrecto`)
@@ -456,6 +460,9 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
     .from('linderos')
     .select('norte_mensura, sur_mensura, este_mensura, oeste_mensura, norte_citacion, sur_citacion, este_citacion, oeste_citacion, linderos_iguales')
     .eq('expediente_id', expedienteId).maybeSingle()
+
+  const { data: edificacion } = await db
+    .from('edificacion').select('*').eq('expediente_id', expedienteId).maybeSingle()
 
   const { data: expComitentes } = await db
     .from('exp_comitentes').select('orden, rol, porcentaje_condominio, ausente_pais, comitentes(nombre, apellido, dni, telefono, email, domicilio, dni_scan_path, dni_scan_path_dorso, nacionalidad, tipo_documento, domicilio_calle, domicilio_numero, domicilio_localidad, domicilio_provincia)')
@@ -549,68 +556,75 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       pdfDoc.removePage(1)
       const f = 8
       const blanco = rgb(1, 1, 1)
-      // Marca la opción correspondiente (Sí/No) pintando su casillero de gris, en vez de una X.
+      // Marca la opción correspondiente (Sí/No) con una X en negrita sobre su casillero.
       const marcar = (valor: boolean | null | undefined, xSi: number, xNo: number, y: number, size = f) => {
-        const x = valor ? xSi : xNo
-        page.drawRectangle({ x: x - 1, y: y - 2, width: size + 3, height: size + 4, color: rgb(0.8, 0.8, 0.8) })
+        page.drawText('X', { x: valor ? xSi : xNo, y, size, font: bold, color: negro })
       }
       // En negrita: para que los datos cargados desde el expediente se distingan de un
       // vistazo del texto impreso de la plantilla (que va en fuente regular).
       const campo = (valor: string, x: number, y: number) => {
         page.drawText(valor, { x, y, size: f, font: bold, color: negro })
       }
-      // La plantilla trae "LOCALIDAD" pegado contra los 3 casilleros de código de la derecha —
-      // con localidades largas el valor queda muy apretado. Se tapa ese tramo y se redibuja como
-      // "LOCALIDAD: valor" en un solo texto, corrido a la izquierda para tener más lugar, con su
-      // propia línea debajo.
-      page.drawRectangle({ x: 170, y: 820, width: 318, height: 22, color: blanco })
-      page.drawLine({ start: { x: 182, y: 826 }, end: { x: 486, y: 826 }, thickness: 1, color: negro })
-      campo(`LOCALIDAD: ${inmueble?.localidad ?? ''}`, 182, 830)
+      // La plantilla ya trae su propio renglón en blanco arriba de la etiqueta "LOCALIDAD" —
+      // el valor va ahí directamente, apoyado sobre esa línea y un toque más grande, igual que
+      // en el resto de la plantilla original.
+      page.drawText(inmueble?.localidad ?? '', { x: 315, y: 841, size: 9, font: bold, color: negro })
 
       // Inc. a) Designación según título — "UBICACIÓN: Calle" es la fila de encabezado (con
       // NUMERO/CHACRA/FRAC/MANZANA/LOTE/P.HORIZONT como títulos de columna); los valores van
       // en la fila de abajo, dentro del recuadro.
-      campo(inmueble?.calle_frente ?? '', 225, 764)
+      campo(inmueble?.calle_frente ?? '', 158, 764)
       campo(inmueble?.fraccion ?? '', 366, 764)
       campo(inmueble?.manzana ?? '', 396, 764)
       campo(inmueble?.parcela ?? '', 443, 764)
 
       // Inc. c) Registro de la Propiedad
       campo((inmueble as any)?.registro_tomo ?? '', 100, 690)
-      // x=175 en vez de 155: la etiqueta "FOLIO" se parte en dos líneas ("FOLI" / "O") por lo
-      // angosto del casillero, y con 155 el valor quedaba pegado contra esa "O".
-      campo((inmueble as any)?.registro_folio ?? '', 175, 690)
+      // El casillero de FOLIO es angosto y la etiqueta "FOLIO" se parte en "FOLI" / "O" —
+      // x=228 ubica el valor dentro de ese casillero, sin pisar la "O" partida.
+      campo((inmueble as any)?.registro_folio ?? '', 228, 690)
       campo((inmueble as any)?.registro_anio ?? '', 275, 690)
 
       // Inc. e) Superficie del terreno (según plano de mensura, ya autocalculada)
-      campo(poligono?.superficie_m2 != null ? Number(poligono.superficie_m2).toFixed(2) : '', 217, 633)
+      campo(poligono?.superficie_m2 != null ? Number(poligono.superficie_m2).toFixed(2) : '', 228, 639)
 
-      // Inc. f) Otras informaciones adicionales
-      marcar((inmueble as any)?.agua_corriente, 149, 160, 563, 6)
-      marcar((inmueble as any)?.cloacas, 269, 281, 563, 6)
+      // Inc. f) Otras informaciones adicionales — X moderada: marca el casillero sin tapar la
+      // letra (S/I o N/O) que queda atrás.
+      marcar((inmueble as any)?.agua_corriente, 150, 161, 559, 9)
+      marcar((inmueble as any)?.cloacas, 270, 282, 559, 9)
       campo((inmueble as any)?.personas_habitan != null ? String((inmueble as any).personas_habitan) : '', 270, 544)
-      campo((inmueble as any)?.ultimo_anio_pago_impuesto ?? '', 258, 523)
-      campo((inmueble as any)?.receptoria ?? '', 235, 487)
+      // El casillero de año es de un dígito por celda (4 celditas) — se reparte el año dígito
+      // por dígito en vez de escribirlo como un solo texto corrido.
+      ;(String((inmueble as any)?.ultimo_anio_pago_impuesto ?? '').padStart(4, ' ')).split('').forEach((digito, i) => {
+        if (digito.trim()) campo(digito, 249 + i * 11, 523)
+      })
+      // x=200 en vez de 235: para que el texto no se meta en el casillero reservado que trae la
+      // plantilla al final de la línea.
+      campo((inmueble as any)?.receptoria ?? '', 200, 487)
 
       // Rubro 3 — Datos del propietario (hasta 2 filas, a y b — el formulario no admite más sin Anexo A)
-      const filasY = [431, 373]
+      const filasY = [436, 378]
+      // La plantilla trae impreso en negro, a modo de ejemplo, "100" (fila a) y "DNI" (ambas
+      // filas). Intentar hacerlos coincidir pixel a pixel con un rectángulo o un corrimiento de
+      // posición terminaba cortando líneas de la grilla o mostrando el dato duplicado. Como
+      // "100 % / DNI" es además el caso más común (dueño único, documento DNI), directamente no
+      // se escribe nada encima cuando el dato real coincide con ese valor — se deja el impreso de
+      // la plantilla tal cual. Solo se escribe cuando el dato real es distinto (otro % de
+      // condominio, o LE/LC en vez de DNI).
       ;(expComitentes ?? []).slice(0, 2).forEach((ec: any, i: number) => {
         const c = ec.comitentes
         const y = filasY[i]
-        // La plantilla trae impreso en negro, a modo de ejemplo, "100" (fila a) y "DNI" (ambas
-        // filas) justo en esta posición — se tapan antes de escribir el dato real para que no
-        // queden duplicados ("100 100", "DNI DNI") al lado del valor centrado.
-        if (i === 0) page.drawRectangle({ x: 383, y: y + 2, width: 18, height: 12, color: blanco })
-        page.drawRectangle({ x: 415, y: y + 2, width: 34, height: 12, color: blanco })
+        const porcentaje = ec.porcentaje_condominio ?? 100
+        const tipoDoc = c?.tipo_documento ?? 'DNI'
         campo(`${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase(), 182, y)
-        campo(ec.porcentaje_condominio != null ? String(ec.porcentaje_condominio) : '', 386, y)
-        campo(c?.tipo_documento ?? 'DNI', 429, y)
+        if (porcentaje !== 100) campo(String(porcentaje), 386, y)
+        if (tipoDoc !== 'DNI') campo(tipoDoc, 429, y)
         campo(c?.dni ?? '', 460, y)
         campo(c?.domicilio_calle ?? '', 152, y - 29)
         campo(c?.domicilio_numero ?? '', 242, y - 29)
         campo(c?.domicilio_localidad ?? '', 303, y - 29)
         campo(c?.domicilio_provincia ?? '', 459, y - 29)
-        marcar(ec.ausente_pais, 517, 529, y - 29)
+        marcar(ec.ausente_pais, 517, 529, y - 31, 9)
       })
 
       campo(inmueble?.propietario_anterior ?? '', 260, 316)
@@ -643,6 +657,147 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         if (declarante) {
           p3.drawText(nombreDeclarante, { x: 390, y: 683, size: f, font: bold, color: negro })
         }
+      }
+
+    } else if (tipo === 'formulario_sor') {
+      // ── Formulario SOR — Declaración Jurada (Inmueble Suburbano/Rural) ──
+      // Misma lógica que Formulario U: plantilla original de Catastro, con sus referencias en
+      // rojo (y un resaltado amarillo de ejemplo en el casillero "NO") ya neutralizadas a nivel
+      // de archivo (public/pdf-templates/formulario_sor.pdf). Una sola página, sin Rubro 4 ni
+      // página de declaración jurada aparte — a diferencia de Formulario U.
+      const fSor = 8
+      const campoSor = (valor: string, x: number, y: number) => {
+        page.drawText(valor, { x, y, size: fSor, font: bold, color: negro })
+      }
+      const marcarSor = (valor: boolean | null | undefined, xSi: number, xNo: number, y: number, size = fSor) => {
+        page.drawText('X', { x: valor ? xSi : xNo, y, size, font: bold, color: negro })
+      }
+
+      campoSor(inmueble?.departamento ?? '', 345, 878)
+      campoSor(inmueble?.localidad ?? '', 345, 869)
+
+      // Inciso a) Designación según títulos — Corrientes distingue Chacra/Quinta como
+      // subdivisiones propias que hoy no tienen columna en `inmuebles` (solo Paraje, Sección y
+      // Lote tienen datos cargados); esos dos casilleros quedan en blanco por ahora.
+      campoSor(inmueble?.fraccion ?? '', 125, 827)
+      campoSor((inmueble as any)?.seccion ?? '', 305, 827)
+      campoSor(inmueble?.parcela ?? '', 443, 827)
+
+      // Inciso c) Inscripción en el Registro de la Propiedad
+      campoSor((inmueble as any)?.registro_tomo ?? '', 120, 764)
+      campoSor((inmueble as any)?.registro_folio ?? '', 245, 764)
+      campoSor((inmueble as any)?.registro_anio ?? '', 445, 764)
+
+      // Informaciones adicionales
+      campoSor((inmueble as any)?.personas_habitan != null ? String((inmueble as any).personas_habitan) : '', 228, 730)
+      ;(String((inmueble as any)?.ultimo_anio_pago_impuesto ?? '').padStart(4, ' ')).split('').forEach((digito, i) => {
+        if (digito.trim()) campoSor(digito, 505 + i * 11, 730)
+      })
+
+      // Rubro 2 — hasta 3 filas de propietario (a, b, c)
+      const filasYSor = [698, 656, 614]
+      ;(expComitentes ?? []).slice(0, 3).forEach((ec: any, i: number) => {
+        const c = ec.comitentes
+        const y = filasYSor[i]
+        const porcentaje = ec.porcentaje_condominio ?? 100
+        campoSor(`${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase(), 118, y)
+        // La plantilla trae "100" impreso como ejemplo en la fila a) — si el dato real coincide,
+        // no se escribe nada encima (mismo criterio que en Formulario U).
+        if (porcentaje !== 100) campoSor(String(porcentaje), 378, y)
+        campoSor(c?.tipo_documento ?? 'DNI', 402, y)
+        campoSor(c?.dni ?? '', 430, y)
+        campoSor(c?.domicilio_calle ?? '', 118, y - 20)
+        campoSor(c?.domicilio_numero ?? '', 245, y - 20)
+        campoSor(c?.domicilio_localidad ?? '', 290, y - 20)
+        campoSor(c?.domicilio_provincia ?? '', 430, y - 20)
+        marcarSor(ec.ausente_pais, 505, 520, y - 20)
+      })
+
+      campoSor((inmueble as any)?.receptoria ?? '', 200, 568)
+
+    } else if (tipo === 'formulario_e1') {
+      // ── Formulario E1 — Características constructivas (solo si hay edificación) ──
+      // Misma lógica que U/SOR: plantilla original de Catastro con sus 7 referencias en rojo
+      // ya neutralizadas a nivel de archivo (public/pdf-templates/formulario_e1.pdf). Una sola
+      // página. Coordenadas de primer calibrado (grilla de referencia) — la grilla de Rubro 1
+      // (13 categorías × 5 incisos) es la parte más sensible a un desfasaje de Franco, así que
+      // conviene avisar en la revisión si algo no calza para ajustar en una segunda pasada.
+      const fE1 = 7.5
+      const campoE1 = (valor: string, x: number, y: number, size = fE1) => {
+        page.drawText(valor, { x, y, size, font: bold, color: negro })
+      }
+      const marcarE1 = (x: number, y: number, size = fE1) => {
+        page.drawText('X', { x, y, size, font: bold, color: negro })
+      }
+
+      campoE1(inmueble?.departamento ?? '', 290, 935)
+      campoE1(inmueble?.localidad ?? '', 290, 918)
+      const declaranteE1 = (expComitentes?.[0] as any)?.comitentes
+      campoE1(declaranteE1 ? `${declaranteE1.apellido ?? ''}, ${declaranteE1.nombre ?? ''}`.toUpperCase() : '', 290, 901)
+
+      // Destino del edificio — 9 opciones en dos columnas (5 izquierda, 4 derecha), casillero a
+      // la izquierda de cada etiqueta.
+      const destinoSeleccionado = (edificacion as any)?.destino_edificio
+      const DESTINO_XY: Record<string, [number, number]> = {
+        casa_familia: [230, 872],
+        casa_departamentos: [230, 860],
+        hotel: [230, 848],
+        sanatorio: [230, 836],
+        oficina: [230, 824],
+        asociaciones: [430, 872],
+        negocios: [430, 860],
+        espectaculos: [430, 848],
+        otros: [430, 836],
+      }
+      if (destinoSeleccionado && DESTINO_XY[destinoSeleccionado]) {
+        const [dx, dy] = DESTINO_XY[destinoSeleccionado]
+        marcarE1(dx, dy)
+      }
+      if (destinoSeleccionado === 'otros') {
+        campoE1((edificacion as any)?.destino_otros_detalle ?? '', 460, 826, 7)
+      }
+
+      // Rubro 1 — Características: 13 categorías × 5 incisos (a-e). El casillero elegido se
+      // marca con una X apoyada al principio de la columna correspondiente. Filas espaciadas
+      // parejo entre y=815 (debajo del encabezado "Inciso a)...e)") e y=300 (arriba de la fila
+      // "14) Tipo del edificio"); columnas espaciadas parejo entre x=95 y x=597.
+      const caracteristicas = (edificacion as any)?.caracteristicas ?? {}
+      const filaAltoE1 = (815 - 300) / CATEGORIAS_E1.length
+      const columnaAnchoE1 = (597 - 95) / INCISOS_E1.length
+      CATEGORIAS_E1.forEach((cat, i) => {
+        const inciso = caracteristicas[cat.key]
+        if (!inciso) return
+        const colIdx = INCISOS_E1.indexOf(inciso)
+        if (colIdx === -1) return
+        const y = 815 - filaAltoE1 * (i + 0.5)
+        const x = 95 + columnaAnchoE1 * colIdx + 8
+        marcarE1(x, y)
+      })
+
+      // Rubro 2 — Otros datos (12 renglones, de "a" a "l"), espaciados parejo entre y=258 y y=71.
+      const rubro2Y = (idx: number) => 258 - idx * ((258 - 71) / 11)
+      const ESTADO_XY: Record<string, number> = { bueno: 330, regular: 430, malo: 478 }
+      const estadoX = ESTADO_XY[(edificacion as any)?.estado_conservacion ?? '']
+      if (estadoX) marcarE1(estadoX, rubro2Y(0))
+      campoE1((edificacion as any)?.edad_edificio != null ? String((edificacion as any).edad_edificio) : '', 540, rubro2Y(1))
+      campoE1((edificacion as any)?.superficie_cubierta != null ? Number((edificacion as any).superficie_cubierta).toFixed(2) : '', 540, rubro2Y(2))
+      campoE1((edificacion as any)?.superficie_semicubierta != null ? Number((edificacion as any).superficie_semicubierta).toFixed(2) : '', 540, rubro2Y(3))
+      campoE1((edificacion as any)?.superficie_negocios != null ? Number((edificacion as any).superficie_negocios).toFixed(2) : '', 540, rubro2Y(4))
+      campoE1((edificacion as any)?.banos_principales != null ? String((edificacion as any).banos_principales) : '', 540, rubro2Y(5))
+      campoE1((edificacion as any)?.toilettes != null ? String((edificacion as any).toilettes) : '', 540, rubro2Y(6))
+      campoE1((edificacion as any)?.pileta_natacion != null ? Number((edificacion as any).pileta_natacion).toFixed(2) : '', 540, rubro2Y(7))
+      campoE1((edificacion as any)?.agua_caliente_central != null ? String((edificacion as any).agua_caliente_central) : '', 540, rubro2Y(8))
+      campoE1((edificacion as any)?.ascensores != null ? String((edificacion as any).ascensores) : '', 540, rubro2Y(9))
+      campoE1((edificacion as any)?.instalaciones_incendio != null ? String((edificacion as any).instalaciones_incendio) : '', 540, rubro2Y(10))
+      campoE1((edificacion as any)?.cantidad_habitaciones != null ? String((edificacion as any).cantidad_habitaciones) : '', 540, rubro2Y(11))
+
+      // Lugar y fecha / Aclaración de firma (la declaración jurada en sí ya viene impresa en la
+      // plantilla, sin datos de ejemplo que reemplazar).
+      const hoyE1 = new Date()
+      const lugarFechaE1 = `${inmueble?.localidad ?? ''}, ${hoyE1.getDate()} de ${MESES[hoyE1.getMonth()]} de ${hoyE1.getFullYear()}`
+      campoE1(lugarFechaE1, 110, 45, 8)
+      if (declaranteE1) {
+        campoE1(`${declaranteE1.nombre ?? ''} ${declaranteE1.apellido ?? ''}`.toUpperCase(), 150, 20, 8)
       }
 
     } else if (tipo === 'caratula') {

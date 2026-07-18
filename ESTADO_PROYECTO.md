@@ -78,6 +78,56 @@
 
 ---
 
+## 📋 Cambios de la sesión — 17 Julio 2026 (v0.10) — Declaraciones Juradas: SOR y E1
+
+Continuación de v0.9: con Formulario U ya cerrado y confirmado por Franco, se replicó el mismo mecanismo (plantilla oficial + `drawText` en coordenadas fijas) para **Formulario SOR** (suburbano/rural) y **Formulario E1** (características constructivas del edificio, adicional cuando el inmueble tiene construcciones). Con esto quedan los 3 tipos de DDJJ implementados — pendiente la vuelta de Franco probando los 3 antes de darlos por cerrados del todo.
+
+**Formulario SOR** — mismas tablas que U (`inmuebles`, `comitentes`, `exp_comitentes`), sin columnas nuevas:
+- Limpieza de plantilla: mismas 11 referencias en rojo neutralizadas a blanco en el content stream (misma técnica que U), más un resaltado amarillo de ejemplo en un casillero que también se neutralizó.
+- `generar.ts`: nueva rama `formulario_sor`, calibrada con la técnica de grilla de referencia (dibujar líneas verdes numeradas sobre una copia de la plantilla para leer coordenadas exactas antes de escribir el código final, en vez de ir a prueba y error a ciegas) — más rápido que el calibrado de U. Cubre Departamento/Localidad, Fracción/Sección/Parcela, Tomo/Folio/Año, cantidad de personas y último año pagado, hasta 3 titulares (Rubro 2, con % de condominio/tipo de documento/domicilio/ausente del país) y receptoría.
+- Tab DDJJ: no necesitó ningún cambio — el bloque de campos ya era genérico para U/SOR (el título ya cambiaba solo según `tipo_inmueble`).
+- Quedan algunas dudas menores sobre 2-3 coordenadas (Sección, tipo/dni/provincia) a confirmar cuando Franco lo pruebe contra la plantilla física.
+
+**Formulario E1** — características constructivas, tabla nueva `edificacion` (1:1 con expediente, mismo patrón que `linderos`):
+```sql
+create table if not exists edificacion (
+  id                        uuid primary key default gen_random_uuid(),
+  expediente_id             uuid references expedientes(id) on delete cascade not null unique,
+  destino_edificio          text,
+  destino_otros_detalle     text,
+  estado_conservacion       text,
+  edad_edificio             int,
+  superficie_cubierta       numeric(10,2),
+  superficie_semicubierta   numeric(10,2),
+  superficie_negocios       numeric(10,2),
+  banos_principales         int,
+  toilettes                 int,
+  pileta_natacion           numeric(10,2),
+  agua_caliente_central     int,
+  ascensores                int,
+  instalaciones_incendio    int,
+  cantidad_habitaciones     int,
+  caracteristicas           jsonb default '{}'::jsonb
+);
+
+alter table edificacion enable row level security;
+
+create policy "Edificacion: acceso via expediente propio"
+  on edificacion for all
+  using (exists (select 1 from expedientes e where e.id = edificacion.expediente_id and e.user_id = auth.uid()))
+  with check (exists (select 1 from expedientes e where e.id = edificacion.expediente_id and e.user_id = auth.uid()));
+```
+- La planilla real de Rubro 1 trae ~150 variantes de texto por categoría (13 categorías × 5 incisos, con 2-4 frases sinónimas por casillero) — se simplificó a **un solo inciso (a-e) por categoría**, que es el dato que Catastro usa para clasificar el edificio (no la frase exacta elegida dentro de la columna). Constante compartida `src/lib/edificacionE1.ts` (categorías, incisos, destinos del edificio) usada tanto por la Tab DDJJ como por `generar.ts`, para no mantener la lista dos veces.
+- Tab DDJJ: checkbox "¿El inmueble tiene construcciones?" que despliega un formulario aparte (`guardar_ddjj_e1`) con Destino del edificio, la grilla de 13 categorías × 5 radios, y los datos numéricos de Rubro 2 (superficies, baños, pileta, ascensores, etc.).
+- Limpieza de plantilla: 7 referencias en rojo neutralizadas a blanco (misma técnica). El relleno gris de un título/banner se dejó tal cual (no es una referencia de Franco).
+- `generar.ts`: nueva rama `formulario_e1`, con las coordenadas de un primer calibrado (Departamento/Localidad/Apellido, Destino del edificio, grilla de Rubro 1, Rubro 2, lugar y fecha).
+
+**⚠️ A revisar con Franco:** a diferencia de U y SOR (que tuvieron varias rondas de ajuste fino con capturas de pantalla reales), el calibrado de E1 quedó en su primera pasada — en particular la posición exacta del bloque "Destino del edificio" y de la grilla de 65 casilleros de Rubro 1 (la más densa de las 3 plantillas) puede necesitar un corrimiento fino una vez que Franco lo compare contra el papel real. No debería requerir más que ajustar números de coordenadas puntuales en `generar.ts`, mismo mecanismo ya probado en U y SOR.
+
+**Housekeeping:** se sacó el freno `DDJJ_NO_IMPLEMENTADAS` en `generar.ts` (ya no hace falta, los 3 formularios están implementados) — los checkboxes de U/SOR/E1 en Tab Documentos ya generan el PDF real en vez de la advertencia "todavía no implementado".
+
+---
+
 ## 📋 Cambios de la sesión — 8 Julio 2026 (v0.9) — Declaraciones Juradas, piloto Formulario U
 
 Retomamos el punto pendiente "🔍 Análisis: Punto 6 — Revisión de DDJJ" (más abajo) ahora que tenemos las 3 plantillas reales de Franco (`FORMULARIO_U.pdf`, `FORMULARIO_SOR.pdf`, `FORMULARIO_E1.pdf`). Confirmado por código: los 3 son PDF planos, sin campos rellenables (AcroForm = 0 campos) — se generan dibujando el texto encima en coordenadas fijas, la plantilla se guarda tal cual en `public/pdf-templates/`.
@@ -114,13 +164,17 @@ Aditivo, no afecta nada existente — todos los expedientes actuales quedan con 
 
 **Ajuste posterior — limpieza de las referencias en rojo de la plantilla:** la plantilla original de Catastro trae, en rojo, los números de referencia que Franco fue marcando al analizar qué dato va en cada casillero ("2.3", "3.6", etc. — son 11 en total). Se probó taparlos con rectángulos blancos calculando su posición a mano, pero medir esas coordenadas contra la imagen no daba la precisión necesaria y en un intento incluso se llegó a tapar por error parte de un encabezado real. La solución que quedó, mucho más robusta: se abrió el archivo `formulario_u.pdf`, se ubicó el color de relleno que usa ese texto en rojo (`1.0 0 0` en el content stream del PDF) y se cambió por blanco (`1.0 1.0 1.0`) directamente ahí — mismo texto, mismas coordenadas, ahora invisible, sin depender de acertar ninguna posición ni tocar ninguna línea de la grilla. El único rectángulo que sigue en el código es el del párrafo de ejemplo de la página de la declaración (que es texto negro, no rojo, y sí necesita taparse a mano porque se reemplaza por el párrafo real). Esta misma técnica es la que conviene usar directamente para SOR y E1 cuando se les llegue el turno, en vez de repetir el proceso de prueba y error con rectángulos.
 
-**Pulido posterior (mismo día):**
-- Los datos escritos (Calle/Fracción/Manzana/Lote, Tomo/Folio/Año, Superficie, Rubro 3) se corrieron unos puntos para quedar centrados dentro de su casillero — antes quedaban pegados contra el borde superior.
-- Los tildes de Sí/No (agua corriente, cloacas, ausente del país) dejaron de marcarse con una "X" y ahora pintan de gris el casillero de la opción correspondiente.
-- La plantilla trae impreso en negro (no en rojo, por eso no lo tapaba la limpieza de más arriba) un "100" y un "DNI" de ejemplo en Rubro 3 — al centrar el texto real se veían duplicados ("100 100", "DNI DNI"); se tapan puntualmente esos dos textos de ejemplo antes de escribir el dato real.
-- Pendiente de confirmar: un corte/espacio en blanco que se veía en una línea de Rubro 3 en un screenshot — probado contra la plantilla sin ningún agregado de código no aparece, así que no viene de acá; a revisar con el PDF real generado por la app si sigue apareciendo.
+**Pulido posterior (mismo día, varias rondas con capturas de Juan):**
+- Los datos escritos (Calle, Fracción/Manzana/Lote, Tomo/Folio/Año, Superficie, Rubro 3) quedaron centrados dentro de su casillero — antes quedaban pegados contra el borde superior.
+- Los tildes de Sí/No (agua corriente, cloacas, ausente del país) se marcan con una **X en negrita** sobre el casillero correspondiente (se probó pintar el casillero de gris, pero Franco prefirió volver a la X; el tamaño se ajustó para que cruce el casillero sin tapar del todo la letra S/I o N/O impresa detrás).
+- La plantilla trae impreso en negro (no en rojo, por eso no lo tapaba la limpieza de más arriba) un "100" y un "DNI" de ejemplo en Rubro 3. Tapar ese texto con un rectángulo terminaba cortando alguna línea de la grilla en distintos intentos — la solución que quedó: cuando el dato real coincide con ese ejemplo (100% de condominio, documento DNI — el caso más común), directamente **no se escribe nada encima**, se deja el impreso de la plantilla. Solo se escribe cuando el dato real es distinto.
+- El casillero de "Folio" es angosto y la etiqueta se parte en "FOLI"/"O" — el valor se corrió para no pisar esa "O".
+- El casillero de "Último año pagado de impuesto" es de un dígito por celda — el año se reparte dígito por dígito en vez de escribirse corrido.
+- Se investigó el "recuadro blanco que corta líneas" reportado en un par de capturas: se confirmó contra el content stream del PDF que los 11 textos convertidos de rojo a blanco son todos texto (ninguno es una figura/rectángulo de relleno), así que no viene de ahí — se lo asoció al tamaño grande de la X (se venía probando en 12pt) y se corrigió a un tamaño más moderado (9pt).
+- LOCALIDAD: se había tapado con un rectángulo y redibujado como "LOCALIDAD: valor" — Franco pidió que quede igual que en la plantilla original (valor solo, en el renglón en blanco que ya trae la plantilla arriba de la etiqueta "LOCALIDAD", sin ningún tapado). Como el "3.1" de ese renglón ya es invisible por la limpieza de rojo→blanco, no hace falta ningún rectángulo: el valor se escribe directo ahí.
+- El año de "Último año pagado" se corrigió un casillero (arrancaba un dígito corrido a la derecha de lo que correspondía).
 
-**Pendiente para la próxima sesión:** replicar el mismo mecanismo para Formulario SOR (mismas tablas, ya extendidas — solo cambian los campos de ubicación rural y sus coordenadas) y armar Formulario E1 (tabla nueva `edificacion`, grilla de características constructivas). Ver plan completo guardado en la sesión.
+**Pendiente para la próxima sesión:** replicar el mismo mecanismo para Formulario SOR (mismas tablas, ya extendidas — solo cambian los campos de ubicación rural y sus coordenadas) y armar Formulario E1 (tabla nueva `edificacion`, grilla de características constructivas). Ver plan completo guardado en la sesión. → **Hecho, ver changelog v0.10 más arriba.**
 
 ---
 
@@ -485,7 +539,7 @@ ALTER TABLE inmuebles   ADD COLUMN IF NOT EXISTS antecedentes_tecnicos text;
 
 ## 🔍 Análisis: Punto 6 — Revisión de DDJJ (Declaraciones Juradas)
 
-> **Estado: 🔶 en curso (8 Julio 2026, v0.9)** — Formulario U ya implementado de punta a punta (ver changelog v0.9 más arriba). Formulario SOR y E1 quedan para la próxima sesión. El análisis de abajo se mantiene como referencia; terminó siendo el **Enfoque B** (plantilla plana, sin AcroForm).
+> **Estado: ✅ completo (17 Julio 2026, v0.10)** — Formulario U, SOR y E1 implementados de punta a punta (ver changelog v0.10 y v0.9 más arriba). El análisis de abajo se mantiene como referencia; terminó siendo el **Enfoque B** (plantilla plana, sin AcroForm).
 
 **Planteo de Franco:** tomar un PDF de Declaración Jurada ya prediseñado (plantilla oficial fija) y completarlo automáticamente con los datos que se van cargando en el sistema (comitente, inmueble, polígono, etc.), permitiendo luego descargar el PDF ya rellenado.
 

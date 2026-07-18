@@ -347,6 +347,51 @@ create policy "Linderos: acceso via expediente propio"
   );
 
 
+-- ── edificacion ───────────────────────────────────────────
+-- Formulario E1 (características constructivas), solo cuando el inmueble tiene edificación.
+-- `caracteristicas` guarda 1 inciso (a-e) elegido por categoría (fachada, paredes, etc.) en vez
+-- de las ~150 opciones individuales de la grilla original — es lo que Catastro usa para
+-- clasificar el edificio, y permite calcular solo el conteo por columna (A/B/C/D/E) en vez de
+-- tildar y contar a mano.
+create table if not exists edificacion (
+  id                        uuid primary key default gen_random_uuid(),
+  expediente_id             uuid references expedientes(id) on delete cascade not null unique,
+  destino_edificio          text,   -- 'casa_familia' | 'casa_departamentos' | 'hotel' | 'sanatorio' |
+                                     -- 'oficina' | 'asociaciones' | 'negocios' | 'espectaculos' | 'otros'
+  destino_otros_detalle     text,
+  estado_conservacion       text,   -- 'bueno' | 'regular' | 'malo'
+  edad_edificio             int,
+  superficie_cubierta       numeric(10,2),
+  superficie_semicubierta   numeric(10,2),
+  superficie_negocios       numeric(10,2),
+  banos_principales         int,
+  toilettes                 int,
+  pileta_natacion           numeric(10,2),
+  agua_caliente_central     int,
+  ascensores                int,
+  instalaciones_incendio    int,
+  cantidad_habitaciones     int,
+  caracteristicas           jsonb default '{}'::jsonb
+);
+
+alter table edificacion enable row level security;
+
+create policy "Edificacion: acceso via expediente propio"
+  on edificacion for all
+  using (
+    exists (
+      select 1 from expedientes e
+      where e.id = edificacion.expediente_id and e.user_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from expedientes e
+      where e.id = edificacion.expediente_id and e.user_id = auth.uid()
+    )
+  );
+
+
 -- ── documentos_generados ──────────────────────────────────
 create table if not exists documentos_generados (
   id              uuid primary key default gen_random_uuid(),
