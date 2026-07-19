@@ -126,6 +126,12 @@ create policy "Edificacion: acceso via expediente propio"
 
 **Housekeeping:** se sacó el freno `DDJJ_NO_IMPLEMENTADAS` en `generar.ts` (ya no hace falta, los 3 formularios están implementados) — los checkboxes de U/SOR/E1 en Tab Documentos ya generan el PDF real en vez de la advertencia "todavía no implementado".
 
+**⚠️ Post-mortem (18 Julio 2026):** el checkbox de Tab Documentos para SOR y E1 había quedado con el texto viejo "todavía no implementado" y deshabilitado (nunca se actualizó al implementarlos) — corregido, ahora son tildables de verdad y con la misma validación de "faltan datos" que ya tenían el resto de los documentos.
+
+**🐛 Bug reportado por Franco — "Guardar características del edificio" no guardaba:** el botón parecía no hacer nada — quedaba "Guardado correctamente" en verde, pero al volver a la Tab DDJJ el formulario aparecía en blanco y el checkbox "¿tiene construcciones?" destildado. Causa: `guardar_ddjj_e1` hacía el `insert`/`update` a la tabla `edificacion` sin chequear si la escritura fallaba — y aunque hubiera fallado, el mensaje de "Guardado correctamente" que se ve en pantalla depende únicamente de que la request haga el redirect final (no de si el guardado fue exitoso), así que un error silencioso quedaba completamente invisible. Se corrigió: ahora si el insert/update devuelve error, se corta con un redirect propio que muestra el detalle real (`warn=ddjj_e1_error&detalle=...`) en vez de seguir de largo. De paso se corrigió que un valor en `0` (ej. "Pileta de natación" o "Superficie destinada a negocios" en 0) se guardaba como vacío por un `|| null` que trata a `0` como falsy. **Pendiente:** falta que Franco reintente para ver el mensaje de error real y confirmar la causa de fondo (sospecha: alguna política RLS o tipo de dato en la tabla `edificacion`).
+
+Franco también pidió, por separado, que los datos cargados no se pierdan al cambiar de pestaña sin guardar (una especie de "caché" de borrador). Es un pedido de UX legítimo pero es una funcionalidad nueva, no parte de este bug — queda anotado para una próxima sesión si se confirma que hace falta.
+
 ---
 
 ## 📋 Cambios de la sesión — 8 Julio 2026 (v0.9) — Declaraciones Juradas, piloto Formulario U

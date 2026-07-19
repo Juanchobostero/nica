@@ -330,26 +330,44 @@ if (Astro.request.method === 'POST') {
       const valor = form.get(`car_${cat.key}`) as string
       if (valor && INCISOS_E1.includes(valor)) caracteristicas[cat.key] = valor
     }
+    // form.get(...) || null convertía un 0 real (pileta de natación vacía, superficie de
+    // negocios en 0, etc.) en null, porque 0 es falsy en JS — se perdía el dato cargado.
+    const numE1 = (name: string, entero: boolean) => {
+      const raw = form.get(name) as string
+      if (raw == null || raw === '') return null
+      const n = entero ? parseInt(raw) : parseFloat(raw)
+      return Number.isNaN(n) ? null : n
+    }
     const payload = {
       expediente_id: id,
       destino_edificio: form.get('destino_edificio') || null,
       destino_otros_detalle: form.get('destino_otros_detalle') || null,
       estado_conservacion: form.get('estado_conservacion') || null,
-      edad_edificio: parseInt(form.get('edad_edificio') as string) || null,
-      superficie_cubierta: parseFloat(form.get('superficie_cubierta') as string) || null,
-      superficie_semicubierta: parseFloat(form.get('superficie_semicubierta') as string) || null,
-      superficie_negocios: parseFloat(form.get('superficie_negocios') as string) || null,
-      banos_principales: parseInt(form.get('banos_principales') as string) || null,
-      toilettes: parseInt(form.get('toilettes') as string) || null,
-      pileta_natacion: parseFloat(form.get('pileta_natacion') as string) || null,
-      agua_caliente_central: parseInt(form.get('agua_caliente_central') as string) || null,
-      ascensores: parseInt(form.get('ascensores') as string) || null,
-      instalaciones_incendio: parseInt(form.get('instalaciones_incendio') as string) || null,
-      cantidad_habitaciones: parseInt(form.get('cantidad_habitaciones') as string) || null,
+      edad_edificio: numE1('edad_edificio', true),
+      superficie_cubierta: numE1('superficie_cubierta', false),
+      superficie_semicubierta: numE1('superficie_semicubierta', false),
+      superficie_negocios: numE1('superficie_negocios', false),
+      banos_principales: numE1('banos_principales', true),
+      toilettes: numE1('toilettes', true),
+      pileta_natacion: numE1('pileta_natacion', false),
+      agua_caliente_central: numE1('agua_caliente_central', true),
+      ascensores: numE1('ascensores', true),
+      instalaciones_incendio: numE1('instalaciones_incendio', true),
+      cantidad_habitaciones: numE1('cantidad_habitaciones', true),
       caracteristicas,
     }
-    if (edificacion) await db.from('edificacion').update(payload).eq('expediente_id', id)
-    else await db.from('edificacion').insert(payload)
+    const { error: errorE1 } = edificacion
+      ? await db.from('edificacion').update(payload).eq('expediente_id', id)
+      : await db.from('edificacion').insert(payload)
+    // Antes esto no chequeaba el resultado: si el insert/update fallaba (RLS, tipo de dato,
+    // lo que sea), la página igual mostraba "Guardado correctamente" más abajo (ese mensaje
+    // depende del redirect final de la línea ~440, no de si esto realmente escribió algo en
+    // la base) y al volver a la Tab DDJJ aparecía todo en blanco, como si el botón no hiciera
+    // nada. Ahora, si falla, se corta acá con un redirect propio que muestra el error real.
+    if (errorE1) {
+      console.error('guardar_ddjj_e1:', errorE1.message)
+      return Astro.redirect(`/expedientes/${id}?tab=ddjj&warn=ddjj_e1_error&detalle=${encodeURIComponent(errorE1.message)}`)
+    }
     successMsg = 'Características del edificio guardadas.'
   }
 
@@ -436,6 +454,7 @@ if (Astro.request.method === 'POST') {
 const activeTab  = Astro.url.searchParams.get('tab') ?? 'comitente'
 const ok         = Astro.url.searchParams.get('ok')
 const warn       = Astro.url.searchParams.get('warn')
+const detalle    = Astro.url.searchParams.get('detalle')
 
 const DEPARTAMENTOS = [
   'Capital','Bella Vista','Berón de Astrada','Concepción','Curuzú Cuatiá',
@@ -516,6 +535,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
   {warn === 'ddjj_no_implementada' && <div class="alert alert-error" style="margin-bottom:1rem">Ese formulario de Declaración Jurada todavía no está implementado.</div>}
   {warn === 'ddjj_falta_inmueble' && <div class="alert alert-error" style="margin-bottom:1rem">Completá primero la Tab 2 Inmueble antes de generar la Declaración Jurada.</div>}
   {warn === 'ddjj_tipo_incorrecto' && <div class="alert alert-error" style="margin-bottom:1rem">El Formulario U es solo para inmuebles urbanos y el SOR solo para rurales — revisá el tipo de inmueble cargado en la Tab 2.</div>}
+  {warn === 'ddjj_e1_error' && <div class="alert alert-error" style="margin-bottom:1rem">No se pudieron guardar las características del edificio.{detalle ? ` Detalle: ${detalle}` : ''}</div>}
   {errorMsg && <div class="alert alert-error" style="margin-bottom:1rem">{errorMsg}</div>}
 
   <div class="card">
