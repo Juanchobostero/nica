@@ -2,7 +2,7 @@ import type { APIRoute } from 'astro'
 import { supabase, getSupabase } from '../../../lib/supabase'
 import { calcularPoligonal } from '../../../lib/poligonal'
 import { CATEGORIAS_E1, INCISOS_E1, DESTINOS_E1 } from '../../../lib/edificacionE1'
-import { PDFDocument, StandardFonts, rgb, degrees, type PDFFont, type PDFPage } from 'pdf-lib'
+import { PDFDocument, StandardFonts, rgb, degrees, type PDFFont, type PDFPage, type PDFImage } from 'pdf-lib'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -47,11 +47,28 @@ function partirEnLineas(texto: string, maxWidth: number, size: number, font: PDF
   return lineas
 }
 
+// Lee un asset estático de /public/images — primero de disco (dev), con fallback a fetch (Vercel/
+// producción, donde el filesystem del lambda no tiene el repo). Mismo patrón que ya usaban por
+// separado el logo de la carátula y el del membrete — unificado acá para no repetirlo.
+async function cargarLogoBytes(nombreArchivo: string, request: Request): Promise<Uint8Array | null> {
+  try {
+    const logoDisk = await readFile(join(process.cwd(), 'public', 'images', nombreArchivo))
+    return new Uint8Array(logoDisk)
+  } catch {
+    try {
+      const logoRes = await fetch(new URL(`/images/${nombreArchivo}`, request.url).toString())
+      if (logoRes.ok) return new Uint8Array(await logoRes.arrayBuffer())
+    } catch {}
+  }
+  return null
+}
+
 // Encabezado: caja negra a todo el ancho con Objeto/Comitente/Ubicación/Profesional (con wrap automático) + línea de contacto
 function dibujarEncabezado(
   page: PDFPage, width: number, height: number,
   fonts: { font: PDFFont; bold: PDFFont },
   datos: { objeto: string; comitente: string; ubicacion: string; profesional: string; email?: string; telefono?: string },
+  logo?: PDFImage | null,
 ) {
   const { font, bold } = fonts
   const negroFondo = rgb(0.08, 0.08, 0.1)
@@ -59,12 +76,23 @@ function dibujarEncabezado(
   const gris   = rgb(0.42, 0.45, 0.50)
   const negro  = rgb(0.10, 0.10, 0.10)
 
-  const margen = 30
-  const cajaX = margen
-  const cajaW = width - margen * 2
+  // Márgenes e ítems medidos contra el membrete real (Word → PDF) que usa Franco en
+  // EXP_PRUEBA.pdf: la franja mide 442.25 de ancho arrancando en x=83.05 (página de 595.28 de
+  // ancho) — no son los 30/30 simétricos que traía esta función antes de tener el logo.
+  const margenIzq = 83
+  const margenDer = 70
+  const cajaX = margenIzq
+  const cajaW = width - margenIzq - margenDer
   const padX = 10
   const sizeFila = 7.5
   const lhFila = 10.5
+
+  // El logo ocupa la franja izquierda de la caja (igual que en la referencia, donde el logo
+  // convive con el fondo negro de la franja); el texto arranca después, con un margen chico.
+  const logoAlto = 36
+  const logoAncho = logo ? logoAlto * (logo.width / logo.height) : 0
+  const logoGap = logo ? 14 : 0
+  const textoX = cajaX + padX + logoAncho + logoGap
 
   const filasTexto = [
     `OBJETO: ${datos.objeto}`,
@@ -73,25 +101,29 @@ function dibujarEncabezado(
     `PROFESIONAL: ${datos.profesional}`,
   ].map(t => t.toUpperCase())
 
-  const anchoDisponible = cajaW - padX * 2
+  const anchoDisponible = cajaX + cajaW - padX - textoX
   const filasWrapped = filasTexto.map(t => partirEnLineas(t, anchoDisponible, sizeFila, bold))
   const totalLineas = filasWrapped.reduce((acc, l) => acc + l.length, 0)
-  const barH = Math.max(50, totalLineas * lhFila + 14)
+  const barH = Math.max(52, totalLineas * lhFila + 14)
 
   const yTop = height - 14
   const cajaY = yTop - barH
   page.drawRectangle({ x: cajaX, y: cajaY, width: cajaW, height: barH, color: negroFondo })
 
+  if (logo) {
+    page.drawImage(logo, { x: cajaX + padX, y: cajaY + (barH - logoAlto) / 2, width: logoAncho, height: logoAlto })
+  }
+
   let cursorY = yTop - 16
   filasWrapped.forEach(lineas => {
     lineas.forEach(linea => {
-      page.drawText(linea, { x: cajaX + padX, y: cursorY, size: sizeFila, font: bold, color: blanco })
+      page.drawText(linea, { x: textoX, y: cursorY, size: sizeFila, font: bold, color: blanco })
       cursorY -= lhFila
     })
   })
 
-  // Línea separadora debajo de todo el encabezado
-  page.drawLine({ start: { x: margen, y: cajaY - 10 }, end: { x: width - margen, y: cajaY - 10 }, thickness: 1, color: negro })
+  // Línea separadora debajo de todo el encabezado — mismo ancho que la franja, no de margen a margen
+  page.drawLine({ start: { x: cajaX, y: cajaY - 10 }, end: { x: cajaX + cajaW, y: cajaY - 10 }, thickness: 1, color: negro })
 
   // Línea de contacto debajo de la franja
   const contacto = [datos.telefono ? `Celular: ${datos.telefono}` : '', datos.email ? `Correo: ${datos.email}` : '']
@@ -109,11 +141,45 @@ function crearPaginaConEncabezado(
   pdfDoc: PDFDocument,
   fonts: { font: PDFFont; bold: PDFFont },
   datosEncabezado: { objeto: string; comitente: string; ubicacion: string; profesional: string; email?: string; telefono?: string },
+  logo?: PDFImage | null,
 ) {
   const page = pdfDoc.addPage([595.28, 841.89])
   const { width, height } = page.getSize()
-  const yEncabezadoFin = dibujarEncabezado(page, width, height, fonts, datosEncabezado)
+  const yEncabezadoFin = dibujarEncabezado(page, width, height, fonts, datosEncabezado, logo)
   return { page, width, height, yEncabezadoFin }
+}
+
+// Página "mini-carátula" divisoria — se usa solo al generar el expediente completo en un solo
+// PDF, entre grupos de documentos (ej. "ACTAS" antes de Acta de Mensura + Acta de Ausencia).
+// Mismo formato que ya usa la Carátula: membrete chico arriba, título centrado grande, logo
+// circular grande al pie — tomado de EXP_PRUEBA.pdf, donde cada sección arranca con una página así.
+async function crearPaginaDivisoria(
+  pdfDoc: PDFDocument,
+  fonts: { font: PDFFont; bold: PDFFont; boldItalic: PDFFont },
+  datosEncabezado: { objeto: string; comitente: string; ubicacion: string; profesional: string; email?: string; telefono?: string },
+  logoMembrete: PDFImage | null,
+  logoCaratulaBytes: Uint8Array | null,
+  titulo: string,
+) {
+  const { page, width, yEncabezadoFin } = crearPaginaConEncabezado(pdfDoc, fonts, datosEncabezado, logoMembrete)
+  const negro = rgb(0.10, 0.10, 0.10)
+
+  const tituloLineas = titulo.split('\n')
+  let yTitulo = yEncabezadoFin - 150
+  tituloLineas.forEach(linea => {
+    dibujarCentrado(page, linea, yTitulo, 26, fonts.boldItalic, negro, width)
+    yTitulo -= 32
+  })
+
+  if (logoCaratulaBytes) {
+    const logoImg = await pdfDoc.embedPng(logoCaratulaBytes)
+    const maxLogoW = 360, maxLogoH = 180
+    const scale = Math.min(maxLogoW / logoImg.width, maxLogoH / logoImg.height)
+    const lw = logoImg.width * scale, lh = logoImg.height * scale
+    page.drawImage(logoImg, { x: (width - lw) / 2, y: 55, width: lw, height: lh })
+  }
+
+  return page
 }
 
 // Descarga un archivo de Storage (imagen o PDF) y lo embebe escalado dentro de un recuadro.
@@ -247,6 +313,72 @@ function dibujarParrafo(page: PDFPage, texto: string, x: number, y: number, maxW
   return y - lineas.length * lh
 }
 
+type PalabraConEstilo = { texto: string; font: PDFFont }
+
+function dibujarLineaJustificadaMixta(page: PDFPage, palabras: PalabraConEstilo[], x: number, y: number, anchoLinea: number, size: number, color: any) {
+  if (palabras.length === 1) {
+    page.drawText(palabras[0].texto, { x, y, size, font: palabras[0].font, color })
+    return
+  }
+  const anchoPalabras = palabras.reduce((acc, p) => acc + p.font.widthOfTextAtSize(p.texto, size), 0)
+  const numGaps = palabras.length - 1
+  const espacioNormal = palabras[0].font.widthOfTextAtSize(' ', size)
+  const espacioExtra = Math.max(0, (anchoLinea - anchoPalabras - espacioNormal * numGaps) / numGaps)
+  let cursorX = x
+  palabras.forEach(p => {
+    page.drawText(p.texto, { x: cursorX, y, size, font: p.font, color })
+    cursorX += p.font.widthOfTextAtSize(p.texto, size) + espacioNormal + espacioExtra
+  })
+}
+
+// Como dibujarParrafo, pero acepta varios segmentos con su propia fuente (ej. una oración fija
+// en regular con un tramo puntual en negrita en el medio) — se explota todo a nivel de palabra
+// para que el ajuste de línea y la justificación funcionen igual que en un párrafo normal.
+function dibujarParrafoMixto(page: PDFPage, segmentos: PalabraConEstilo[], x: number, y: number, maxWidth: number, size: number, color: any, lineHeight?: number, sangria = 18): number {
+  const lh = lineHeight ?? size * 1.55
+  const palabras: PalabraConEstilo[] = []
+  segmentos.forEach(seg => {
+    seg.texto.replace(/\r?\n/g, ' ').split(' ').filter(Boolean).forEach(w => palabras.push({ texto: w, font: seg.font }))
+  })
+
+  const lineas: PalabraConEstilo[][] = []
+  let actual: PalabraConEstilo[] = []
+  let anchoActual = 0
+  for (const palabra of palabras) {
+    const anchoDisponible = lineas.length === 0 ? maxWidth - sangria : maxWidth
+    const anchoPalabra = palabra.font.widthOfTextAtSize(palabra.texto, size)
+    const espacio = actual.length ? palabra.font.widthOfTextAtSize(' ', size) : 0
+    const anchoPrueba = anchoActual + espacio + anchoPalabra
+    if (anchoPrueba > anchoDisponible && actual.length) {
+      lineas.push(actual)
+      actual = [palabra]
+      anchoActual = anchoPalabra
+    } else {
+      actual.push(palabra)
+      anchoActual = anchoPrueba
+    }
+  }
+  if (actual.length) lineas.push(actual)
+
+  lineas.forEach((linea, i) => {
+    const esPrimera = i === 0
+    const esUltima = i === lineas.length - 1
+    const xLinea = x + (esPrimera ? sangria : 0)
+    const anchoLinea = maxWidth - (esPrimera ? sangria : 0)
+    const yLinea = y - i * lh
+    if (esUltima) {
+      let cursorX = xLinea
+      linea.forEach(p => {
+        page.drawText(p.texto, { x: cursorX, y: yLinea, size, font: p.font, color })
+        cursorX += p.font.widthOfTextAtSize(p.texto, size) + p.font.widthOfTextAtSize(' ', size)
+      })
+    } else {
+      dibujarLineaJustificadaMixta(page, linea, xLinea, yLinea, anchoLinea, size, color)
+    }
+  })
+  return y - lineas.length * lh
+}
+
 const UNIDADES_LETRAS = ['', 'UN', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE',
   'DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISÉIS', 'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE',
   'VEINTE', 'VEINTIÚN', 'VEINTIDÓS', 'VEINTITRÉS', 'VEINTICUATRO', 'VEINTICINCO', 'VEINTISÉIS',
@@ -292,6 +424,15 @@ function horaALetras(horaStr: string | null | undefined): string {
   const horaTxt = numeroALetras(h) + (h === 1 ? ' HORA' : ' HORAS')
   const minTxt = numeroALetras(m) + (m === 1 ? ' MINUTO' : ' MINUTOS')
   return capitalizarPrimera(`${horaTxt}, ${minTxt}`)
+}
+
+// Resta horas a un "HH:MM" — usado para citar a los linderos 1 hora antes de la hora real de
+// mensura (Acta de Mensura y Acta de Ausencia de Linderos siguen mostrando la hora real).
+function restarHora(horaStr: string | null | undefined, horas: number): string | null {
+  if (!horaStr) return null
+  const [h, m] = horaStr.split(':').map(n => parseInt(n) || 0)
+  const totalMin = ((h * 60 + m - horas * 60) % 1440 + 1440) % 1440
+  return `${String(Math.floor(totalMin / 60)).padStart(2, '0')}:${String(totalMin % 60).padStart(2, '0')}`
 }
 
 function construirUbicacion(inmueble: any): string {
@@ -387,7 +528,8 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const db = getSupabase(token)
   const form = await request.formData()
   const expedienteId = form.get('expediente_id') as string
-  const tipos = form.getAll('tipos[]') as string[]
+  let tipos = form.getAll('tipos[]') as string[]
+  const esBundle = tipos.includes('expediente_completo')
 
   if (!tipos.length) {
     return isAjax
@@ -488,6 +630,40 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const tipoMensuraTexto = (exp?.tipo_mensura ?? '—').toUpperCase()
   const ubicacionCompleta = `${construirUbicacion(inmueble)}${inmueble?.departamento ? ', ' + inmueble.departamento : ''}`
 
+  // Logos leídos una sola vez de disco acá (el chico del membrete y el grande de la carátula/
+  // divisorias) — como cada tipo de documento arma su propio PDFDocument, se embeben de nuevo
+  // (embedJpg/embedPng son baratos, no vuelven a leer el archivo) dentro del loop.
+  const logoMembreteBytes = await cargarLogoBytes('nica-logo-membrete.jpg', request)
+  const logoCaratulaBytes = await cargarLogoBytes('nica-logo-caratula.png', request)
+
+  // "Generar expediente completo": no es un tipo de documento real, es un marcador — el
+  // servidor arma su propia lista ordenada (no se confía en lo que mande el cliente) siguiendo
+  // el mismo orden y las mismas divisorias que trae EXP_PRUEBA.pdf (el expediente de referencia
+  // de Franco). "Notificación a Linderos" queda afuera a propósito: es un trámite previo a la
+  // mensura, no forma parte del expediente final que se presenta a Catastro.
+  const tipoDDJJPrincipal = (inmueble as any)?.tipo_inmueble === 'rural' ? 'formulario_sor' : 'formulario_u'
+  const incluirE1 = !!edificacion
+  const DIVISORIAS_BUNDLE: Record<string, string> = {
+    capitulo_ubicacion: 'DESCRIPCIÓN Y DOMINIO\nDEL INMUEBLE',
+    acta_mensura: 'ACTAS',
+    memoria_mensura: 'MEMORIA DE OPERACIONES',
+    planilla_calculos: 'PLANILLAS DE CÁLCULO',
+    [tipoDDJJPrincipal]: `DECLARACIONES JURADAS\nFORMULARIOS "${tipoDDJJPrincipal === 'formulario_sor' ? 'SOR' : 'U'}${incluirE1 ? ' – E1' : ''}"`,
+  }
+  if (esBundle) {
+    tipos = [
+      'caratula', 'nota_elevacion', 'documento_identidad',
+      'capitulo_ubicacion',
+      'acta_mensura', 'acta_ausencia_linderos',
+      'memoria_mensura',
+      'planilla_calculos',
+      tipoDDJJPrincipal,
+      ...(incluirE1 ? ['formulario_e1'] : []),
+    ]
+  }
+
+  const documentosParaSubir: { tipo: string; pdfBytes: Uint8Array }[] = []
+
   for (const tipo of tipos) {
     const esDDJJ = tipo === 'formulario_u' || tipo === 'formulario_sor' || tipo === 'formulario_e1'
 
@@ -498,6 +674,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
     let boldItalic: PDFFont
     let width: number, height: number
     let yEncabezadoFin = 0
+    let logoMembrete: PDFImage | null = null
 
     const azul   = rgb(0.106, 0.180, 0.369)
     const gris   = rgb(0.42, 0.45, 0.50)
@@ -522,6 +699,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       ;({ width, height } = page.getSize())
 
       // Encabezado tipo membrete (logo + datos del expediente)
+      logoMembrete = logoMembreteBytes ? await pdfDoc.embedJpg(logoMembreteBytes) : null
       yEncabezadoFin = dibujarEncabezado(page, width, height, { font, bold }, {
         objeto: tipoMensuraTexto,
         comitente: nombreComitente,
@@ -529,7 +707,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         profesional: `Agrimensor ${nombreProfesional}`,
         email: profile?.email,
         telefono: profile?.telefono,
-      })
+      }, logoMembrete)
     }
 
     if (tipo === 'formulario_u') {
@@ -636,9 +814,14 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         const p3 = paginaDeclaracion
         p3.drawRectangle({ x: 61, y: 795, width: 475, height: 48, color: rgb(1, 1, 1) })
 
-        const declarante = expComitentes?.[0]?.comitentes as any
+        // El declarante de esta página es el profesional (agrimensor), no el comitente —
+        // confirmado contra el ejemplo real de Franco ("El que suscribe FRANCO ARTURO NIGRO
+        // CARRIERE... en su carácter de AGRIMENSOR"). `profiles` no tiene columna de
+        // nacionalidad ni tipo de documento — se asume Argentina/DNI, que en la práctica es
+        // siempre así para un agrimensor matriculado acá (no amerita una columna nueva).
+        const declarante = profile as any
         const nombreDeclarante = declarante ? `${declarante.nombre ?? ''} ${declarante.apellido ?? ''}`.toUpperCase() : ''
-        const parrafo = `El que suscribe ${nombreDeclarante} nacionalidad ${declarante?.nacionalidad ?? ''} documento de identidad ${declarante?.tipo_documento ?? 'DNI'} Nº ${declarante?.dni ?? ''} en su carácter de ${(rolComitente ?? '').toUpperCase()} declara bajo juramento que es verdad toda información suministrada por el y transcripta en el presente formulario y que tiene conocimiento de las penalidades establecidas por omision, falsedad y toda transgresión a las disposiciones legales.`
+        const parrafo = `El que suscribe ${nombreDeclarante} nacionalidad Argentina documento de identidad DNI Nº ${declarante?.dni ?? ''} en su carácter de AGRIMENSOR declara bajo juramento que es verdad toda información suministrada por el y transcripta en el presente formulario y que tiene conocimiento de las penalidades establecidas por omision, falsedad y toda transgresión a las disposiciones legales.`
 
         // El recuadro de la declaración va de x≈55 a x≈539 (medido en el content stream del PDF)
         // — con ancho 500 el párrafo se pasaba del borde derecho de la caja en las líneas largas.
@@ -735,21 +918,25 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       const declaranteE1 = (expComitentes?.[0] as any)?.comitentes
       campoE1(declaranteE1 ? `${declaranteE1.apellido ?? ''}, ${declaranteE1.nombre ?? ''}`.toUpperCase() : '', 290, 901)
 
-      // Destino del edificio — 9 opciones en dos columnas (5 izquierda, 4 derecha), casillero a
-      // la izquierda de cada etiqueta.
+      // Destino del edificio — 9 opciones en dos columnas (5 izquierda, 4 derecha). Coordenadas
+      // medidas contra un ejemplo real de Franco (EXP_PRUEBA.pdf, casillero por casillero con
+      // grilla fina) en vez de la plantilla vacía — mucho más preciso que el primer calibrado.
+      // OJO: la plantilla trae "Casa de Familia" pre-tildado de fábrica (ejemplo impreso, mismo
+      // criterio que el "100"/"DNI" de Formulario U) — si el destino real es ese, no se dibuja
+      // nada encima; para cualquier otro destino si se marca el casillero real.
       const destinoSeleccionado = (edificacion as any)?.destino_edificio
       const DESTINO_XY: Record<string, [number, number]> = {
-        casa_familia: [230, 872],
-        casa_departamentos: [230, 860],
-        hotel: [230, 848],
-        sanatorio: [230, 836],
-        oficina: [230, 824],
-        asociaciones: [430, 872],
-        negocios: [430, 860],
-        espectaculos: [430, 848],
-        otros: [430, 836],
+        casa_familia: [308, 889],
+        casa_departamentos: [308, 870],
+        hotel: [308, 851],
+        sanatorio: [308, 832],
+        oficina: [308, 813],
+        asociaciones: [538, 889],
+        negocios: [538, 870],
+        espectaculos: [538, 851],
+        otros: [538, 832],
       }
-      if (destinoSeleccionado && DESTINO_XY[destinoSeleccionado]) {
+      if (destinoSeleccionado && destinoSeleccionado !== 'casa_familia' && DESTINO_XY[destinoSeleccionado]) {
         const [dx, dy] = DESTINO_XY[destinoSeleccionado]
         marcarE1(dx, dy)
       }
@@ -757,26 +944,46 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         campoE1((edificacion as any)?.destino_otros_detalle ?? '', 460, 826, 7)
       }
 
-      // Rubro 1 — Características: 13 categorías × 5 incisos (a-e). El casillero elegido se
-      // marca con una X apoyada al principio de la columna correspondiente. Filas espaciadas
-      // parejo entre y=815 (debajo del encabezado "Inciso a)...e)") e y=300 (arriba de la fila
-      // "14) Tipo del edificio"); columnas espaciadas parejo entre x=95 y x=597.
+      // Rubro 1 — Características: 13 categorías × 5 incisos (a-e). Límites de fila/columna
+      // medidos contra el mismo ejemplo real (no son parejos: el inciso a) es bien más ancho que
+      // el resto, y la fila "Techos" más baja que las demás). El casillero elegido se sombrea en
+      // gris (no una X) — así lo marca Franco a mano.
+      const grisClaroE1 = rgb(0.85, 0.85, 0.85)
+      const COL_BOUNDS_E1 = [55, 198, 300, 408, 500, 600]
+      const ROW_BOUNDS_E1 = [800, 763, 726, 702, 665, 630, 596, 562, 528, 495, 462, 428, 395, 355, 322]
       const caracteristicas = (edificacion as any)?.caracteristicas ?? {}
-      const filaAltoE1 = (815 - 300) / CATEGORIAS_E1.length
-      const columnaAnchoE1 = (597 - 95) / INCISOS_E1.length
       CATEGORIAS_E1.forEach((cat, i) => {
         const inciso = caracteristicas[cat.key]
         if (!inciso) return
         const colIdx = INCISOS_E1.indexOf(inciso)
         if (colIdx === -1) return
-        const y = 815 - filaAltoE1 * (i + 0.5)
-        const x = 95 + columnaAnchoE1 * colIdx + 8
-        marcarE1(x, y)
+        const xIni = COL_BOUNDS_E1[colIdx] + 1
+        const xFin = COL_BOUNDS_E1[colIdx + 1] - 1
+        const yIni = ROW_BOUNDS_E1[i + 1] + 1
+        const yFin = ROW_BOUNDS_E1[i] - 1
+        page.drawRectangle({ x: xIni, y: yIni, width: xFin - xIni, height: yFin - yIni, color: grisClaroE1 })
       })
 
-      // Rubro 2 — Otros datos (12 renglones, de "a" a "l"), espaciados parejo entre y=258 y y=71.
-      const rubro2Y = (idx: number) => 258 - idx * ((258 - 71) / 11)
-      const ESTADO_XY: Record<string, number> = { bueno: 330, regular: 430, malo: 478 }
+      // Fila "14) Tipo del edificio" — cantidad de categorías (de las 13) que eligieron cada
+      // inciso A-E. Catastro lo usa para clasificar el edificio; hoy Franco lo cuenta a mano —
+      // acá sale solo de los datos ya cargados (aproximación a nivel de categoría, no de cada
+      // sub-frase individual dentro del casillero, que no guardamos).
+      const conteoPorInciso: Record<string, number> = { a: 0, b: 0, c: 0, d: 0, e: 0 }
+      CATEGORIAS_E1.forEach(cat => {
+        const inciso = caracteristicas[cat.key]
+        if (inciso && conteoPorInciso[inciso] != null) conteoPorInciso[inciso]++
+      })
+      const yFila14 = (ROW_BOUNDS_E1[13] + ROW_BOUNDS_E1[14]) / 2 - 3
+      INCISOS_E1.forEach((inciso, idx) => {
+        const xCentro = COL_BOUNDS_E1[idx] + (COL_BOUNDS_E1[idx + 1] - COL_BOUNDS_E1[idx]) * 0.4
+        campoE1(String(conteoPorInciso[inciso]), xCentro, yFila14)
+      })
+
+      // Rubro 2 — Otros datos (12 renglones, de "a" a "l"), espaciados parejo entre y=275 y y=88.
+      // (No y=258: en un render de prueba la marca de "Estado de conservación" caía una fila
+      // más abajo, sobre "Edad del edificio" — con 275 como ancla de la fila "a" quedó alineado.)
+      const rubro2Y = (idx: number) => 275 - idx * ((275 - 88) / 11)
+      const ESTADO_XY: Record<string, number> = { bueno: 371, regular: 434, malo: 504 }
       const estadoX = ESTADO_XY[(edificacion as any)?.estado_conservacion ?? '']
       if (estadoX) marcarE1(estadoX, rubro2Y(0))
       campoE1((edificacion as any)?.edad_edificio != null ? String((edificacion as any).edad_edificio) : '', 540, rubro2Y(1))
@@ -827,16 +1034,8 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
       // Logo PNG — ocupa todo el pie (incluye sello, nombre y contacto)
       try {
-        let logoBytes: Uint8Array | null = null
-        try {
-          const logoDisk = await readFile(join(process.cwd(), 'public', 'images', 'nica-logo-caratula.png'))
-          logoBytes = new Uint8Array(logoDisk)
-        } catch {
-          const logoRes = await fetch(new URL('/images/nica-logo-caratula.png', request.url).toString())
-          if (logoRes.ok) logoBytes = new Uint8Array(await logoRes.arrayBuffer())
-        }
-        if (logoBytes) {
-          const logoImg = await pdfDoc.embedPng(logoBytes)
+        if (logoCaratulaBytes) {
+          const logoImg = await pdfDoc.embedPng(logoCaratulaBytes)
           const maxLogoW = 360, maxLogoH = 180
           const scale = Math.min(maxLogoW / logoImg.width, maxLogoH / logoImg.height)
           const lw = logoImg.width * scale, lh = logoImg.height * scale
@@ -933,7 +1132,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         // La primera página ya fue creada y tiene el encabezado dibujado arriba del if/else
         const pag = idx === 0
           ? { page, width, height, yEncabezadoFin }
-          : crearPaginaConEncabezado(pdfDoc, { font, bold }, datosEncabezado)
+          : crearPaginaConEncabezado(pdfDoc, { font, bold }, datosEncabezado, logoMembrete)
 
         pag.page.drawText('DOCUMENTO DE IDENTIDAD DEL COMITENTE', {
           x: 40, y: pag.yEncabezadoFin - 30, size: 13, font: bold, color: azul,
@@ -1030,11 +1229,18 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       y = dibujarParrafo(page, parrafoMunicipal, margenX, y, anchoTexto, 11, font, negro)
       y -= 22
 
+      // El campo "Antecedentes Técnicos" (Tab 2 Inmueble) solo pide los códigos de duplicados
+      // de mensura (ej. "3072-K, 3052-K, 3056-K, 3144-K") — la oración fija de alrededor la arma
+      // el generador, con los códigos en negrita, igual que en los ejemplos reales de Franco.
       const antecedentesTecnicos = (inmueble as any)?.antecedentes_tecnicos
       if (antecedentesTecnicos) {
         page.drawText('ANTECEDENTES TÉCNICOS:', { x: margenX, y, size: 11, font: bold, color: negro })
         y -= 20
-        dibujarParrafo(page, antecedentesTecnicos, margenX, y, anchoTexto, 11, font, negro)
+        dibujarParrafoMixto(page, [
+          { texto: 'En el sistema GEOSIT de la Dirección General de Catastro se hallan los duplicados de Mensura ', font },
+          { texto: antecedentesTecnicos, font: bold },
+          { texto: ' relacionadas a las presentes operaciones.', font },
+        ], margenX, y, anchoTexto, 11, negro)
       }
 
     } else if (tipo === 'citacion_linderos') {
@@ -1087,7 +1293,10 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       y -= 12
 
       const fechaCorta = formatearFechaCorta(exp?.fecha_inicio)
-      const horaTexto = (exp as any)?.hora_mensura ?? '—'
+      // La citación a linderos se hace 1 hora antes de la hora real de mensura (que sí se
+      // muestra tal cual en Acta de Mensura y Acta de Ausencia de Linderos) — es el margen que
+      // pide Franco para que los linderos lleguen antes de que arranquen las operaciones.
+      const horaTexto = restarHora((exp as any)?.hora_mensura, 1) ?? '—'
       const parrafoPreviene =
         `Previene a Uds. que dará principio a las operaciones el día ${fechaCorta}, a las ${horaTexto}hs. ` +
         `en el lugar del inmueble citado, para que puedan concurrir a reconocer si se sobrepasan los límites de su propiedad.`
@@ -1270,7 +1479,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       listaPoligonos.forEach((pol: any, idx: number) => {
         const pag = idx === 0
           ? { page, yEncabezadoFin }
-          : crearPaginaConEncabezado(pdfDoc, { font, bold }, datosEncabezadoComun)
+          : crearPaginaConEncabezado(pdfDoc, { font, bold }, datosEncabezadoComun, logoMembrete)
 
         const ladosPol = (pol?.lados ?? []).slice().sort((a: any, b: any) => a.orden - b.orden)
         const angulosPol = (pol?.angulos ?? []).slice().sort((a: any, b: any) => a.orden - b.orden)
@@ -1339,7 +1548,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         } else {
           const nuevaPagina = pdfDoc.addPage([841.89, 595.28])
           const { width: w2, height: h2 } = nuevaPagina.getSize()
-          const yFin2 = dibujarEncabezado(nuevaPagina, w2, h2, { font, bold }, datosEncabezadoComun)
+          const yFin2 = dibujarEncabezado(nuevaPagina, w2, h2, { font, bold }, datosEncabezadoComun, logoMembrete)
           pag = { page: nuevaPagina, width: w2, yEncabezadoFin: yFin2 }
         }
 
@@ -1464,22 +1673,75 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
     }
 
     const pdfBytes = await pdfDoc.save()
-    const storagePath = `${expedienteId}/${tipo}_${Date.now()}.pdf`
+    documentosParaSubir.push({ tipo, pdfBytes })
+  }
 
+  if (esBundle) {
+    // Un solo PDF: se pegan las páginas de cada documento ya generado (mismo código de arriba,
+    // sin tocarlo) en un único PDFDocument, con una página divisoria entre cada grupo — mismo
+    // criterio que EXP_PRUEBA.pdf. copyPages() es la forma estándar de pdf-lib de mezclar PDFs.
+    const bundleDoc = await PDFDocument.create()
+    const fontsBundle = {
+      font: await bundleDoc.embedFont(StandardFonts.Helvetica),
+      bold: await bundleDoc.embedFont(StandardFonts.HelveticaBold),
+      boldItalic: await bundleDoc.embedFont(StandardFonts.HelveticaBoldOblique),
+    }
+    const datosEncabezadoBundle = {
+      objeto: tipoMensuraTexto, comitente: nombreComitente, ubicacion: ubicacionCompleta,
+      profesional: `Agrimensor ${nombreProfesional}`, email: profile?.email, telefono: profile?.telefono,
+    }
+    // Se embebe una sola vez por documento combinado y se reusa en cada divisoria — embedJpg
+    // repetido en el mismo PDFDocument no rompe nada, pero infla el archivo sin necesidad.
+    const logoMembreteBundle = logoMembreteBytes ? await bundleDoc.embedJpg(logoMembreteBytes) : null
+
+    for (const { tipo, pdfBytes } of documentosParaSubir) {
+      const tituloDivisoria = DIVISORIAS_BUNDLE[tipo]
+      if (tituloDivisoria) {
+        await crearPaginaDivisoria(bundleDoc, fontsBundle, datosEncabezadoBundle, logoMembreteBundle, logoCaratulaBytes, tituloDivisoria)
+      }
+      const docCargado = await PDFDocument.load(pdfBytes)
+      const paginasCopiadas = await bundleDoc.copyPages(docCargado, docCargado.getPageIndices())
+      paginasCopiadas.forEach(p => bundleDoc.addPage(p))
+    }
+
+    // Divisoria final — Franco adjunta el plano de mensura (CAD) aparte, fuera del alcance de
+    // la app; esta página solo marca dónde va.
+    await crearPaginaDivisoria(bundleDoc, fontsBundle, datosEncabezadoBundle, logoMembreteBundle, logoCaratulaBytes, 'PLANO DE MENSURA')
+
+    const bundleBytes = await bundleDoc.save()
+    const storagePath = `${expedienteId}/expediente_completo_${Date.now()}.pdf`
     const { error: uploadError } = await db.storage
       .from('documentos')
-      .upload(storagePath, pdfBytes, { contentType: 'application/pdf', upsert: true })
+      .upload(storagePath, bundleBytes, { contentType: 'application/pdf', upsert: true })
 
-    // Registrar en BD aunque falle el storage (para no perder el intento)
     const { data: docInsertado } = await db.from('documentos_generados').insert({
       expediente_id: expedienteId,
-      tipo_documento: tipo,
+      tipo_documento: 'expediente_completo',
       storage_path: uploadError ? null : storagePath,
       estado: uploadError ? 'error_storage' : 'generado',
       generado_at: new Date().toISOString(),
     }).select('id, tipo_documento, storage_path, estado, generado_at').single()
 
     if (docInsertado) documentosCreados.push(docInsertado as any)
+  } else {
+    for (const { tipo, pdfBytes } of documentosParaSubir) {
+      const storagePath = `${expedienteId}/${tipo}_${Date.now()}.pdf`
+
+      const { error: uploadError } = await db.storage
+        .from('documentos')
+        .upload(storagePath, pdfBytes, { contentType: 'application/pdf', upsert: true })
+
+      // Registrar en BD aunque falle el storage (para no perder el intento)
+      const { data: docInsertado } = await db.from('documentos_generados').insert({
+        expediente_id: expedienteId,
+        tipo_documento: tipo,
+        storage_path: uploadError ? null : storagePath,
+        estado: uploadError ? 'error_storage' : 'generado',
+        generado_at: new Date().toISOString(),
+      }).select('id, tipo_documento, storage_path, estado, generado_at').single()
+
+      if (docInsertado) documentosCreados.push(docInsertado as any)
+    }
   }
 
   if (isAjax) {

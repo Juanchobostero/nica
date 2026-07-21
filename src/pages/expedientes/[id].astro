@@ -81,7 +81,10 @@ if (Astro.request.method === 'POST') {
       registro_tomo:  tipoInscripcion === 'tomo' ? (form.get('registro_tomo')  || null) : null,
       registro_folio: tipoInscripcion === 'tomo' ? (form.get('registro_folio') || null) : null,
       registro_finca: tipoInscripcion === 'tomo' ? (form.get('registro_finca') || null) : null,
-      registro_anio:  tipoInscripcion === 'tomo' ? (form.get('registro_anio')  || null) : null,
+      // A diferencia de tomo/folio/finca (exclusivos del modo "Tomo"), el Año se pide en los
+      // dos modos — el input activo es el que llega en el form (el del otro modo está
+      // disabled y no se envía), así que se guarda sin condicionar al tipo de inscripción.
+      registro_anio: form.get('registro_anio') || null,
       inscripcion_mayor_extension: form.get('inscripcion_mayor_extension') === 'on',
       matricula_municipal: form.get('matricula_municipal') || null,
       antecedentes_tecnicos: form.get('antecedentes_tecnicos') || null,
@@ -816,6 +819,12 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
               value={inmueble?.matricula_registro ?? ''}
               disabled={(inmueble as any)?.tipo_inscripcion_registro === 'tomo'} />
           </div>
+          <div class="field">
+            <label>Año</label>
+            <input class="input" name="registro_anio" id="input_matricula_anio"
+              value={(inmueble as any)?.registro_anio ?? ''}
+              disabled={(inmueble as any)?.tipo_inscripcion_registro === 'tomo'} />
+          </div>
         </div>
 
         <!-- Tomo / Folio / Finca / Año -->
@@ -891,9 +900,13 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
 
         <!-- Antecedentes técnicos -->
         <div class="field" style="margin-bottom:1.5rem">
-          <label>Antecedentes Técnicos</label>
-          <textarea class="input" name="antecedentes_tecnicos" rows="5"
-            placeholder="Ej: En el Registro de la Propiedad Inmueble se halla...">{(inmueble as any)?.antecedentes_tecnicos ?? ''}</textarea>
+          <label>Antecedentes Técnicos — Duplicados de Mensura (GEOSIT)</label>
+          <textarea class="input" name="antecedentes_tecnicos" rows="2"
+            placeholder="Ej: 3072-K, 3052-K, 3056-K, 3144-K">{(inmueble as any)?.antecedentes_tecnicos ?? ''}</textarea>
+          <p style="font-size:0.78rem;color:var(--color-text-secondary);margin:0.35rem 0 0">
+            Solo los códigos de duplicados — el Capítulo de Extensión, Límites e Inscripciones arma la oración completa
+            ("En el sistema GEOSIT... se hallan los duplicados de Mensura <strong>[esto]</strong> relacionadas a las presentes operaciones.") y los muestra en negrita.
+          </p>
         </div>
 
         <button type="submit" class="btn btn-primary">Guardar inmueble</button>
@@ -1195,7 +1208,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
           Seleccioná los documentos a generar para este expediente.
         </p>
 
-        <form method="POST" action="/api/documentos/generar">
+        <form method="POST" action="/api/documentos/generar" id="form_generar_seleccionados">
           <input type="hidden" name="expediente_id" value={id} />
 
           <div class="section-label" style="margin-top:0">Contenido básico del expediente</div>
@@ -1244,6 +1257,18 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
           </div>
 
           <button type="submit" class="btn btn-primary">Generar seleccionados</button>
+        </form>
+
+        <div class="section-label" style="margin-top:1.5rem">Expediente completo</div>
+        <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:0.75rem">
+          Genera un solo PDF con todos los documentos (Carátula, Nota de Elevación, DNI, Capítulo, Actas, Memoria,
+          Planilla y la Declaración Jurada que corresponda), con carátulas divisorias entre secciones — mismo formato
+          que usa Franco. No incluye la Notificación a Linderos (es un trámite previo a la mensura).
+        </p>
+        <form method="POST" action="/api/documentos/generar" id="form_expediente_completo">
+          <input type="hidden" name="expediente_id" value={id} />
+          <input type="hidden" name="tipos[]" value="expediente_completo" />
+          <button type="submit" class="btn btn-secondary">Generar expediente completo (PDF único)</button>
         </form>
 
         <div style="margin-top:2rem" id="documentos_section">
@@ -2025,6 +2050,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     var grupoM = document.getElementById('grupo_matricula_registro')
     var grupoT = document.getElementById('grupo_tomo_folio')
     var inputM = document.getElementById('input_matricula_registro')
+    var inputMAnio = document.getElementById('input_matricula_anio')
     var hiddenInput = document.getElementById('tipo_inscripcion_registro_input')
     var inputs = [
       document.getElementById('input_registro_tomo'),
@@ -2036,6 +2062,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     if (grupoM) grupoM.style.display = esTomo ? 'none' : ''
     if (grupoT) grupoT.style.display = esTomo ? '' : 'none'
     if (inputM) inputM.disabled = esTomo
+    if (inputMAnio) inputMAnio.disabled = esTomo
     inputs.forEach(function(inp) { if (inp) inp.disabled = !esTomo })
     if (hiddenInput) hiddenInput.value = tipo
   }
@@ -2434,7 +2461,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
   }
 
   // Generar documentos sin recargar la página
-  const formGenerarDocs = document.querySelector('form[action="/api/documentos/generar"]')
+  const formGenerarDocs = document.getElementById('form_generar_seleccionados')
   if (formGenerarDocs) {
     formGenerarDocs.addEventListener('submit', function(e) {
       e.preventDefault()
@@ -2480,6 +2507,58 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
           tiposMarcados.forEach(function(chk) { chk.checked = false })
         })
         .catch(function() { alert('No se pudieron generar los documentos.') })
+        .finally(function() {
+          btnSubmit.disabled = false
+          btnSubmit.textContent = textoOriginal
+        })
+    })
+  }
+
+  // Generar expediente completo en un solo PDF — misma lógica de validación que "Generar
+  // seleccionados", pero con la lista fija de tipos que arma también el servidor (los 8
+  // documentos base + la DDJJ que corresponda + E1 si hay datos cargados).
+  const formExpedienteCompleto = document.getElementById('form_expediente_completo')
+  if (formExpedienteCompleto) {
+    formExpedienteCompleto.addEventListener('submit', function(e) {
+      e.preventDefault()
+      const btnSubmit = formExpedienteCompleto.querySelector('button[type="submit"]')
+
+      const tiposBundle = ['caratula', 'nota_elevacion', 'documento_identidad', 'capitulo_ubicacion', 'acta_mensura', 'acta_ausencia_linderos', 'memoria_mensura', 'planilla_calculos']
+      tiposBundle.push(datosValidacion.inmuebleEsRural ? 'formulario_sor' : 'formulario_u')
+      if (datosValidacion.edificacionCargada) tiposBundle.push('formulario_e1')
+
+      const faltantes = validarDocumentosSeleccionados(tiposBundle)
+      if (Object.keys(faltantes).length) {
+        mostrarModalValidacion(faltantes)
+        return
+      }
+
+      btnSubmit.disabled = true
+      const textoOriginal = btnSubmit.textContent
+      btnSubmit.textContent = 'Generando...'
+
+      fetch(formExpedienteCompleto.action, {
+        method: 'POST',
+        body: new FormData(formExpedienteCompleto),
+        headers: { 'X-Requested-With': 'fetch' },
+      })
+        .then(function(res) { return res.json() })
+        .then(function(data) {
+          if (!data.ok) {
+            alert('No se pudo generar el expediente completo.')
+            return
+          }
+          const tbody = document.getElementById('documentos_tbody')
+          const vacio = document.getElementById('documentos_vacio')
+          if (vacio) vacio.remove()
+          data.documentos.slice().reverse().forEach(function(doc) {
+            const fila = crearFilaDocumento(doc)
+            tbody.insertBefore(fila, tbody.firstChild)
+            destacarFilaNueva(fila)
+          })
+          actualizarContadorDocumentos(data.documentos.length)
+        })
+        .catch(function() { alert('No se pudo generar el expediente completo.') })
         .finally(function() {
           btnSubmit.disabled = false
           btnSubmit.textContent = textoOriginal

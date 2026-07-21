@@ -78,6 +78,57 @@
 
 ---
 
+## 📋 Cambios de la sesión — 21 Julio 2026 (v0.12) — Fidelidad de formato + "Generar expediente completo"
+
+Franco pasó `EXP_PRUEBA.pdf` (un expediente real de 19 páginas, exportado desde Word) como referencia definitiva. Se instaló `poppler` (vía winget, herramienta de la máquina de Juan — no toca el proyecto) para poder renderizar y comparar página por página contra esa referencia.
+
+**Dos correcciones puntuales que salieron del análisis:**
+- **Formulario U, declarante:** la página de declaración jurada (Rubro 4) declaraba al comitente — la referencia real de Franco confirma que el declarante es **el profesional agrimensor** ("El que suscribe FRANCO ARTURO NIGRO CARRIERE... en su carácter de AGRIMENSOR"). Corregido en `generar.ts`. `profiles` no tiene columna de nacionalidad ni tipo de documento — se asume Argentina/DNI fijo (así es siempre en la práctica, no amerita columna nueva).
+- **Formulario E1, Rubro 1:** se encontró una copia de `EXP_PRUEBA.pdf` con el E1 completo y lleno por Franco (páginas 17-18) — mucho mejor referencia que la plantilla vacía usada en el primer calibrado. Con eso se recalibraron las coordenadas de Destino del Edificio, la grilla de 13×5 y Rubro 2, y se cambiaron dos cosas de diseño (confirmadas con el usuario): el casillero elegido ahora se **sombrea en gris** (no una X), y la fila "14) Tipo del edificio" se completa con un **conteo automático** por columna (cuántas de las 13 categorías eligieron cada inciso A-E) — antes quedaba en blanco. De paso se descubrió que la plantilla trae "Casa de Familia" pre-tildado de fábrica (mismo patrón que el "100"/"DNI" de Formulario U) — no se dibuja nada encima si el destino real coincide con ese default.
+
+**"Generar expediente completo" — nuevo botón en Tab Documentos:**
+Genera **un solo PDF** con todos los documentos del expediente, en el mismo orden y con las mismas "mini-carátulas" divisorias que usa Franco en `EXP_PRUEBA.pdf`:
+```
+Carátula → Nota de Elevación → Documento de Identidad (1 por comitente)
+  → divisoria "DESCRIPCIÓN Y DOMINIO DEL INMUEBLE" → Capítulo de Ubicación
+  → divisoria "ACTAS" → Acta de Mensura → Acta de Ausencia de Linderos
+  → divisoria "MEMORIA DE OPERACIONES" → Memoria de Mensura
+  → divisoria "PLANILLAS DE CÁLCULO" → Planilla de Cálculos
+  → divisoria "DECLARACIONES JURADAS FORMULARIOS «...»" (título dinámico) → Formulario U/SOR (el que aplique) → Formulario E1 (si el inmueble tiene construcciones cargadas)
+  → divisoria final "PLANO DE MENSURA" (Franco adjunta el plano de CAD aparte — fuera del alcance de la app)
+```
+**"Notificación a Linderos y Autoridades" queda afuera a propósito** — es un trámite previo a la mensura, no forma parte del expediente final que se presenta a Catastro (confirmado: no aparece en `EXP_PRUEBA.pdf`).
+
+**Cómo se armó, técnicamente** (en `generar.ts`):
+- El bloque de subida a Storage + insert en `documentos_generados` (antes al final del loop que genera cada documento) se movió a **después** del loop — durante el loop ahora solo se juntan los pares `{ tipo, bytes }` en un array. Para una generación normal (no combinada) esto no cambia nada del resultado, solo reordena el código.
+- Para el modo combinado, esos bytes (generados con el mismo código de siempre, sin tocarlo) se pegan en un único `PDFDocument` con `copyPages()` — la forma estándar de `pdf-lib` de mezclar PDFs — intercalando páginas divisorias nuevas (`crearPaginaDivisoria`, mismo formato que ya usa la Carátula: membrete + título grande + logo circular al pie).
+- El servidor arma su propia lista de qué incluir (no confía en lo que mande el cliente): determina Formulario U vs SOR por `tipo_inmueble` e incluye E1 solo si hay datos de `edificacion` cargados — mismo criterio que ya se usa en el resto de la app.
+- Un solo archivo subido, una sola fila en `documentos_generados` (`tipo_documento: 'expediente_completo'`) — se lista y descarga solo en la tabla de "Documentos generados" existente, sin tocar nada ahí (esa tabla ya era genérica).
+- Validación: reusa tal cual `validarDocumentosSeleccionados`/`mostrarModalValidacion`, que ya agrupan por documento — se le pasa la lista fija de 8-10 tipos en vez de los tildados a mano.
+- Probado con un merge de prueba standalone (`pdf-lib`, fuera del servidor) antes de tocar nada real: 17 páginas en el orden esperado, título dinámico de la divisoria de DDJJ correcto, página apaisada de Planilla intercalada sin problemas entre páginas verticales.
+
+**Sin cambios en base de datos** — esta sesión fue puramente de generación de PDF.
+
+---
+
+## 📋 Cambios de la sesión — 20 Julio 2026 (v0.11) — Logo en el membrete
+
+Franco pasó `EXP_PRUEBA.pdf` (un expediente real exportado desde Word) como referencia del membrete que usa en sus documentos — quería el logo a la izquierda, tal cual se ve ahí, y que se respetaran las sangrías reales (no las que traía el membrete actual de NICA).
+
+**Cómo se sacaron los datos exactos:** en vez de adivinar posiciones a ojo, se abrió `EXP_PRUEBA.pdf` con `pdf-lib` y se leyó directamente el content stream de varias páginas — la franja negra del membrete resultó ser idéntica en 15 de las 19 páginas (`x=83.05, y=753.57, ancho=442.25, alto=51.9`), con el logo (`Image7`, JPEG chico de fondo negro con "NICA CONSULTORIA EN AGRIMENSURA") dibujado en `x=90, y=755.47, ancho=144.37, alto=49.55` — confirmando que es un encabezado de página fijo de Word, no algo puntual de una sola hoja. El logo se extrajo del PDF (estaba embebido como JPEG) y se guardó en `public/images/nica-logo-membrete.jpg`.
+
+**Cambios en `dibujarEncabezado`/`crearPaginaConEncabezado`/`generar.ts`:**
+- Los márgenes de la franja pasaron de 30/30 (simétrico, genérico) a 83/70 (izquierda/derecha), calcados de la referencia real.
+- El logo se dibuja dentro de la franja, a la izquierda, con el texto OBJETO/COMITENTE/UBICACIÓN/PROFESIONAL corriéndose para no superponerse.
+- El logo se lee de disco **una sola vez** antes del loop de generación (no una vez por documento) y se embebe (`embedJpg`, barato) dentro de cada `PDFDocument` nuevo — se agregó un tercer parámetro opcional `logo` a ambas funciones, y se actualizaron los 3 lugares donde se llaman (documento normal de una página, comitentes con DNI en `documento_identidad`, y páginas extra de `memoria_mensura`/`planilla_calculos` para expedientes con más de un polígono).
+- La altura de la franja se sigue calculando dinámicamente según cuánto texto entra (a diferencia de Word, que la deja fija) — se mantiene esa mejora de la sesión original, solo se ajustaron ancho/posición y se agregó el logo.
+- Los **9 documentos con membrete propio** (todo menos Carátula y las 3 DDJJ, que ya tienen su propio diseño) se ven afectados: Nota de Elevación, Documento de Identidad, Capítulo de Ubicación, Notificación a Linderos, Acta de Mensura, Acta de Ausencia de Linderos, Memoria de Mensura y Planilla de Cálculos.
+- Probado con `pdf-lib` standalone (mismo código, fuera del servidor) antes de tocar el archivo real, comparando visualmente contra la posición del logo y el ancho de la franja en `EXP_PRUEBA.pdf`.
+
+**Pendiente (siguiente paso, ya charlado con Juan):** un check en Tab Documentos para "generar todos" en un solo documento igual al `EXP_PRUEBA.pdf` de referencia, con validación de datos faltantes por sección — todavía no arrancado.
+
+---
+
 ## 📋 Cambios de la sesión — 17 Julio 2026 (v0.10) — Declaraciones Juradas: SOR y E1
 
 Continuación de v0.9: con Formulario U ya cerrado y confirmado por Franco, se replicó el mismo mecanismo (plantilla oficial + `drawText` en coordenadas fijas) para **Formulario SOR** (suburbano/rural) y **Formulario E1** (características constructivas del edificio, adicional cuando el inmueble tiene construcciones). Con esto quedan los 3 tipos de DDJJ implementados — pendiente la vuelta de Franco probando los 3 antes de darlos por cerrados del todo.
@@ -116,6 +167,8 @@ create policy "Edificacion: acceso via expediente propio"
   on edificacion for all
   using (exists (select 1 from expedientes e where e.id = edificacion.expediente_id and e.user_id = auth.uid()))
   with check (exists (select 1 from expedientes e where e.id = edificacion.expediente_id and e.user_id = auth.uid()));
+
+grant all on edificacion to anon, authenticated;
 ```
 - La planilla real de Rubro 1 trae ~150 variantes de texto por categoría (13 categorías × 5 incisos, con 2-4 frases sinónimas por casillero) — se simplificó a **un solo inciso (a-e) por categoría**, que es el dato que Catastro usa para clasificar el edificio (no la frase exacta elegida dentro de la columna). Constante compartida `src/lib/edificacionE1.ts` (categorías, incisos, destinos del edificio) usada tanto por la Tab DDJJ como por `generar.ts`, para no mantener la lista dos veces.
 - Tab DDJJ: checkbox "¿El inmueble tiene construcciones?" que despliega un formulario aparte (`guardar_ddjj_e1`) con Destino del edificio, la grilla de 13 categorías × 5 radios, y los datos numéricos de Rubro 2 (superficies, baños, pileta, ascensores, etc.).
@@ -128,7 +181,13 @@ create policy "Edificacion: acceso via expediente propio"
 
 **⚠️ Post-mortem (18 Julio 2026):** el checkbox de Tab Documentos para SOR y E1 había quedado con el texto viejo "todavía no implementado" y deshabilitado (nunca se actualizó al implementarlos) — corregido, ahora son tildables de verdad y con la misma validación de "faltan datos" que ya tenían el resto de los documentos.
 
-**🐛 Bug reportado por Franco — "Guardar características del edificio" no guardaba:** el botón parecía no hacer nada — quedaba "Guardado correctamente" en verde, pero al volver a la Tab DDJJ el formulario aparecía en blanco y el checkbox "¿tiene construcciones?" destildado. Causa: `guardar_ddjj_e1` hacía el `insert`/`update` a la tabla `edificacion` sin chequear si la escritura fallaba — y aunque hubiera fallado, el mensaje de "Guardado correctamente" que se ve en pantalla depende únicamente de que la request haga el redirect final (no de si el guardado fue exitoso), así que un error silencioso quedaba completamente invisible. Se corrigió: ahora si el insert/update devuelve error, se corta con un redirect propio que muestra el detalle real (`warn=ddjj_e1_error&detalle=...`) en vez de seguir de largo. De paso se corrigió que un valor en `0` (ej. "Pileta de natación" o "Superficie destinada a negocios" en 0) se guardaba como vacío por un `|| null` que trata a `0` como falsy. **Pendiente:** falta que Franco reintente para ver el mensaje de error real y confirmar la causa de fondo (sospecha: alguna política RLS o tipo de dato en la tabla `edificacion`).
+**🐛 Bug reportado por Franco — "Guardar características del edificio" no guardaba:** el botón parecía no hacer nada — quedaba "Guardado correctamente" en verde, pero al volver a la Tab DDJJ el formulario aparecía en blanco y el checkbox "¿tiene construcciones?" destildado. Causa: `guardar_ddjj_e1` hacía el `insert`/`update` a la tabla `edificacion` sin chequear si la escritura fallaba — y aunque hubiera fallado, el mensaje de "Guardado correctamente" que se ve en pantalla depende únicamente de que la request haga el redirect final (no de si el guardado fue exitoso), así que un error silencioso quedaba completamente invisible. Se corrigió: ahora si el insert/update devuelve error, se corta con un redirect propio que muestra el detalle real (`warn=ddjj_e1_error&detalle=...`) en vez de seguir de largo. De paso se corrigió que un valor en `0` (ej. "Pileta de natación" o "Superficie destinada a negocios" en 0) se guardaba como vacío por un `|| null` que trata a `0` como falsy.
+
+**Causa de fondo confirmada (20 Julio 2026):** con el fix de arriba, el error real salió a la luz: `permission denied for table edificacion`. No es RLS (esa da otro mensaje, o simplemente no devuelve filas) — es que el rol `authenticated` nunca tuvo permiso de Postgres sobre esa tabla. El `GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated` que se corrió en su momento (ver "Notas de infraestructura Supabase" al final del documento) solo alcanza a las tablas que existían en ese instante — `edificacion` se creó después, en esta misma sesión, y quedó afuera. **Solución: correr en Supabase**
+```sql
+grant all on edificacion to anon, authenticated;
+```
+Ya agregado también al bloque de creación de la tabla más arriba, para que quien corra ese SQL desde cero no se tope con lo mismo.
 
 Franco también pidió, por separado, que los datos cargados no se pierdan al cambiar de pestaña sin guardar (una especie de "caché" de borrador). Es un pedido de UX legítimo pero es una funcionalidad nueva, no parte de este bug — queda anotado para una próxima sesión si se confirma que hace falta.
 
