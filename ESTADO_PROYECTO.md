@@ -78,6 +78,18 @@
 
 ---
 
+## 📋 Cambios de la sesión — 22 Julio 2026 (v0.13) — Formulario SOR: recalibrado de coordenadas
+
+Franco reportó que el Formulario SOR salía con los datos totalmente desfasados — texto flotando fuera de la tabla, en columnas y filas que no correspondían (`EXPTE_GENERADO.pdf`, página del SOR). Pidió corregir solo eso, sin tocar el resto.
+
+**Causa:** el calibrado original (sesión pasada) se había medido a ojo contra un render en pantalla, y salió mal. Esta vez, después de dos intentos más que TAMBIÉN salieron mal calibrando a ojo contra renders (confirmando que leer coordenadas de una imagen renderizada, para esta plantilla puntual, era poco confiable — probablemente por lo compacta que es la tipografía original, exportada desde Google Sheets), se cambió de método: se usó `pdftotext -bbox` (poppler) para leer la posición **exacta** de cada etiqueta de la plantilla (en el mismo sistema de coordenadas que usa `drawText` de `pdf-lib`, con el eje Y invertido — poppler lo da desde arriba, se convierte con `1008 - yMax`). Con eso se recalibraron **todas** las coordenadas del branch `formulario_sor` en `generar.ts`: Departamento/Localidad, Inciso a) Sección/Fracción/Lote, Inciso c) Tomo/Folio/Año, Informaciones adicionales, y las 3 filas de Rubro 2 (Apellido/%/Tipo y Documento/Calle/Localidad/Provincia/Ausente).
+
+**Verificación:** se generó un PDF de prueba con datos de ejemplo y se volvió a pasar por `pdftotext -bbox` para confirmar **numéricamente** (no solo a ojo) que cada dato cae en la fila/columna de su etiqueta correspondiente — antes de eso, dos pasadas visuales seguidas habían salido mal, así que esta vez no se dio por buena la corrección hasta confirmarla con números.
+
+Sin cambios de base de datos ni en ningún otro documento — el resto de las DDJJ (U, E1) y el PDF combinado no se tocaron.
+
+---
+
 ## 📋 Cambios de la sesión — 21 Julio 2026 (v0.12) — Fidelidad de formato + "Generar expediente completo"
 
 Franco pasó `EXP_PRUEBA.pdf` (un expediente real de 19 páginas, exportado desde Word) como referencia definitiva. Se instaló `poppler` (vía winget, herramienta de la máquina de Juan — no toca el proyecto) para poder renderizar y comparar página por página contra esa referencia.

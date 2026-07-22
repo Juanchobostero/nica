@@ -848,55 +848,73 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       // rojo (y un resaltado amarillo de ejemplo en el casillero "NO") ya neutralizadas a nivel
       // de archivo (public/pdf-templates/formulario_sor.pdf). Una sola página, sin Rubro 4 ni
       // página de declaración jurada aparte — a diferencia de Formulario U.
+      // Coordenadas recalibradas leyendo la posición EXACTA de cada etiqueta con
+      // `pdftotext -bbox` (poppler) sobre la plantilla — un calibrado a ojo contra renders (dos
+      // intentos previos) seguía saliendo desfasado por errores de lectura de los propios
+      // renders; el bbox da coordenadas objetivas en el mismo sistema que usa `drawText`
+      // (pdftotext las reporta con Y desde arriba, así que se convierten con `1008 - yMax`).
       const fSor = 8
-      const campoSor = (valor: string, x: number, y: number) => {
-        page.drawText(valor, { x, y, size: fSor, font: bold, color: negro })
+      const campoSor = (valor: string, x: number, y: number, size = fSor) => {
+        page.drawText(valor, { x, y, size, font: bold, color: negro })
       }
       const marcarSor = (valor: boolean | null | undefined, xSi: number, xNo: number, y: number, size = fSor) => {
         page.drawText('X', { x: valor ? xSi : xNo, y, size, font: bold, color: negro })
       }
 
-      campoSor(inmueble?.departamento ?? '', 345, 878)
-      campoSor(inmueble?.localidad ?? '', 345, 869)
+      campoSor(inmueble?.departamento ?? '', 242, 879)
+      campoSor(inmueble?.localidad ?? '', 235, 874)
 
       // Inciso a) Designación según títulos — Corrientes distingue Chacra/Quinta como
-      // subdivisiones propias que hoy no tienen columna en `inmuebles` (solo Paraje, Sección y
-      // Lote tienen datos cargados); esos dos casilleros quedan en blanco por ahora.
-      campoSor(inmueble?.fraccion ?? '', 125, 827)
-      campoSor((inmueble as any)?.seccion ?? '', 305, 827)
-      campoSor(inmueble?.parcela ?? '', 443, 827)
+      // subdivisiones propias que hoy no tienen columna en `inmuebles` (solo Fracción, Sección y
+      // Lote tienen datos cargados); Paraje/Chacra/Quinta quedan en blanco por ahora.
+      campoSor((inmueble as any)?.seccion ?? '', 221, 828)
+      campoSor(inmueble?.fraccion ?? '', 303, 828)
+      campoSor(inmueble?.parcela ?? '', 333, 828)
 
       // Inciso c) Inscripción en el Registro de la Propiedad
-      campoSor((inmueble as any)?.registro_tomo ?? '', 120, 764)
-      campoSor((inmueble as any)?.registro_folio ?? '', 245, 764)
-      campoSor((inmueble as any)?.registro_anio ?? '', 445, 764)
+      campoSor((inmueble as any)?.registro_tomo ?? '', 95, 778)
+      campoSor((inmueble as any)?.registro_folio ?? '', 205, 778)
+      campoSor((inmueble as any)?.registro_anio ?? '', 310, 778)
 
       // Informaciones adicionales
-      campoSor((inmueble as any)?.personas_habitan != null ? String((inmueble as any).personas_habitan) : '', 228, 730)
-      ;(String((inmueble as any)?.ultimo_anio_pago_impuesto ?? '').padStart(4, ' ')).split('').forEach((digito, i) => {
-        if (digito.trim()) campoSor(digito, 505 + i * 11, 730)
-      })
+      campoSor((inmueble as any)?.personas_habitan != null ? String((inmueble as any).personas_habitan) : '', 158, 758)
+      // La plantilla trae "2026" impreso como ejemplo, muy compacto (4 dígitos en ~11pt) — si el
+      // dato real coincide no se escribe nada encima (mismo criterio que el "100"/"DNI" de U).
+      const anioImpuestoSor = String((inmueble as any)?.ultimo_anio_pago_impuesto ?? '')
+      if (anioImpuestoSor && anioImpuestoSor !== '2026') {
+        anioImpuestoSor.padStart(4, ' ').split('').forEach((digito, i) => {
+          if (digito.trim()) campoSor(digito, 366 + i * 3, 758, 6)
+        })
+      }
 
-      // Rubro 2 — hasta 3 filas de propietario (a, b, c)
-      const filasYSor = [698, 656, 614]
+      // Rubro 2 — hasta 3 filas de propietario (a, b, c). Cada bloque mide ~48.5pt: renglón de
+      // Apellido/%/Tipo y Documento (10pt debajo de su propio encabezado impreso) y, 20pt más
+      // abajo, el renglón de Calle/Localidad/Provincia/Ausente (ídem). Coordenadas tomadas de la
+      // posición real de cada encabezado vía `pdftotext -bbox` — los dos calibrados anteriores a
+      // ojo (contra renders) tenían todo el bloque desplazado y las columnas mezcladas.
+      const filasYSor = [719, 670.5, 622]
       ;(expComitentes ?? []).slice(0, 3).forEach((ec: any, i: number) => {
         const c = ec.comitentes
         const y = filasYSor[i]
+        const yCalle = y - 20
         const porcentaje = ec.porcentaje_condominio ?? 100
-        campoSor(`${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase(), 118, y)
+        campoSor(`${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase(), 60, y)
         // La plantilla trae "100" impreso como ejemplo en la fila a) — si el dato real coincide,
         // no se escribe nada encima (mismo criterio que en Formulario U).
-        if (porcentaje !== 100) campoSor(String(porcentaje), 378, y)
-        campoSor(c?.tipo_documento ?? 'DNI', 402, y)
-        campoSor(c?.dni ?? '', 430, y)
-        campoSor(c?.domicilio_calle ?? '', 118, y - 20)
-        campoSor(c?.domicilio_numero ?? '', 245, y - 20)
-        campoSor(c?.domicilio_localidad ?? '', 290, y - 20)
-        campoSor(c?.domicilio_provincia ?? '', 430, y - 20)
-        marcarSor(ec.ausente_pais, 505, 520, y - 20)
+        if (porcentaje !== 100) campoSor(String(porcentaje), 273, y)
+        campoSor(c?.tipo_documento ?? 'DNI', 327, y)
+        // Tamaño un toque menor que el resto: un DNI con puntos ("10.000.000") a tamaño
+        // estándar se pasaba del borde de la tabla.
+        campoSor(c?.dni ?? '', 378, y, 7)
+        campoSor(c?.domicilio_calle ?? '', 60, yCalle)
+        campoSor(c?.domicilio_numero ?? '', 165, yCalle)
+        campoSor(c?.domicilio_localidad ?? '', 223, yCalle)
+        // Ídem Provincia: nombres largos ("Corrientes") pisaban la columna de Ausente.
+        campoSor(c?.domicilio_provincia ?? '', 319, yCalle, 7)
+        marcarSor(ec.ausente_pais, 362, 379, yCalle)
       })
 
-      campoSor((inmueble as any)?.receptoria ?? '', 200, 568)
+      campoSor((inmueble as any)?.receptoria ?? '', 208, 573)
 
     } else if (tipo === 'formulario_e1') {
       // ── Formulario E1 — Características constructivas (solo si hay edificación) ──
