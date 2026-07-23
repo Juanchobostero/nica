@@ -1256,19 +1256,15 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
             </label>
           </div>
 
-          <button type="submit" class="btn btn-primary">Generar seleccionados</button>
+          <div class="botones-generar-fila">
+            <button type="submit" class="btn btn-primary">Generar seleccionados</button>
+            <button type="submit" form="form_expediente_completo" class="btn btn-secondary">Generar expediente completo (PDF único)</button>
+          </div>
         </form>
 
-        <div class="section-label" style="margin-top:1.5rem">Expediente completo</div>
-        <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:0.75rem">
-          Genera un solo PDF con todos los documentos (Carátula, Nota de Elevación, DNI, Capítulo, Actas, Memoria,
-          Planilla y la Declaración Jurada que corresponda), con carátulas divisorias entre secciones — mismo formato
-          que usa Franco. No incluye la Notificación a Linderos (es un trámite previo a la mensura).
-        </p>
         <form method="POST" action="/api/documentos/generar" id="form_expediente_completo">
           <input type="hidden" name="expediente_id" value={id} />
           <input type="hidden" name="tipos[]" value="expediente_completo" />
-          <button type="submit" class="btn btn-secondary">Generar expediente completo (PDF único)</button>
         </form>
 
         <div style="margin-top:2rem" id="documentos_section">
@@ -1295,7 +1291,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
                   </td>
                   <td>
                     {doc.storage_path
-                      ? <a href={`/api/documentos/descargar?path=${doc.storage_path}`} class="btn btn-secondary btn-sm">Descargar</a>
+                      ? <a href={`/api/documentos/descargar?path=${doc.storage_path}`} class="btn btn-secondary btn-sm btn-descargar-pdf" data-tipo={doc.tipo_documento.replace(/_/g, ' ')}>Descargar</a>
                       : <span style="color:var(--color-muted);font-size:0.8125rem">No disponible</span>
                     }
                   </td>
@@ -1565,6 +1561,23 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
       <div id="modal-validacion-lista" style="max-height:280px;overflow-y:auto;margin-bottom:1rem"></div>
       <div class="modal-actions">
         <button type="button" class="btn btn-primary" id="modal-validacion-cerrar">Entendido</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-overlay-pdf" class="modal-overlay" hidden>
+    <div class="modal-card modal-card-pdf" role="dialog" aria-modal="true" aria-labelledby="modal-pdf-title">
+      <div class="modal-pdf-header">
+        <h3 id="modal-pdf-title">Vista previa del documento</h3>
+        <button type="button" class="modal-pdf-close" id="modal-pdf-close" aria-label="Cerrar">✕</button>
+      </div>
+      <div class="modal-pdf-body">
+        <p id="modal-pdf-estado" style="padding:1rem;color:var(--color-text-secondary)">Cargando…</p>
+        <iframe id="modal-pdf-frame" title="Vista previa del documento PDF" hidden></iframe>
+      </div>
+      <div class="modal-actions" style="justify-content:space-between">
+        <a id="modal-pdf-descargar" class="btn btn-secondary" href="#" target="_blank" rel="noopener">Descargar</a>
+        <button type="button" class="btn btn-primary" id="modal-pdf-cerrar">Cerrar</button>
       </div>
     </div>
   </div>
@@ -2260,7 +2273,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
       ? '<span class="badge badge-borrador">sin archivo</span>'
       : '<span class="badge badge-finalizado">generado</span>'
     const descargaHtml = doc.storage_path
-      ? '<a href="/api/documentos/descargar?path=' + doc.storage_path + '" class="btn btn-secondary btn-sm">Descargar</a>'
+      ? '<a href="/api/documentos/descargar?path=' + doc.storage_path + '" class="btn btn-secondary btn-sm btn-descargar-pdf" data-tipo="' + tipoLabel + '">Descargar</a>'
       : '<span style="color:var(--color-muted);font-size:0.8125rem">No disponible</span>'
     const fechaTexto = formatearFechaHora(doc.generado_at)
     tr.innerHTML =
@@ -2287,6 +2300,57 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
   btnDocCancel.addEventListener('click', cerrarModalDoc)
   overlayDoc.addEventListener('click', function(e) { if (e.target === overlayDoc) cerrarModalDoc() })
   document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !overlayDoc.hidden) cerrarModalDoc() })
+
+  // Vista previa de PDF en un modal (sin navegar a otra página) — la página de atrás sigue
+  // abierta, atenuada por el overlay. Funciona tanto para las filas ya renderizadas como para
+  // las que se insertan dinámicamente al generar (delegación de eventos, mismo criterio que
+  // el resto de los modales de esta página).
+  const overlayPdf   = document.getElementById('modal-overlay-pdf')
+  const pdfTitulo    = document.getElementById('modal-pdf-title')
+  const pdfEstado    = document.getElementById('modal-pdf-estado')
+  const pdfFrame     = document.getElementById('modal-pdf-frame')
+  const pdfDescargar = document.getElementById('modal-pdf-descargar')
+  const btnPdfClose  = document.getElementById('modal-pdf-close')
+  const btnPdfCerrar = document.getElementById('modal-pdf-cerrar')
+
+  function cerrarModalPdf() {
+    overlayPdf.hidden = true
+    pdfFrame.hidden = true
+    pdfFrame.src = 'about:blank'
+  }
+
+  document.addEventListener('click', function(e) {
+    const link = e.target.closest('.btn-descargar-pdf')
+    if (!link) return
+    e.preventDefault()
+
+    const href = link.getAttribute('href')
+    pdfTitulo.textContent = link.dataset.tipo ? ('Vista previa — ' + link.dataset.tipo) : 'Vista previa del documento'
+    pdfDescargar.href = href
+    pdfEstado.hidden = false
+    pdfEstado.textContent = 'Cargando…'
+    pdfFrame.hidden = true
+    overlayPdf.hidden = false
+
+    fetch(href, { headers: { 'X-Requested-With': 'fetch' } })
+      .then(function(res) { return res.json() })
+      .then(function(data) {
+        if (!data.ok) {
+          pdfEstado.textContent = 'El PDF todavía no fue generado o no se pudo cargar.'
+          return
+        }
+        pdfDescargar.href = data.url
+        pdfFrame.src = data.url
+        pdfFrame.hidden = false
+        pdfEstado.hidden = true
+      })
+      .catch(function() { pdfEstado.textContent = 'No se pudo cargar la vista previa.' })
+  })
+
+  btnPdfClose.addEventListener('click', cerrarModalPdf)
+  btnPdfCerrar.addEventListener('click', cerrarModalPdf)
+  overlayPdf.addEventListener('click', function(e) { if (e.target === overlayPdf) cerrarModalPdf() })
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !overlayPdf.hidden) cerrarModalPdf() })
 
   btnDocConfirm.addEventListener('click', function() {
     if (!formDocPendiente) return
@@ -2521,7 +2585,11 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
   if (formExpedienteCompleto) {
     formExpedienteCompleto.addEventListener('submit', function(e) {
       e.preventDefault()
-      const btnSubmit = formExpedienteCompleto.querySelector('button[type="submit"]')
+      // El botón vive visualmente en el otro formulario (agrupado en la misma fila con
+      // "Generar seleccionados", ver .botones-generar-fila) y apunta acá con el atributo
+      // form="form_expediente_completo" — por eso no es descendiente de este <form> y hay que
+      // buscarlo en todo el documento, no con formExpedienteCompleto.querySelector(...).
+      const btnSubmit = document.querySelector('button[form="form_expediente_completo"]')
 
       const tiposBundle = ['caratula', 'nota_elevacion', 'documento_identidad', 'capitulo_ubicacion', 'acta_mensura', 'acta_ausencia_linderos', 'memoria_mensura', 'planilla_calculos']
       tiposBundle.push(datosValidacion.inmuebleEsRural ? 'formulario_sor' : 'formulario_u')
@@ -2689,6 +2757,8 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
    ya que animar transform/opacity con animationend en <tr> no es confiable entre navegadores) */
 tr[data-doc-row] { transition: background-color 1.6s ease, opacity 0.3s ease; }
 
+.botones-generar-fila { display:flex; flex-wrap:wrap; align-items:center; gap:0.75rem; margin-top:0.5rem; }
+
 /* Modal confirmación (estilo shadcn) */
 .modal-overlay {
   position:fixed; inset:0; background:rgba(15,23,42,0.5);
@@ -2722,6 +2792,24 @@ tr[data-doc-row] { transition: background-color 1.6s ease, opacity 0.3s ease; }
   border-radius:var(--radius-sm); padding:0.6rem 0.75rem; margin-bottom:1.25rem;
 }
 .modal-actions { display:flex; justify-content:flex-end; gap:0.6rem; }
+
+/* Modal de vista previa de PDF — mismo overlay que los de confirmación, pero mucho más grande */
+.modal-card-pdf {
+  max-width:900px; width:92vw; height:88vh;
+  display:flex; flex-direction:column; padding:1rem;
+}
+.modal-pdf-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:0.6rem; }
+.modal-pdf-header h3 { margin-bottom:0; }
+.modal-pdf-close {
+  background:none; border:none; cursor:pointer; font-size:1.1rem; line-height:1;
+  color:var(--color-text-secondary); padding:0.25rem 0.5rem; border-radius:var(--radius-sm);
+}
+.modal-pdf-close:hover { background:var(--color-bg); color:var(--color-text); }
+.modal-pdf-body {
+  flex:1; min-height:0; border:1px solid var(--color-border); border-radius:var(--radius-sm);
+  overflow:hidden; background:#525659; display:flex; align-items:center; justify-content:center;
+}
+.modal-pdf-body iframe { width:100%; height:100%; border:0; }
 
 @keyframes modal-fade-in { from { opacity:0; } to { opacity:1; } }
 @keyframes modal-pop-in { from { opacity:0; transform:scale(0.96) translateY(4px); } to { opacity:1; transform:scale(1) translateY(0); } }

@@ -854,67 +854,80 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       // renders; el bbox da coordenadas objetivas en el mismo sistema que usa `drawText`
       // (pdftotext las reporta con Y desde arriba, así que se convierten con `1008 - yMax`).
       const fSor = 8
-      const campoSor = (valor: string, x: number, y: number, size = fSor) => {
+      // El tamaño fijo se rompía cada vez que aparecía un valor más largo que el dato de prueba
+      // usado al calibrar ("Primera" en Sección, un DNI con puntos, "Corrientes" en Provincia...).
+      // En vez de ir ajustando campo por campo a mano cada vez que Franco carga algo más largo,
+      // `campoSor` recibe el ancho real de la celda y encoge la letra sola (de a 0.5pt, hasta un
+      // piso de 5pt) si el valor no entra al tamaño pedido — así cualquier dato futuro se ajusta
+      // solo, sin volver a tocar coordenadas.
+      const campoSor = (valor: string, x: number, y: number, maxWidth: number, sizeMax = fSor) => {
+        let size = sizeMax
+        while (size > 5 && bold.widthOfTextAtSize(valor, size) > maxWidth) size -= 0.5
         page.drawText(valor, { x, y, size, font: bold, color: negro })
       }
       const marcarSor = (valor: boolean | null | undefined, xSi: number, xNo: number, y: number, size = fSor) => {
         page.drawText('X', { x: valor ? xSi : xNo, y, size, font: bold, color: negro })
       }
 
-      campoSor(inmueble?.departamento ?? '', 242, 879)
-      campoSor(inmueble?.localidad ?? '', 235, 874)
+      // Departamento/Localidad están a solo 5pt de distancia en la plantilla (línea a línea de
+      // una tipografía original muy chica) — separado 15pt para que entren cómodos sin salirse
+      // de la caja, con ancho de celda hasta el casillero de ADREMA.
+      campoSor(inmueble?.departamento ?? '', 242, 884, 95, 7)
+      campoSor(inmueble?.localidad ?? '', 235, 869, 95, 7)
 
       // Inciso a) Designación según títulos — Corrientes distingue Chacra/Quinta como
       // subdivisiones propias que hoy no tienen columna en `inmuebles` (solo Fracción, Sección y
-      // Lote tienen datos cargados); Paraje/Chacra/Quinta quedan en blanco por ahora.
-      campoSor((inmueble as any)?.seccion ?? '', 221, 828)
-      campoSor(inmueble?.fraccion ?? '', 303, 828)
-      campoSor(inmueble?.parcela ?? '', 333, 828)
+      // Lote tienen datos cargados); Paraje/Chacra/Quinta quedan en blanco por ahora. Columnas
+      // angostas (~28pt) — anchos medidos contra el casillero siguiente de cada una.
+      campoSor((inmueble as any)?.seccion ?? '', 221, 828, 26, 6.5)
+      campoSor(inmueble?.fraccion ?? '', 303, 828, 27, 6.5)
+      campoSor(inmueble?.parcela ?? '', 333, 828, 40, 6.5)
 
       // Inciso c) Inscripción en el Registro de la Propiedad
-      campoSor((inmueble as any)?.registro_tomo ?? '', 95, 778)
-      campoSor((inmueble as any)?.registro_folio ?? '', 205, 778)
-      campoSor((inmueble as any)?.registro_anio ?? '', 310, 778)
+      campoSor((inmueble as any)?.registro_tomo ?? '', 95, 778, 80)
+      campoSor((inmueble as any)?.registro_folio ?? '', 205, 778, 90)
+      campoSor((inmueble as any)?.registro_anio ?? '', 310, 778, 50)
 
       // Informaciones adicionales
-      campoSor((inmueble as any)?.personas_habitan != null ? String((inmueble as any).personas_habitan) : '', 158, 758)
+      campoSor((inmueble as any)?.personas_habitan != null ? String((inmueble as any).personas_habitan) : '', 158, 758, 50)
       // La plantilla trae "2026" impreso como ejemplo, muy compacto (4 dígitos en ~11pt) — si el
       // dato real coincide no se escribe nada encima (mismo criterio que el "100"/"DNI" de U).
       const anioImpuestoSor = String((inmueble as any)?.ultimo_anio_pago_impuesto ?? '')
       if (anioImpuestoSor && anioImpuestoSor !== '2026') {
         anioImpuestoSor.padStart(4, ' ').split('').forEach((digito, i) => {
-          if (digito.trim()) campoSor(digito, 366 + i * 3, 758, 6)
+          if (digito.trim()) campoSor(digito, 366 + i * 3, 758, 3, 6)
         })
       }
 
       // Rubro 2 — hasta 3 filas de propietario (a, b, c). Cada bloque mide ~48.5pt: renglón de
       // Apellido/%/Tipo y Documento (10pt debajo de su propio encabezado impreso) y, 20pt más
-      // abajo, el renglón de Calle/Localidad/Provincia/Ausente (ídem). Coordenadas tomadas de la
-      // posición real de cada encabezado vía `pdftotext -bbox` — los dos calibrados anteriores a
-      // ojo (contra renders) tenían todo el bloque desplazado y las columnas mezcladas.
+      // abajo, el renglón de Calle/Localidad/Provincia/Ausente (ídem). Coordenadas y anchos de
+      // celda tomados de la posición real de cada encabezado vía `pdftotext -bbox`.
       const filasYSor = [719, 670.5, 622]
       ;(expComitentes ?? []).slice(0, 3).forEach((ec: any, i: number) => {
         const c = ec.comitentes
         const y = filasYSor[i]
         const yCalle = y - 20
         const porcentaje = ec.porcentaje_condominio ?? 100
-        campoSor(`${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase(), 60, y)
+        campoSor(`${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase(), 60, y, 205)
         // La plantilla trae "100" impreso como ejemplo en la fila a) — si el dato real coincide,
         // no se escribe nada encima (mismo criterio que en Formulario U).
-        if (porcentaje !== 100) campoSor(String(porcentaje), 273, y)
-        campoSor(c?.tipo_documento ?? 'DNI', 327, y)
-        // Tamaño un toque menor que el resto: un DNI con puntos ("10.000.000") a tamaño
-        // estándar se pasaba del borde de la tabla.
-        campoSor(c?.dni ?? '', 378, y, 7)
-        campoSor(c?.domicilio_calle ?? '', 60, yCalle)
-        campoSor(c?.domicilio_numero ?? '', 165, yCalle)
-        campoSor(c?.domicilio_localidad ?? '', 223, yCalle)
-        // Ídem Provincia: nombres largos ("Corrientes") pisaban la columna de Ausente.
-        campoSor(c?.domicilio_provincia ?? '', 319, yCalle, 7)
+        if (porcentaje !== 100) campoSor(String(porcentaje), 273, y, 35)
+        // El borde derecho real de la tabla (confirmado con reglas dibujadas encima de la
+        // plantilla y comparadas píxel a píxel) está en x≈384 — mucho antes de lo que se venía
+        // asumiendo. "Tipo y Nº Documento" comparten esa columna angosta (≈310-384, 74pt en
+        // total para las dos), no 40pt cada uno por separado como estaba antes.
+        campoSor(c?.tipo_documento ?? 'DNI', 313, y, 33)
+        campoSor(c?.dni ?? '', 349, y, 33)
+        campoSor(c?.domicilio_calle ?? '', 60, yCalle, 95)
+        // Corrido 8pt a la derecha: arrancaba justo en el borde izquierdo de la columna.
+        campoSor(c?.domicilio_numero ?? '', 173, yCalle, 42)
+        campoSor(c?.domicilio_localidad ?? '', 223, yCalle, 90)
+        campoSor(c?.domicilio_provincia ?? '', 319, yCalle, 40)
         marcarSor(ec.ausente_pais, 362, 379, yCalle)
       })
 
-      campoSor((inmueble as any)?.receptoria ?? '', 208, 573)
+      campoSor((inmueble as any)?.receptoria ?? '', 208, 573, 190)
 
     } else if (tipo === 'formulario_e1') {
       // ── Formulario E1 — Características constructivas (solo si hay edificación) ──

@@ -78,6 +78,18 @@
 
 ---
 
+## 📋 Cambios de la sesión — 22 Julio 2026 (v0.14) — Vista previa de PDF en modal + orden de botones
+
+Dos pedidos de UX en Tab Documentos:
+
+1. **Botones en fila:** "Generar seleccionados" y "Generar expediente completo (PDF único)" estaban uno debajo del otro (dos `<form>` separados). Se mantienen como dos formularios distintos (submits independientes, cada uno con su propia validación de "faltan datos"), pero el segundo botón ahora vive visualmente dentro del primer bloque con el atributo HTML `form="form_expediente_completo"` — así apunta a su propio formulario al enviarse aunque esté anidado en el markup del otro, sin duplicar la lista de checkboxes ni anidar `<form>` (inválido en HTML). Nueva clase `.botones-generar-fila` (flex, gap) para alinearlos.
+
+2. **Vista previa en modal:** "Descargar" ya no navega a otra página — abre un modal (mismo estilo que los de confirmación ya existentes: overlay oscuro atenuando el fondo, `Esc`/click-afuera para cerrar) con un `<iframe>` mostrando el PDF y un botón "Descargar" real al lado. Funciona tanto para las filas ya en pantalla como para las que se agregan dinámicamente al generar (delegación de eventos, `.btn-descargar-pdf`).
+   - `descargar.ts`: además del redirect de siempre (fallback si se abre el link directo, ej. clic derecho → abrir en pestaña nueva), ahora responde JSON con la URL firmada cuando la pide el modal vía `X-Requested-With: fetch` — mismo patrón ya usado en `generar.ts`. De paso la URL firmada pasó de 2 a 5 minutos de validez (tiempo de sobra para mirar el PDF en el modal sin que expire).
+   - Sin tocar la subida a Storage ni `documentos_generados` — el PDF generado es exactamente el mismo archivo, solo cambia cómo se abre.
+
+---
+
 ## 📋 Cambios de la sesión — 22 Julio 2026 (v0.13) — Formulario SOR: recalibrado de coordenadas
 
 Franco reportó que el Formulario SOR salía con los datos totalmente desfasados — texto flotando fuera de la tabla, en columnas y filas que no correspondían (`EXPTE_GENERADO.pdf`, página del SOR). Pidió corregir solo eso, sin tocar el resto.
@@ -87,6 +99,10 @@ Franco reportó que el Formulario SOR salía con los datos totalmente desfasados
 **Verificación:** se generó un PDF de prueba con datos de ejemplo y se volvió a pasar por `pdftotext -bbox` para confirmar **numéricamente** (no solo a ojo) que cada dato cae en la fila/columna de su etiqueta correspondiente — antes de eso, dos pasadas visuales seguidas habían salido mal, así que esta vez no se dio por buena la corrección hasta confirmarla con números.
 
 Sin cambios de base de datos ni en ningún otro documento — el resto de las DDJJ (U, E1) y el PDF combinado no se tocaron.
+
+**Ajuste posterior (mismo día) — tamaño de letra dinámico:** con datos reales aparecieron 3 desbordes puntuales (Departamento/Localidad muy pegados entre sí, "Primera" en Sección invadiendo la columna de Chacra, el DNI justo contra el borde) — corregidos primero a mano, pero Juan señaló que ese enfoque (achicar campo por campo cada vez que aparece un valor más largo) no escala. Se cambió `campoSor` para que reciba el **ancho real de la celda** y encoja la letra sola (de a 0.5pt, con un piso de 5pt) cuando el valor no entra al tamaño pedido, en vez de tener un tamaño fijo por campo.
+
+**Segunda vuelta sobre el DNI** — el primer ancho que se le puso a la celda de "Tipo y Nº Documento" (60pt, después 40pt) seguía sin alcanzar, porque estaba mal medido el borde derecho real de la tabla en ese tramo. Se confirmó dibujando reglas numeradas directamente sobre la plantilla y comparando línea por línea contra el borde negro real (no alcanza con leer las etiquetas de texto vía `pdftotext -bbox`, hay que ver dónde está el borde de la celda en sí): el borde está en **x≈384**, no en 486 como se había estimado en un paso intermedio. "Tipo" y "Nº Documento" comparten una columna angosta de ~74pt en total (no 40pt cada uno) — se repartió el espacio entre los dos (33pt cada uno) y con el achique automático ya entran cómodos, probado con "PASAPORTE 99.999.999" (peor caso que un DNI).
 
 ---
 
