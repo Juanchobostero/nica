@@ -1663,9 +1663,10 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     const num = parseFloat(valor)
     const metros = Math.floor(num)
     const centimetros = Math.round((num - metros) * 100)
+    // Siempre se aclaran los centímetros, aunque sean cero (pedido de Franco: la aclaración al
+    // centímetro debe figurar siempre en la Memoria de Operaciones, no sólo cuando hay resto).
     let texto = convertir(metros) + (metros === 1 ? ' METRO' : ' METROS')
-    if (centimetros > 0)
-      texto += ' CON ' + convertir(centimetros) + (centimetros === 1 ? ' CENTÍMETRO' : ' CENTÍMETROS')
+    texto += ' CON ' + convertir(centimetros) + (centimetros === 1 ? ' CENTÍMETRO' : ' CENTÍMETROS')
     return texto
   }
 
@@ -2123,8 +2124,9 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     var n = parseFloat(valor)
     var metros = Math.floor(n)
     var cm = Math.round((n - metros) * 100)
+    // Mismo criterio que numeroALetras: la aclaración en centímetros va siempre, aunque sea cero.
     var texto = convertir(metros) + ' METROS CUADRADOS'
-    if (cm > 0) texto += ' CON ' + convertir(cm) + (cm === 1 ? ' CENTÍMETRO' : ' CENTÍMETROS')
+    texto += ' CON ' + convertir(cm) + (cm === 1 ? ' CENTÍMETRO' : ' CENTÍMETROS')
     return texto
   }
 

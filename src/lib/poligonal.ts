@@ -52,6 +52,19 @@ export function calcularPoligonal(lados: any[], angulos: any[]) {
   return { n, azimuts, dx, dy, x, y, dxc, dyc, xc, yc, sumDX, sumDY, totalLength, error }
 }
 
+// Tolerancia admitida para el error de cierre de la poligonal, según normativa de Catastro
+// (Corrientes). Fórmulas confirmadas por Franco — condición "favorable" en ambos casos, que es
+// la que se usa por el momento (el resto de la tabla, condiciones desfavorables/muy
+// desfavorables y suburbano, queda para cuando haya un selector de condición de trabajo):
+//   Urbano: T = 0,00025·L + 0,03
+//   Rural:  T = 0,00046·L + 0,20
+// L es el perímetro (suma de los lados) que resulta de la propia planilla de cálculo.
+export function calcularTolerancia(perimetro: number, tipoInmueble: string | null | undefined): number {
+  return tipoInmueble === 'rural'
+    ? 0.00046 * perimetro + 0.20
+    : 0.00025 * perimetro + 0.03
+}
+
 // Superficie de un polígono cerrado a partir de sus coordenadas compensadas (fórmula de Gauss / shoelace).
 export function calcularSuperficie(calc: ReturnType<typeof calcularPoligonal>): number {
   if (!calc) return 0

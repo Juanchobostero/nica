@@ -78,6 +78,73 @@
 
 ---
 
+## 📋 Cambios de la sesión — 27 Julio 2026 (v0.15) — Correcciones de Franco: membrete, actas, tolerancias, formularios
+
+Franco pasó `CORRECCIONES_NICA.pdf` — un expediente de prueba con anotaciones en rojo, página por página, marcando ajustes puntuales — más el detalle de las fórmulas de tolerancia y una propuesta de membrete nuevo por WhatsApp. Se repasaron todas las anotaciones contra el código real antes de tocar nada, y se implementó todo lo que no dependía de información pendiente de Franco.
+
+### Membrete — rediseño completo
+
+Franco propuso sacar el fondo negro del encabezado y reemplazar el isologo rectangular por el logo circular "ESTUDIO DE AGRIMENSURA" (el mismo que ya se usa al pie de la Carátula), mandando de referencia una imagen y un Word (`Membrete.docm`, protegido con contraseña — no se pudo abrir). Un primer intento redibujó el sello a mano con formas vectoriales de `pdf-lib` (círculo + texto curvo + "N"/"CA"), pero comparado contra `MEMBRETE_PROPUESTO.pdf` (que Franco convirtió del Word protegido a PDF para destrabar esto) no quedaba igual al logo real — quedó descartado.
+
+**Solución final:** se recortó del asset ya existente `public/images/nica-logo-caratula.png` (865×488px) el círculo aislado, sin el nombre ni el contacto de abajo (bounding box detectado con `sharp().trim()`, 284×288px), guardado como `public/images/nica-logo-icono.png`. Ese PNG se embebe ahora en el encabezado (`dibujarEncabezado` en `generar.ts`) igual que antes se embebía el JPG negro — mismo mecanismo de siempre (parámetro `logo: PDFImage`, cargado una vez y reembebido por documento).
+
+Cambios de diseño en `dibujarEncabezado`:
+- Sin relleno negro — franja blanca, texto en negro (antes blanco sobre negro).
+- El logo ahora ocupa casi toda la altura del bloque de 4 líneas de texto (antes era un ícono fijo de 40pt, chico y desproporcionado respecto a la referencia).
+- Cada etiqueta (OBJETO / COMITENTE / UBICACIÓN / PROFESIONAL) se subraya, igual que en `MEMBRETE_PROPUESTO.pdf`.
+
+Afecta a los mismos 9 documentos con membrete propio de siempre (Nota de Elevación, Documento de Identidad, Capítulo de Ubicación, Notificación a Linderos, Acta de Mensura, Acta de Ausencia de Linderos, Memoria de Mensura, Planilla de Cálculos, y las páginas divisorias del expediente combinado).
+
+### Acta de Mensura — leyenda según rol del comitente
+
+La leyenda de límites decía siempre "la posesión ejercida por" — Franco aclaró que eso sólo aplica a prescripción adquisitiva (rol Poseedor); el resto de los casos debe decir "la propiedad del". Se condicionó por `rol` (columna ya existente en `exp_comitentes`: titular/apoderado/heredero/poseedor).
+
+### Notificación a Linderos y Autoridades — ahora sí va en el expediente completo
+
+Hasta esta sesión quedaba afuera del "Generar expediente completo" a propósito (documentado como decisión de diseño en v0.12: "es un trámite previo a la mensura"). Franco corrigió ese criterio: debe incluirse, dentro de la sección "ACTAS". Se agregó al bundle, delante de Acta de Mensura y Acta de Ausencia de Linderos.
+
+### Tolerancias en Planilla de Cálculo — ya no es un valor fijo
+
+Estaba hardcodeado en `0.10` desde la sesión del 8 Julio (quedó anotado como pendiente en v0.8). Franco pasó las fórmulas oficiales según normativa y confirmó cuáles usar por el momento (condición favorable):
+
+- **Urbano:** T = 0,00025·L + 0,03
+- **Rural:** T = 0,00046·L + 0,20
+
+(L = perímetro del polígono). Nueva función `calcularTolerancia(perimetro, tipoInmueble)` en `src/lib/poligonal.ts`, usada en `generar.ts` con el perímetro que ya calcula `calcularPoligonal()` y el `tipo_inmueble` del expediente. El resto de la tabla completa de Franco (condiciones desfavorables/muy desfavorables, suburbano) quedó afuera por ahora — falta un selector de "condición de trabajo" para usarla, ver pendientes.
+
+### Memoria de Operaciones — "con cero centímetros" siempre
+
+Franco pidió que la aclaración en centímetros figure siempre, aunque sea cero (ej. "TREINTA METROS **CON CERO CENTÍMETROS**"). El bug era literal: `if (centimetros > 0)` en la conversión a letras (`[id].astro`) — se sacó la condición. Aplica tanto a lados como a superficie.
+
+### Formulario E1 — cruz en vez de relleno gris
+
+El casillero de Rubro 1 que se elige por cada característica se tapaba con un relleno gris sólido — Franco pidió poder ver qué se marcó. Ahora se dibuja una cruz sobre el texto, sin taparlo.
+
+### Formulario U — tres correcciones puntuales
+
+- **Departamento:** faltaba por completo — sólo se imprimía Localidad. Se agregó (coordenadas aproximadas, falta verificar contra un render real).
+- **Superposición en el dorso (Rubro 4):** el rectángulo blanco que tapa el párrafo de ejemplo de la plantilla medía 48pt de alto, pero el párrafo real de 4 líneas necesitaba más — la última línea quedaba pisando texto de la plantilla sin tapar. Se agrandó el rectángulo.
+- **Aclaración de firma:** estaba en una posición fija (x=390); ahora se centra según el ancho real del nombre.
+
+### Carátulas y páginas divisorias — tamaño de letra dinámico
+
+Los títulos con poco texto (ej. "ACTAS") se veían chicos y poco representativos con el tamaño fijo de 26pt. Ahora escala según la longitud del título más largo (hasta 40pt para títulos de una palabra corta).
+
+### Verificado
+
+Sin `@astrojs/check`/`typescript` como dependencia del proyecto, no se pudo correr un typecheck completo (no se instalaron paquetes nuevos sin confirmar con el usuario). Se verificó con `astro build` (compila y bundlea todo, incluye esbuild) después de cada tanda de cambios — sin errores.
+
+### Pendiente
+
+1. **Formulario U — croquis con objetos tachados:** Franco pidió eliminarlos y dejar la caja en blanco. No es código — vive dentro del PDF base `public/pdf-templates/formulario_u.pdf`, mismo tipo de edición puntual que ya se hizo una vez para neutralizar las referencias en rojo (v0.9).
+2. **Formulario U — "SI"/"NO" cortados** en los casilleros de Agua Corriente/Cloacas: mismo caso, es la plantilla base, no el código.
+3. **Formulario E1 — posición de textos de Rubro 1/2:** sigue siendo el primer calibrado de v0.10, nunca confirmado contra un PDF real (quedó anotado como pendiente en esa sesión y no se retomó hasta ahora).
+4. **Declaraciones juradas por parcela** (replicar cuando hay más de una parcela cargada): Franco pidió dejarlo para el final, no se tocó.
+5. **Botones separados** de descarga (expediente sin DDJJ / todas las DDJJ juntas): mismo caso, para el final.
+6. **A verificar visualmente antes de dar por cerrado:** posición del campo Departamento en Formulario U, tamaño del rectángulo del dorso, y el tamaño del logo del membrete en el resto de los documentos (Franco sólo probó Carátula y el membrete suelto hasta el momento).
+
+---
+
 ## 📋 Cambios de la sesión — 22 Julio 2026 (v0.14) — Vista previa de PDF en modal + orden de botones
 
 Dos pedidos de UX en Tab Documentos:

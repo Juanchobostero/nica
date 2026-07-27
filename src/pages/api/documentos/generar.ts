@@ -1,8 +1,8 @@
 import type { APIRoute } from 'astro'
 import { supabase, getSupabase } from '../../../lib/supabase'
-import { calcularPoligonal } from '../../../lib/poligonal'
+import { calcularPoligonal, calcularTolerancia } from '../../../lib/poligonal'
 import { CATEGORIAS_E1, INCISOS_E1, DESTINOS_E1 } from '../../../lib/edificacionE1'
-import { PDFDocument, StandardFonts, rgb, degrees, type PDFFont, type PDFPage, type PDFImage } from 'pdf-lib'
+import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type PDFImage } from 'pdf-lib'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -63,7 +63,13 @@ async function cargarLogoBytes(nombreArchivo: string, request: Request): Promise
   return null
 }
 
-// Encabezado: caja negra a todo el ancho con Objeto/Comitente/Ubicación/Profesional (con wrap automático) + línea de contacto
+// Encabezado: franja blanca a todo el ancho con Objeto/Comitente/Ubicación/Profesional (con wrap
+// automático) + línea de contacto. Antes tenía relleno negro con el isologo rectangular incrustado
+// — Franco pidió sacar el negro y usar el logo circular real "ESTUDIO DE AGRIMENSURA" (el mismo
+// que ya se usa al pie de la carátula, recortado a sólo el círculo — ver
+// public/images/nica-logo-icono.png), replicando MEMBRETE_PROPUESTO.pdf. Un primer intento
+// redibujaba el sello a mano con formas vectoriales (dibujarSelloProfesional, ya eliminada); no
+// quedaba igual al logo real, así que se optó por incrustar la imagen real en vez de reproducirla.
 function dibujarEncabezado(
   page: PDFPage, width: number, height: number,
   fonts: { font: PDFFont; bold: PDFFont },
@@ -71,14 +77,12 @@ function dibujarEncabezado(
   logo?: PDFImage | null,
 ) {
   const { font, bold } = fonts
-  const negroFondo = rgb(0.08, 0.08, 0.1)
-  const blanco = rgb(1, 1, 1)
   const gris   = rgb(0.42, 0.45, 0.50)
   const negro  = rgb(0.10, 0.10, 0.10)
 
-  // Márgenes e ítems medidos contra el membrete real (Word → PDF) que usa Franco en
-  // EXP_PRUEBA.pdf: la franja mide 442.25 de ancho arrancando en x=83.05 (página de 595.28 de
-  // ancho) — no son los 30/30 simétricos que traía esta función antes de tener el logo.
+  // Márgenes medidos contra el membrete real (Word → PDF) que usa Franco en EXP_PRUEBA.pdf: la
+  // franja mide 442.25 de ancho arrancando en x=83.05 (página de 595.28 de ancho) — no son los
+  // 30/30 simétricos que traía esta función antes de tener el logo.
   const margenIzq = 83
   const margenDer = 70
   const cajaX = margenIzq
@@ -87,13 +91,15 @@ function dibujarEncabezado(
   const sizeFila = 7.5
   const lhFila = 10.5
 
-  // El logo ocupa la franja izquierda de la caja (igual que en la referencia, donde el logo
-  // convive con el fondo negro de la franja); el texto arranca después, con un margen chico.
-  const logoAlto = 36
-  const logoAncho = logo ? logoAlto * (logo.width / logo.height) : 0
-  const logoGap = logo ? 14 : 0
-  const textoX = cajaX + padX + logoAncho + logoGap
+  // El logo ocupa la franja izquierda de la caja — reservado un ancho generoso para el wrap del
+  // texto; el diámetro final (más abajo) se estira para ocupar casi todo el alto del bloque de
+  // texto, igual que en MEMBRETE_PROPUESTO.pdf (el logo circular es tan alto como las 4 líneas
+  // juntas, no un ícono chico).
+  const logoReservado = 62
+  const logoGap = 14
+  const textoX = cajaX + padX + logoReservado + logoGap
 
+  const etiquetas = ['OBJETO', 'COMITENTE', 'UBICACIÓN', 'PROFESIONAL']
   const filasTexto = [
     `OBJETO: ${datos.objeto}`,
     `COMITENTE: ${datos.comitente}`,
@@ -108,16 +114,30 @@ function dibujarEncabezado(
 
   const yTop = height - 14
   const cajaY = yTop - barH
-  page.drawRectangle({ x: cajaX, y: cajaY, width: cajaW, height: barH, color: negroFondo })
 
   if (logo) {
-    page.drawImage(logo, { x: cajaX + padX, y: cajaY + (barH - logoAlto) / 2, width: logoAncho, height: logoAlto })
+    const logoDiametro = Math.min(logoReservado, barH - 6)
+    const logoAlto = logoDiametro
+    const logoAncho = logoAlto * (logo.width / logo.height)
+    page.drawImage(logo, {
+      x: cajaX + padX + (logoReservado - logoAncho) / 2,
+      y: cajaY + (barH - logoAlto) / 2,
+      width: logoAncho, height: logoAlto,
+    })
   }
 
+  // Cada etiqueta (OBJETO/COMITENTE/UBICACIÓN/PROFESIONAL) va subrayada — igual que en
+  // MEMBRETE_PROPUESTO.pdf — sobre la primera línea de cada campo (si el valor es tan largo que
+  // el campo se parte en varias líneas, el subrayado va sólo en la primera).
   let cursorY = yTop - 16
-  filasWrapped.forEach(lineas => {
-    lineas.forEach(linea => {
-      page.drawText(linea, { x: textoX, y: cursorY, size: sizeFila, font: bold, color: blanco })
+  filasWrapped.forEach((lineas, idx) => {
+    lineas.forEach((linea, li) => {
+      page.drawText(linea, { x: textoX, y: cursorY, size: sizeFila, font: bold, color: negro })
+      if (li === 0) {
+        const etiquetaTexto = `${etiquetas[idx]}:`
+        const wEtiqueta = bold.widthOfTextAtSize(etiquetaTexto, sizeFila)
+        page.drawLine({ start: { x: textoX, y: cursorY - 1.5 }, end: { x: textoX + wEtiqueta, y: cursorY - 1.5 }, thickness: 0.6, color: negro })
+      }
       cursorY -= lhFila
     })
   })
@@ -164,11 +184,16 @@ async function crearPaginaDivisoria(
   const { page, width, yEncabezadoFin } = crearPaginaConEncabezado(pdfDoc, fonts, datosEncabezado, logoMembrete)
   const negro = rgb(0.10, 0.10, 0.10)
 
+  // Títulos con poco texto (ej. "ACTAS") se agrandan para que la página divisoria se vea más
+  // representativa — pedido de Franco sobre las carátulas/divisorias con poco contenido.
   const tituloLineas = titulo.split('\n')
+  const maxLargoLinea = Math.max(...tituloLineas.map(l => l.length))
+  const tituloSize = maxLargoLinea <= 8 ? 40 : maxLargoLinea <= 16 ? 34 : 26
+  const lineGap = tituloSize + 6
   let yTitulo = yEncabezadoFin - 150
   tituloLineas.forEach(linea => {
-    dibujarCentrado(page, linea, yTitulo, 26, fonts.boldItalic, negro, width)
-    yTitulo -= 32
+    dibujarCentrado(page, linea, yTitulo, tituloSize, fonts.boldItalic, negro, width)
+    yTitulo -= lineGap
   })
 
   if (logoCaratulaBytes) {
@@ -225,41 +250,6 @@ async function dibujarArchivoEnCaja(
     const w = font.widthOfTextAtSize(msg, 9)
     page.drawText(msg, { x: x + (boxW - w) / 2, y: y + boxH / 2 - 4, size: 9, font, color })
   }
-}
-
-// Sello circular "ESTUDIO DE AGRIMENSURA" con texto curvo, estilo firma de Franco
-function dibujarSelloProfesional(page: PDFPage, cx: number, cy: number, fonts: { bold: PDFFont }, color: any) {
-  const { bold } = fonts
-  const radioTexto = 42
-  const texto = 'ESTUDIO DE AGRIMENSURA'
-  const size = 7
-
-  // Texto curvo sobre el arco superior del círculo (de izquierda a derecha, en sentido horario)
-  const anguloInicio = 200 // grados, en sentido matemático estándar (0=derecha, 90=arriba)
-  const anguloFin = -20
-  const paso = (anguloFin - anguloInicio) / (texto.length - 1)
-  for (let i = 0; i < texto.length; i++) {
-    const angulo = anguloInicio + paso * i
-    const rad = (angulo * Math.PI) / 180
-    const x = cx + radioTexto * Math.cos(rad)
-    const y = cy + radioTexto * Math.sin(rad)
-    page.drawText(texto[i], {
-      x, y, size, font: bold, color,
-      rotate: degrees(angulo - 90),
-    })
-  }
-
-  // Círculo exterior
-  page.drawCircle({ x: cx, y: cy, size: radioTexto + 8, borderColor: color, borderWidth: 1 })
-  page.drawCircle({ x: cx, y: cy, size: radioTexto - 8, borderColor: color, borderWidth: 0.75 })
-
-  // "N" y "CA" en el centro, simulando el isologo
-  const nSize = 20
-  const nW = bold.widthOfTextAtSize('N', nSize)
-  page.drawText('N', { x: cx - nW / 2, y: cy - 4, size: nSize, font: bold, color })
-  const caSize = 9
-  const caW = bold.widthOfTextAtSize('CA', caSize)
-  page.drawText('CA', { x: cx - caW / 2, y: cy - 18, size: caSize, font: bold, color })
 }
 
 // Dibuja una línea con las palabras separadas y distribuidas para ocupar exactamente anchoLinea
@@ -630,22 +620,22 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const tipoMensuraTexto = (exp?.tipo_mensura ?? '—').toUpperCase()
   const ubicacionCompleta = `${construirUbicacion(inmueble)}${inmueble?.departamento ? ', ' + inmueble.departamento : ''}`
 
-  // Logos leídos una sola vez de disco acá (el chico del membrete y el grande de la carátula/
-  // divisorias) — como cada tipo de documento arma su propio PDFDocument, se embeben de nuevo
-  // (embedJpg/embedPng son baratos, no vuelven a leer el archivo) dentro del loop.
-  const logoMembreteBytes = await cargarLogoBytes('nica-logo-membrete.jpg', request)
+  // Logos leídos una sola vez de disco acá (el ícono chico del membrete y el grande de la
+  // carátula/divisorias) — como cada tipo de documento arma su propio PDFDocument, se embeben de
+  // nuevo (embedPng es barato, no vuelve a leer el archivo) dentro del loop.
+  const logoMembreteBytes = await cargarLogoBytes('nica-logo-icono.png', request)
   const logoCaratulaBytes = await cargarLogoBytes('nica-logo-caratula.png', request)
 
   // "Generar expediente completo": no es un tipo de documento real, es un marcador — el
   // servidor arma su propia lista ordenada (no se confía en lo que mande el cliente) siguiendo
   // el mismo orden y las mismas divisorias que trae EXP_PRUEBA.pdf (el expediente de referencia
-  // de Franco). "Notificación a Linderos" queda afuera a propósito: es un trámite previo a la
-  // mensura, no forma parte del expediente final que se presenta a Catastro.
+  // de Franco). "Notificación a Linderos" va dentro de la sección "ACTAS" — Franco corrigió que
+  // sí debe formar parte del expediente completo (antes quedaba afuera a propósito).
   const tipoDDJJPrincipal = (inmueble as any)?.tipo_inmueble === 'rural' ? 'formulario_sor' : 'formulario_u'
   const incluirE1 = !!edificacion
   const DIVISORIAS_BUNDLE: Record<string, string> = {
     capitulo_ubicacion: 'DESCRIPCIÓN Y DOMINIO\nDEL INMUEBLE',
-    acta_mensura: 'ACTAS',
+    citacion_linderos: 'ACTAS',
     memoria_mensura: 'MEMORIA DE OPERACIONES',
     planilla_calculos: 'PLANILLAS DE CÁLCULO',
     [tipoDDJJPrincipal]: `DECLARACIONES JURADAS\nFORMULARIOS "${tipoDDJJPrincipal === 'formulario_sor' ? 'SOR' : 'U'}${incluirE1 ? ' – E1' : ''}"`,
@@ -654,7 +644,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
     tipos = [
       'caratula', 'nota_elevacion', 'documento_identidad',
       'capitulo_ubicacion',
-      'acta_mensura', 'acta_ausencia_linderos',
+      'citacion_linderos', 'acta_mensura', 'acta_ausencia_linderos',
       'memoria_mensura',
       'planilla_calculos',
       tipoDDJJPrincipal,
@@ -699,7 +689,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       ;({ width, height } = page.getSize())
 
       // Encabezado tipo membrete (logo + datos del expediente)
-      logoMembrete = logoMembreteBytes ? await pdfDoc.embedJpg(logoMembreteBytes) : null
+      logoMembrete = logoMembreteBytes ? await pdfDoc.embedPng(logoMembreteBytes) : null
       yEncabezadoFin = dibujarEncabezado(page, width, height, { font, bold }, {
         objeto: tipoMensuraTexto,
         comitente: nombreComitente,
@@ -743,9 +733,11 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       const campo = (valor: string, x: number, y: number) => {
         page.drawText(valor, { x, y, size: f, font: bold, color: negro })
       }
-      // La plantilla ya trae su propio renglón en blanco arriba de la etiqueta "LOCALIDAD" —
-      // el valor va ahí directamente, apoyado sobre esa línea y un toque más grande, igual que
-      // en el resto de la plantilla original.
+      // La plantilla trae dos renglones en blanco, uno arriba del otro, para "Departamento" y
+      // "Localidad" — antes sólo se completaba Localidad y Departamento quedaba vacío (bug
+      // marcado por Franco). Coordenada de Departamento aproximada (11pt arriba de Localidad,
+      // mismo x): falta verificar contra un render real de la plantilla en la revisión visual.
+      page.drawText(inmueble?.departamento ?? '', { x: 315, y: 852, size: 9, font: bold, color: negro })
       page.drawText(inmueble?.localidad ?? '', { x: 315, y: 841, size: 9, font: bold, color: negro })
 
       // Inc. a) Designación según título — "UBICACIÓN: Calle" es la fila de encabezado (con
@@ -812,7 +804,11 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       // rectángulo blanco (sin tocar el borde de la caja) y se escribe encima el texto real.
       if (paginaDeclaracion) {
         const p3 = paginaDeclaracion
-        p3.drawRectangle({ x: 61, y: 795, width: 475, height: 48, color: rgb(1, 1, 1) })
+        // Alto 48 (y=795 a 843) se quedaba corto: la 4ª línea del párrafo de abajo cae en
+        // y=787.5, por debajo del borde inferior del rectángulo, y quedaba pisando el texto
+        // original de la plantilla sin tapar — es la superposición que marcó Franco. Se agranda
+        // hacia abajo para cubrir las 4 líneas completas con margen.
+        p3.drawRectangle({ x: 61, y: 780, width: 475, height: 63, color: rgb(1, 1, 1) })
 
         // El declarante de esta página es el profesional (agrimensor), no el comitente —
         // confirmado contra el ejemplo real de Franco ("El que suscribe FRANCO ARTURO NIGRO
@@ -838,7 +834,12 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         p3.drawText(MESES[hoy.getMonth()], { x: 162, y: 745, size: f, font, color: negro })
         p3.drawText(String(hoy.getFullYear()), { x: 270, y: 745, size: f, font, color: negro })
         if (declarante) {
-          p3.drawText(nombreDeclarante, { x: 390, y: 683, size: f, font: bold, color: negro })
+          // Centrado dentro de la caja de "Aclaración de Firma" (x≈380 a 545, estimado — falta
+          // verificar contra un render real de la plantilla) en vez del x=390 fijo de antes, que
+          // no quedaba centrado con nombres de largo variable.
+          const firmaBoxX = 380, firmaBoxW = 165
+          const wNombre = bold.widthOfTextAtSize(nombreDeclarante, f)
+          p3.drawText(nombreDeclarante, { x: firmaBoxX + (firmaBoxW - wNombre) / 2, y: 683, size: f, font: bold, color: negro })
         }
       }
 
@@ -977,9 +978,9 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
       // Rubro 1 — Características: 13 categorías × 5 incisos (a-e). Límites de fila/columna
       // medidos contra el mismo ejemplo real (no son parejos: el inciso a) es bien más ancho que
-      // el resto, y la fila "Techos" más baja que las demás). El casillero elegido se sombrea en
-      // gris (no una X) — así lo marca Franco a mano.
-      const grisClaroE1 = rgb(0.85, 0.85, 0.85)
+      // el resto, y la fila "Techos" más baja que las demás). El casillero elegido se marca con
+      // una cruz sobre el texto (antes era un relleno gris sólido, que tapaba la opción elegida
+      // en vez de señalarla — Franco pidió poder ver qué se marcó).
       const COL_BOUNDS_E1 = [55, 198, 300, 408, 500, 600]
       const ROW_BOUNDS_E1 = [800, 763, 726, 702, 665, 630, 596, 562, 528, 495, 462, 428, 395, 355, 322]
       const caracteristicas = (edificacion as any)?.caracteristicas ?? {}
@@ -992,7 +993,9 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         const xFin = COL_BOUNDS_E1[colIdx + 1] - 1
         const yIni = ROW_BOUNDS_E1[i + 1] + 1
         const yFin = ROW_BOUNDS_E1[i] - 1
-        page.drawRectangle({ x: xIni, y: yIni, width: xFin - xIni, height: yFin - yIni, color: grisClaroE1 })
+        const inset = 2
+        page.drawLine({ start: { x: xIni + inset, y: yIni + inset }, end: { x: xFin - inset, y: yFin - inset }, thickness: 1, color: negro })
+        page.drawLine({ start: { x: xIni + inset, y: yFin - inset }, end: { x: xFin - inset, y: yIni + inset }, thickness: 1, color: negro })
       })
 
       // Fila "14) Tipo del edificio" — cantidad de categorías (de las 13) que eligieron cada
@@ -1376,7 +1379,10 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         `${profesionalMatricula ? ` - MATRICULA PROFESIONAL DEL CONSEJO: ${profesionalMatricula}.` : ''}` +
         `${profesionalCatastro ? ` MATRICULA PROFESIONAL DE CATASTRO: ${profesionalCatastro};` : ''}` +
         ` - siendo ${horaTexto} hs. (${horaALetras(horaTexto)}) del día ${formatearFechaLarga(exp?.fecha_inicio)}, ` +
-        `se deja constancia mediante la presente, que se han medido los límites de la posesión ejercida por el ` +
+        // "Posesión ejercida por" sólo aplica al caso de prescripción adquisitiva (rol
+        // "poseedor"); para el resto de los roles (titular, apoderado, heredero) va "la
+        // propiedad del" — corrección de Franco sobre el Acta de Mensura.
+        `se deja constancia mediante la presente, que se han medido los límites de ${rolComitente === 'poseedor' ? 'la posesión ejercida por el' : 'la propiedad del'} ` +
         `Sr. ${nombreComitente.toUpperCase()} (DNI: ${comitentePrincipal?.dni ?? '—'}). Habiendo materializado todos ` +
         `los vértices con mojones de madera dura, determinando una superficie TOTAL de ${poligono?.superficie_m2 ?? '—'} ` +
         `metros cuadrados${poligono?.superficie_letras ? ` (${poligono.superficie_letras.toUpperCase()})` : ''}.`
@@ -1644,8 +1650,9 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         pag.page.drawText('ERROR TOTAL: ', { x: margenX + 300, y: yPie, size: 9, font: bold, color: negro })
         pag.page.drawText(error.toFixed(2), { x: margenX + 380, y: yPie, size: 9, font, color: negro })
         yPie -= 14
+        const tolerancia = calcularTolerancia(sumLado, (inmueble as any)?.tipo_inmueble)
         pag.page.drawText('TOLERANCIA: ', { x: margenX + 300, y: yPie, size: 9, font: bold, color: negro })
-        pag.page.drawText('0.10', { x: margenX + 380, y: yPie, size: 9, font, color: negro })
+        pag.page.drawText(tolerancia.toFixed(2), { x: margenX + 380, y: yPie, size: 9, font, color: negro })
         yPie -= 20
 
         const superficieValor = pol?.superficie_m2 ? Number(pol.superficie_m2).toFixed(2) : '—'
@@ -1721,9 +1728,9 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       objeto: tipoMensuraTexto, comitente: nombreComitente, ubicacion: ubicacionCompleta,
       profesional: `Agrimensor ${nombreProfesional}`, email: profile?.email, telefono: profile?.telefono,
     }
-    // Se embebe una sola vez por documento combinado y se reusa en cada divisoria — embedJpg
+    // Se embebe una sola vez por documento combinado y se reusa en cada divisoria — embedPng
     // repetido en el mismo PDFDocument no rompe nada, pero infla el archivo sin necesidad.
-    const logoMembreteBundle = logoMembreteBytes ? await bundleDoc.embedJpg(logoMembreteBytes) : null
+    const logoMembreteBundle = logoMembreteBytes ? await bundleDoc.embedPng(logoMembreteBytes) : null
 
     for (const { tipo, pdfBytes } of documentosParaSubir) {
       const tituloDivisoria = DIVISORIAS_BUNDLE[tipo]
