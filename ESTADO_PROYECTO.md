@@ -211,6 +211,10 @@ Formulario E1 tampoco se replica (ver v0.15/v0.16: `edificacion` es 1:1 con el e
 
 **Verificado:** `astro build` sin errores después de cada paso; merge de prueba standalone (`pdf-lib`, fuera del servidor) confirmando 6 páginas correctas para 3 polígonos antes de dar el paso 2 por cerrado.
 
+### Ajuste chico — paginación de "Documentos generados"
+
+Juan pidió bajar la cantidad de filas por página de la tabla de documentos generados (venía en 10, con 36 documentos de prueba ya generados quedaba una tabla larga). `DOCS_POR_PAGINA` en `[id].astro` pasó de 10 a 5 — es la única constante que controla el `range()` de la consulta y el cálculo de páginas, no hizo falta tocar nada más.
+
 **Sin cambios de base de datos** — todo lo necesario (`poligonos`, `edificacion`, tabla `documentos_generados` genérica) ya existía.
 
 ---

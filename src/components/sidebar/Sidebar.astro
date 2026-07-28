@@ -62,7 +62,6 @@ const current = Astro.url.pathname
   letter-spacing: 0.05em;
 }
 .sidebar-nav {
-  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -86,18 +85,21 @@ const current = Astro.url.pathname
 .sidebar-footer {
   padding: 1rem 1.25rem 0;
   border-top: 1px solid rgba(255,255,255,0.08);
-  margin-top: 1rem;
+  /* Margen notoriamente más grande que el gap de 2px entre los ítems del nav de arriba,
+     para que quede claramente separado del resto en vez de pegado a "Perfil". */
+  margin-top: 2rem;
 }
 .logout-btn {
-  background: none;
-  border: 1px solid rgba(255,255,255,0.2);
-  color: rgba(255,255,255,0.6);
+  background: #dc2626;
+  border: 1px solid #dc2626;
+  color: #fff;
   padding: 0.4rem 0.875rem;
   border-radius: var(--radius-sm);
   font-size: 0.8125rem;
+  font-weight: 500;
   cursor: pointer;
   width: 100%;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 }
-.logout-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.logout-btn:hover { background: #b91c1c; border-color: #b91c1c; }
 </style>

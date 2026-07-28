@@ -19,7 +19,7 @@ const { data: exp } = await db
 
 if (!exp) return Astro.redirect('/expedientes')
 
-const DOCS_POR_PAGINA = 10
+const DOCS_POR_PAGINA = 5
 const docPage = Math.max(1, parseInt(Astro.url.searchParams.get('docpag') ?? '1') || 1)
 const docFrom = (docPage - 1) * DOCS_POR_PAGINA
 const docTo = docFrom + DOCS_POR_PAGINA - 1
