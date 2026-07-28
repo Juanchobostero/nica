@@ -733,6 +733,17 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       const campo = (valor: string, x: number, y: number) => {
         page.drawText(valor, { x, y, size: f, font: bold, color: negro })
       }
+      // RUBRO 2 (Croquis de la Parcela) — la plantilla original traía 4 marcas de esquina
+      // (trazos gruesos en L, tipo "marca de recorte") alrededor del recuadro en blanco donde
+      // se dibuja el croquis; Franco pidió sacarlas y dejar el recuadro limpio. Coordenadas
+      // medidas primero a ojo sobre el render y confirmadas contra la plantilla real
+      // (public/pdf-templates/formulario_u.pdf, página 1) — cada rectángulo cubre una marca
+      // sin tocar el borde fino del recuadro real, que queda intacto.
+      page.drawRectangle({ x: 370, y: 659, width: 102, height: 26, color: blanco }) // marca superior
+      page.drawRectangle({ x: 328, y: 545, width: 34, height: 106, color: blanco }) // marca izquierda
+      page.drawRectangle({ x: 478, y: 545, width: 32, height: 106, color: blanco }) // marca derecha
+      page.drawRectangle({ x: 368, y: 511, width: 14, height: 31, color: blanco })  // trazo suelto debajo
+
       // La plantilla trae dos renglones en blanco, uno arriba del otro, para "Departamento" y
       // "Localidad" — antes sólo se completaba Localidad y Departamento quedaba vacío (bug
       // marcado por Franco). Coordenada de Departamento aproximada (11pt arriba de Localidad,
@@ -758,8 +769,25 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       // Inc. e) Superficie del terreno (según plano de mensura, ya autocalculada)
       campo(poligono?.superficie_m2 != null ? Number(poligono.superficie_m2).toFixed(2) : '', 228, 639)
 
-      // Inc. f) Otras informaciones adicionales — X moderada: marca el casillero sin tapar la
-      // letra (S/I o N/O) que queda atrás.
+      // Inc. f) Otras informaciones adicionales — las etiquetas "SI"/"NO" de estos 3
+      // casilleros vienen partidas en dos renglones en la plantilla original (columna
+      // exportada desde Google Sheets demasiado angosta para las 2 letras: "S" arriba, "I"
+      // abajo, ídem "N"/"O") — Franco pidió corregirlo. Se tapa cada una con un rectángulo
+      // blanco y se reescribe en una sola línea, en fuente chica para que entre. El de
+      // "CLOACAS: SI" no está partido en la plantilla (esa columna sí era lo bastante ancha)
+      // y se deja tal cual.
+      // Bordes del casillero punteado medidos a partir de la propia plantilla (pixel a pixel,
+      // no a ojo): un primer intento tapaba de más y se comía parte del borde punteado
+      // inferior (se veía "borrado con corrector", como marcó Franco) — estos rectángulos son
+      // angostos, ajustados 1-1.5pt para adentro del borde real por los cuatro lados.
+      page.drawRectangle({ x: 147.2, y: 561, width: 9.3, height: 12.5, color: blanco })
+      page.drawText('SI', { x: 149, y: 565.5, size: 6, font, color: negro })
+      page.drawRectangle({ x: 158.3, y: 561, width: 11, height: 12.5, color: blanco })
+      page.drawText('NO', { x: 159.5, y: 565.5, size: 5.5, font, color: negro })
+      page.drawRectangle({ x: 279.6, y: 561, width: 10.6, height: 12.5, color: blanco })
+      page.drawText('NO', { x: 280.5, y: 565.5, size: 5.5, font, color: negro })
+
+      // X moderada: marca el casillero sin tapar la letra (S/I o N/O) que queda atrás.
       marcar((inmueble as any)?.agua_corriente, 150, 161, 559, 9)
       marcar((inmueble as any)?.cloacas, 270, 282, 559, 9)
       campo((inmueble as any)?.personas_habitan != null ? String((inmueble as any).personas_habitan) : '', 270, 544)
@@ -794,6 +822,13 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         campo(c?.domicilio_numero ?? '', 242, y - 29)
         campo(c?.domicilio_localidad ?? '', 303, y - 29)
         campo(c?.domicilio_provincia ?? '', 459, y - 29)
+        // "Ausente del País" tiene el mismo defecto de la plantilla que Agua Corriente/Cloacas:
+        // "NO" viene partido en "N" arriba / "O" abajo (acá "SI" sí entra en una sola línea).
+        // El divisor entre el casillero de "SI" y el de "NO" está en x≈526.5 (medido con la
+        // misma técnica de reglas en píxeles) — no en x≈515 como parecía a ojo, que hubiera
+        // tapado parte de la palabra "SI".
+        page.drawRectangle({ x: 528, y: y - 32.8, width: 8.5, height: 11.7, color: blanco })
+        page.drawText('NO', { x: 529, y: y - 29.5, size: 5.5, font, color: negro })
         marcar(ec.ausente_pais, 517, 529, y - 31, 9)
       })
 
