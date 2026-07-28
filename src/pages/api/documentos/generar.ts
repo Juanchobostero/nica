@@ -520,6 +520,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const expedienteId = form.get('expediente_id') as string
   let tipos = form.getAll('tipos[]') as string[]
   const esBundle = tipos.includes('expediente_completo')
+  const esBundleDDJJ = tipos.includes('declaraciones_juradas_completo')
 
   if (!tipos.length) {
     return isAjax
@@ -626,11 +627,13 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const logoMembreteBytes = await cargarLogoBytes('nica-logo-icono.png', request)
   const logoCaratulaBytes = await cargarLogoBytes('nica-logo-caratula.png', request)
 
-  // "Generar expediente completo": no es un tipo de documento real, es un marcador — el
-  // servidor arma su propia lista ordenada (no se confía en lo que mande el cliente) siguiendo
-  // el mismo orden y las mismas divisorias que trae EXP_PRUEBA.pdf (el expediente de referencia
-  // de Franco). "Notificación a Linderos" va dentro de la sección "ACTAS" — Franco corrigió que
-  // sí debe formar parte del expediente completo (antes quedaba afuera a propósito).
+  // "Generar expediente completo" y "Generar declaraciones juradas": no son tipos de documento
+  // reales, son marcadores — el servidor arma su propia lista ordenada (no se confía en lo que
+  // mande el cliente). El expediente completo sigue el mismo orden y las mismas divisorias que
+  // trae EXP_PRUEBA.pdf (el expediente de referencia de Franco), pero ya NO incluye las DDJJ
+  // (Formulario U/SOR/E1) — Franco pidió separarlas en su propio botón/archivo aparte, para no
+  // generar un PDF enorme cuando hay muchas parcelas cargadas (cada DDJJ se replica una vez por
+  // parcela, ver más abajo en las ramas formulario_u/formulario_sor).
   const tipoDDJJPrincipal = (inmueble as any)?.tipo_inmueble === 'rural' ? 'formulario_sor' : 'formulario_u'
   const incluirE1 = !!edificacion
   const DIVISORIAS_BUNDLE: Record<string, string> = {
@@ -638,7 +641,6 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
     citacion_linderos: 'ACTAS',
     memoria_mensura: 'MEMORIA DE OPERACIONES',
     planilla_calculos: 'PLANILLAS DE CÁLCULO',
-    [tipoDDJJPrincipal]: `DECLARACIONES JURADAS\nFORMULARIOS "${tipoDDJJPrincipal === 'formulario_sor' ? 'SOR' : 'U'}${incluirE1 ? ' – E1' : ''}"`,
   }
   if (esBundle) {
     tipos = [
@@ -647,9 +649,9 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       'citacion_linderos', 'acta_mensura', 'acta_ausencia_linderos',
       'memoria_mensura',
       'planilla_calculos',
-      tipoDDJJPrincipal,
-      ...(incluirE1 ? ['formulario_e1'] : []),
     ]
+  } else if (esBundleDDJJ) {
+    tipos = [tipoDDJJPrincipal, ...(incluirE1 ? ['formulario_e1'] : [])]
   }
 
   const documentosParaSubir: { tipo: string; pdfBytes: Uint8Array }[] = []
@@ -715,167 +717,197 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       // solo una línea suelta) — se descarta acá para no entregar una hoja vacía suelta.
       // OJO: pdf-lib cachea el array de getPages() y removePage() no invalida ese caché (ver
       // node_modules/pdf-lib/cjs/api/PDFDocument.js — insertPage sí llama pageCache.invalidate(),
-      // removePage no). Como más arriba ya se llamó pdfDoc.getPages()[0] para la variable `page`,
-      // cualquier getPages() posterior devuelve el array viejo de 3 páginas (con la del medio
-      // todavía en el índice 1, aunque ya esté desconectada del árbol real del PDF). Por eso acá
-      // se guarda la referencia a la página de RUBRO 4 (índice 2 en el array original) ANTES de
-      // remover, en vez de volver a pedir getPages() después y asumir que se reindexó.
-      const paginaDeclaracion = pdfDoc.getPages()[2]
-      pdfDoc.removePage(1)
-      const f = 8
-      const blanco = rgb(1, 1, 1)
-      // Marca la opción correspondiente (Sí/No) con una X en negrita sobre su casillero.
-      const marcar = (valor: boolean | null | undefined, xSi: number, xNo: number, y: number, size = f) => {
-        page.drawText('X', { x: valor ? xSi : xNo, y, size, font: bold, color: negro })
-      }
-      // En negrita: para que los datos cargados desde el expediente se distingan de un
-      // vistazo del texto impreso de la plantilla (que va en fuente regular).
-      const campo = (valor: string, x: number, y: number) => {
-        page.drawText(valor, { x, y, size: f, font: bold, color: negro })
-      }
-      // RUBRO 2 (Croquis de la Parcela) — la plantilla original traía 4 marcas de esquina
-      // (trazos gruesos en L, tipo "marca de recorte") alrededor del recuadro en blanco donde
-      // se dibuja el croquis; Franco pidió sacarlas y dejar el recuadro limpio. Coordenadas
-      // medidas primero a ojo sobre el render y confirmadas contra la plantilla real
-      // (public/pdf-templates/formulario_u.pdf, página 1) — cada rectángulo cubre una marca
-      // sin tocar el borde fino del recuadro real, que queda intacto.
-      page.drawRectangle({ x: 370, y: 659, width: 102, height: 26, color: blanco }) // marca superior
-      page.drawRectangle({ x: 328, y: 545, width: 34, height: 106, color: blanco }) // marca izquierda
-      page.drawRectangle({ x: 478, y: 545, width: 32, height: 106, color: blanco }) // marca derecha
-      page.drawRectangle({ x: 368, y: 511, width: 14, height: 31, color: blanco })  // trazo suelto debajo
+      // removePage no). Por eso, adentro de dibujarFormularioU(), se guarda la referencia a la
+      // página de RUBRO 4 (índice 2 en el array original) ANTES de remover, en vez de volver a
+      // pedir getPages() después y asumir que se reindexó.
+      //
+      // Si el expediente tiene más de un polígono/parcela cargado, Franco pidió que la
+      // declaración jurada se replique una vez por parcela (con la superficie de cada una) en
+      // vez de generar sólo la del primer polígono. dibujarFormularioU() dibuja UNA copia
+      // completa (2 páginas: datos + declaración) sobre un PDFDocument/página/fuentes ya
+      // cargados de la plantilla — se llama una vez por polígono, y las copias extra se pegan
+      // al final del documento principal con copyPages() (misma técnica que ya usa el armado
+      // del "expediente completo" más abajo en este archivo). Con un solo polígono (el caso
+      // común) el resultado es idéntico al de antes: se llama una sola vez, sin loop extra.
+      const dibujarFormularioU = (
+        pdfDocActual: PDFDocument, pageActual: PDFPage, fontActual: PDFFont, boldActual: PDFFont, poligonoActual: any,
+      ) => {
+        const paginaDeclaracion = pdfDocActual.getPages()[2]
+        pdfDocActual.removePage(1)
+        const f = 8
+        const blanco = rgb(1, 1, 1)
+        // Marca la opción correspondiente (Sí/No) con una X en negrita sobre su casillero.
+        const marcar = (valor: boolean | null | undefined, xSi: number, xNo: number, y: number, size = f) => {
+          pageActual.drawText('X', { x: valor ? xSi : xNo, y, size, font: boldActual, color: negro })
+        }
+        // En negrita: para que los datos cargados desde el expediente se distingan de un
+        // vistazo del texto impreso de la plantilla (que va en fuente regular).
+        const campo = (valor: string, x: number, y: number) => {
+          pageActual.drawText(valor, { x, y, size: f, font: boldActual, color: negro })
+        }
+        // RUBRO 2 (Croquis de la Parcela) — la plantilla original traía 4 marcas de esquina
+        // (trazos gruesos en L, tipo "marca de recorte") alrededor del recuadro en blanco donde
+        // se dibuja el croquis; Franco pidió sacarlas y dejar el recuadro limpio. Coordenadas
+        // medidas primero a ojo sobre el render y confirmadas contra la plantilla real
+        // (public/pdf-templates/formulario_u.pdf, página 1) — cada rectángulo cubre una marca
+        // sin tocar el borde fino del recuadro real, que queda intacto.
+        pageActual.drawRectangle({ x: 370, y: 659, width: 102, height: 26, color: blanco }) // marca superior
+        pageActual.drawRectangle({ x: 328, y: 545, width: 34, height: 106, color: blanco }) // marca izquierda
+        pageActual.drawRectangle({ x: 478, y: 545, width: 32, height: 106, color: blanco }) // marca derecha
+        pageActual.drawRectangle({ x: 368, y: 511, width: 14, height: 31, color: blanco })  // trazo suelto debajo
 
-      // La plantilla trae dos renglones en blanco, uno arriba del otro, para "Departamento" y
-      // "Localidad" — antes sólo se completaba Localidad y Departamento quedaba vacío (bug
-      // marcado por Franco). Coordenada de Departamento aproximada (11pt arriba de Localidad,
-      // mismo x): falta verificar contra un render real de la plantilla en la revisión visual.
-      page.drawText(inmueble?.departamento ?? '', { x: 315, y: 852, size: 9, font: bold, color: negro })
-      page.drawText(inmueble?.localidad ?? '', { x: 315, y: 841, size: 9, font: bold, color: negro })
+        // La plantilla trae dos renglones en blanco para "Departamento" y "Localidad" — el de
+        // Departamento es corto (termina en x≈460) y el de Localidad es más largo, con 3
+        // casilleros a la derecha (termina en x≈615). Coordenadas confirmadas dibujando una
+        // grilla de referencia sobre la plantilla real (public/pdf-templates/formulario_u.pdf):
+        // el renglón de Departamento está en y≈845 y el de Localidad en y≈820, no a 11pt de
+        // distancia entre sí como se había estimado antes — quedaban los dos valores amontonados
+        // arriba, con "Localidad" pisando el renglón de "Departamento" en vez de apoyarse sobre
+        // el suyo, mucho más abajo (bug marcado por Franco).
+        pageActual.drawText(inmueble?.departamento ?? '', { x: 315, y: 853, size: 9, font: boldActual, color: negro })
+        pageActual.drawText(inmueble?.localidad ?? '', { x: 315, y: 828, size: 9, font: boldActual, color: negro })
 
-      // Inc. a) Designación según título — "UBICACIÓN: Calle" es la fila de encabezado (con
-      // NUMERO/CHACRA/FRAC/MANZANA/LOTE/P.HORIZONT como títulos de columna); los valores van
-      // en la fila de abajo, dentro del recuadro.
-      campo(inmueble?.calle_frente ?? '', 158, 764)
-      campo(inmueble?.fraccion ?? '', 366, 764)
-      campo(inmueble?.manzana ?? '', 396, 764)
-      campo(inmueble?.parcela ?? '', 443, 764)
+        // Inc. a) Designación según título — "UBICACIÓN: Calle" es la fila de encabezado (con
+        // NUMERO/CHACRA/FRAC/MANZANA/LOTE/P.HORIZONT como títulos de columna); los valores van
+        // en la fila de abajo, dentro del recuadro.
+        campo(inmueble?.calle_frente ?? '', 158, 764)
+        campo(inmueble?.fraccion ?? '', 366, 764)
+        campo(inmueble?.manzana ?? '', 396, 764)
+        campo(inmueble?.parcela ?? '', 443, 764)
 
-      // Inc. c) Registro de la Propiedad
-      campo((inmueble as any)?.registro_tomo ?? '', 100, 690)
-      // El casillero de FOLIO es angosto y la etiqueta "FOLIO" se parte en "FOLI" / "O" —
-      // x=228 ubica el valor dentro de ese casillero, sin pisar la "O" partida.
-      campo((inmueble as any)?.registro_folio ?? '', 228, 690)
-      campo((inmueble as any)?.registro_anio ?? '', 275, 690)
+        // Inc. c) Registro de la Propiedad
+        campo((inmueble as any)?.registro_tomo ?? '', 100, 690)
+        // El casillero de FOLIO es angosto y la etiqueta "FOLIO" se parte en "FOLI" / "O" en la
+        // plantilla — a diferencia de los SI/NO, Franco/Juan prefieren dejarlo tal cual (es un
+        // defecto propio de la plantilla, no priorizado para corregir). x=228 ubica el valor
+        // dentro de ese casillero, sin pisar la "O" partida.
+        campo((inmueble as any)?.registro_folio ?? '', 228, 690)
+        campo((inmueble as any)?.registro_anio ?? '', 275, 690)
 
-      // Inc. e) Superficie del terreno (según plano de mensura, ya autocalculada)
-      campo(poligono?.superficie_m2 != null ? Number(poligono.superficie_m2).toFixed(2) : '', 228, 639)
+        // Inc. e) Superficie del terreno (según plano de mensura, ya autocalculada) — la propia
+        // de ESTE polígono/parcela, no la del primero del expediente.
+        campo(poligonoActual?.superficie_m2 != null ? Number(poligonoActual.superficie_m2).toFixed(2) : '', 228, 639)
 
-      // Inc. f) Otras informaciones adicionales — las etiquetas "SI"/"NO" de estos 3
-      // casilleros vienen partidas en dos renglones en la plantilla original (columna
-      // exportada desde Google Sheets demasiado angosta para las 2 letras: "S" arriba, "I"
-      // abajo, ídem "N"/"O") — Franco pidió corregirlo. Se tapa cada una con un rectángulo
-      // blanco y se reescribe en una sola línea, en fuente chica para que entre. El de
-      // "CLOACAS: SI" no está partido en la plantilla (esa columna sí era lo bastante ancha)
-      // y se deja tal cual.
-      // Bordes del casillero punteado medidos a partir de la propia plantilla (pixel a pixel,
-      // no a ojo): un primer intento tapaba de más y se comía parte del borde punteado
-      // inferior (se veía "borrado con corrector", como marcó Franco) — estos rectángulos son
-      // angostos, ajustados 1-1.5pt para adentro del borde real por los cuatro lados.
-      page.drawRectangle({ x: 147.2, y: 561, width: 9.3, height: 12.5, color: blanco })
-      page.drawText('SI', { x: 149, y: 565.5, size: 6, font, color: negro })
-      page.drawRectangle({ x: 158.3, y: 561, width: 11, height: 12.5, color: blanco })
-      page.drawText('NO', { x: 159.5, y: 565.5, size: 5.5, font, color: negro })
-      page.drawRectangle({ x: 279.6, y: 561, width: 10.6, height: 12.5, color: blanco })
-      page.drawText('NO', { x: 280.5, y: 565.5, size: 5.5, font, color: negro })
+        // Inc. f) Otras informaciones adicionales — las etiquetas "SI"/"NO" de estos 3
+        // casilleros vienen partidas en dos renglones en la plantilla original (columna
+        // exportada desde Google Sheets demasiado angosta para las 2 letras: "S" arriba, "I"
+        // abajo, ídem "N"/"O") — Franco pidió corregirlo. Se tapa cada una con un rectángulo
+        // blanco y se reescribe en una sola línea, en fuente chica para que entre. El de
+        // "CLOACAS: SI" no está partido en la plantilla (esa columna sí era lo bastante ancha)
+        // y se deja tal cual.
+        // Bordes del casillero punteado medidos a partir de la propia plantilla (pixel a pixel,
+        // no a ojo): un primer intento tapaba de más y se comía parte del borde punteado
+        // inferior (se veía "borrado con corrector", como marcó Franco) — estos rectángulos son
+        // angostos, ajustados 1-1.5pt para adentro del borde real por los cuatro lados.
+        pageActual.drawRectangle({ x: 147.2, y: 561, width: 9.3, height: 12.5, color: blanco })
+        pageActual.drawText('SI', { x: 149, y: 565.5, size: 6, font: fontActual, color: negro })
+        pageActual.drawRectangle({ x: 158.3, y: 561, width: 11, height: 12.5, color: blanco })
+        pageActual.drawText('NO', { x: 159.5, y: 565.5, size: 5.5, font: fontActual, color: negro })
+        pageActual.drawRectangle({ x: 279.6, y: 561, width: 10.6, height: 12.5, color: blanco })
+        pageActual.drawText('NO', { x: 280.5, y: 565.5, size: 5.5, font: fontActual, color: negro })
 
-      // X moderada: marca el casillero sin tapar la letra (S/I o N/O) que queda atrás.
-      marcar((inmueble as any)?.agua_corriente, 150, 161, 559, 9)
-      marcar((inmueble as any)?.cloacas, 270, 282, 559, 9)
-      campo((inmueble as any)?.personas_habitan != null ? String((inmueble as any).personas_habitan) : '', 270, 544)
-      // El casillero de año es de un dígito por celda (4 celditas) — se reparte el año dígito
-      // por dígito en vez de escribirlo como un solo texto corrido.
-      ;(String((inmueble as any)?.ultimo_anio_pago_impuesto ?? '').padStart(4, ' ')).split('').forEach((digito, i) => {
-        if (digito.trim()) campo(digito, 249 + i * 11, 523)
-      })
-      // x=200 en vez de 235: para que el texto no se meta en el casillero reservado que trae la
-      // plantilla al final de la línea.
-      campo((inmueble as any)?.receptoria ?? '', 200, 487)
+        // X moderada: marca el casillero sin tapar la letra (S/I o N/O) que queda atrás.
+        marcar((inmueble as any)?.agua_corriente, 150, 161, 559, 9)
+        marcar((inmueble as any)?.cloacas, 270, 282, 559, 9)
+        campo((inmueble as any)?.personas_habitan != null ? String((inmueble as any).personas_habitan) : '', 270, 544)
+        // El casillero de año es de un dígito por celda (4 celditas) — se reparte el año dígito
+        // por dígito en vez de escribirlo como un solo texto corrido.
+        ;(String((inmueble as any)?.ultimo_anio_pago_impuesto ?? '').padStart(4, ' ')).split('').forEach((digito, i) => {
+          if (digito.trim()) campo(digito, 249 + i * 11, 523)
+        })
+        // x=200 en vez de 235: para que el texto no se meta en el casillero reservado que trae la
+        // plantilla al final de la línea.
+        campo((inmueble as any)?.receptoria ?? '', 200, 487)
 
-      // Rubro 3 — Datos del propietario (hasta 2 filas, a y b — el formulario no admite más sin Anexo A)
-      const filasY = [436, 378]
-      // La plantilla trae impreso en negro, a modo de ejemplo, "100" (fila a) y "DNI" (ambas
-      // filas). Intentar hacerlos coincidir pixel a pixel con un rectángulo o un corrimiento de
-      // posición terminaba cortando líneas de la grilla o mostrando el dato duplicado. Como
-      // "100 % / DNI" es además el caso más común (dueño único, documento DNI), directamente no
-      // se escribe nada encima cuando el dato real coincide con ese valor — se deja el impreso de
-      // la plantilla tal cual. Solo se escribe cuando el dato real es distinto (otro % de
-      // condominio, o LE/LC en vez de DNI).
-      ;(expComitentes ?? []).slice(0, 2).forEach((ec: any, i: number) => {
-        const c = ec.comitentes
-        const y = filasY[i]
-        const porcentaje = ec.porcentaje_condominio ?? 100
-        const tipoDoc = c?.tipo_documento ?? 'DNI'
-        campo(`${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase(), 182, y)
-        if (porcentaje !== 100) campo(String(porcentaje), 386, y)
-        if (tipoDoc !== 'DNI') campo(tipoDoc, 429, y)
-        campo(c?.dni ?? '', 460, y)
-        campo(c?.domicilio_calle ?? '', 152, y - 29)
-        campo(c?.domicilio_numero ?? '', 242, y - 29)
-        campo(c?.domicilio_localidad ?? '', 303, y - 29)
-        campo(c?.domicilio_provincia ?? '', 459, y - 29)
-        // "Ausente del País" tiene el mismo defecto de la plantilla que Agua Corriente/Cloacas:
-        // "NO" viene partido en "N" arriba / "O" abajo (acá "SI" sí entra en una sola línea).
-        // El divisor entre el casillero de "SI" y el de "NO" está en x≈526.5 (medido con la
-        // misma técnica de reglas en píxeles) — no en x≈515 como parecía a ojo, que hubiera
-        // tapado parte de la palabra "SI".
-        page.drawRectangle({ x: 528, y: y - 32.8, width: 8.5, height: 11.7, color: blanco })
-        page.drawText('NO', { x: 529, y: y - 29.5, size: 5.5, font, color: negro })
-        marcar(ec.ausente_pais, 517, 529, y - 31, 9)
-      })
+        // Rubro 3 — Datos del propietario (hasta 2 filas, a y b — el formulario no admite más sin Anexo A)
+        const filasY = [436, 378]
 
-      campo(inmueble?.propietario_anterior ?? '', 260, 316)
-
-      // Última página (RUBRO 4 + declaración jurada). El párrafo original de la plantilla trae
-      // una oración de ejemplo completa con nombre y DNI de otro contribuyente — se tapa con un
-      // rectángulo blanco (sin tocar el borde de la caja) y se escribe encima el texto real.
-      if (paginaDeclaracion) {
-        const p3 = paginaDeclaracion
-        // Alto 48 (y=795 a 843) se quedaba corto: la 4ª línea del párrafo de abajo cae en
-        // y=787.5, por debajo del borde inferior del rectángulo, y quedaba pisando el texto
-        // original de la plantilla sin tapar — es la superposición que marcó Franco. Se agranda
-        // hacia abajo para cubrir las 4 líneas completas con margen.
-        p3.drawRectangle({ x: 61, y: 780, width: 475, height: 63, color: rgb(1, 1, 1) })
-
-        // El declarante de esta página es el profesional (agrimensor), no el comitente —
-        // confirmado contra el ejemplo real de Franco ("El que suscribe FRANCO ARTURO NIGRO
-        // CARRIERE... en su carácter de AGRIMENSOR"). `profiles` no tiene columna de
-        // nacionalidad ni tipo de documento — se asume Argentina/DNI, que en la práctica es
-        // siempre así para un agrimensor matriculado acá (no amerita una columna nueva).
-        const declarante = profile as any
-        const nombreDeclarante = declarante ? `${declarante.nombre ?? ''} ${declarante.apellido ?? ''}`.toUpperCase() : ''
-        const parrafo = `El que suscribe ${nombreDeclarante} nacionalidad Argentina documento de identidad DNI Nº ${declarante?.dni ?? ''} en su carácter de AGRIMENSOR declara bajo juramento que es verdad toda información suministrada por el y transcripta en el presente formulario y que tiene conocimiento de las penalidades establecidas por omision, falsedad y toda transgresión a las disposiciones legales.`
-
-        // El recuadro de la declaración va de x≈55 a x≈539 (medido en el content stream del PDF)
-        // — con ancho 500 el párrafo se pasaba del borde derecho de la caja en las líneas largas.
-        const lineasParrafo = partirEnLineas(parrafo, 465, f, font)
-        lineasParrafo.slice(0, 4).forEach((linea, i) => {
-          p3.drawText(linea, { x: 62, y: 825 - i * 12.5, size: f, font, color: negro })
+        // La plantilla trae impreso en negro, a modo de ejemplo, "100" (fila a) y "DNI" (ambas
+        // filas). Intentar hacerlos coincidir pixel a pixel con un rectángulo o un corrimiento de
+        // posición terminaba cortando líneas de la grilla o mostrando el dato duplicado. Como
+        // "100 % / DNI" es además el caso más común (dueño único, documento DNI), directamente no
+        // se escribe nada encima cuando el dato real coincide con ese valor — se deja el impreso de
+        // la plantilla tal cual. Solo se escribe cuando el dato real es distinto (otro % de
+        // condominio, o LE/LC en vez de DNI).
+        ;(expComitentes ?? []).slice(0, 2).forEach((ec: any, i: number) => {
+          const c = ec.comitentes
+          const y = filasY[i]
+          const porcentaje = ec.porcentaje_condominio ?? 100
+          const tipoDoc = c?.tipo_documento ?? 'DNI'
+          campo(`${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase(), 182, y)
+          if (porcentaje !== 100) campo(String(porcentaje), 386, y)
+          if (tipoDoc !== 'DNI') campo(tipoDoc, 429, y)
+          campo(c?.dni ?? '', 460, y)
+          campo(c?.domicilio_calle ?? '', 152, y - 29)
+          campo(c?.domicilio_numero ?? '', 242, y - 29)
+          campo(c?.domicilio_localidad ?? '', 303, y - 29)
+          campo(c?.domicilio_provincia ?? '', 459, y - 29)
+          // "Ausente del País" tiene "NO" partido en "N"/"O" en la plantilla (mismo defecto que
+          // Agua Corriente/Cloacas) — se probaron varias correcciones (tapar+redibujar, realinear
+          // con "SI", separar la X del texto) y ninguna terminó de verse bien; Juan prefirió dejarlo
+          // tal cual viene de la plantilla en vez de seguir ajustando, y pedirle a Franco una
+          // plantilla nueva con ese casillero corregido de origen.
+          marcar(ec.ausente_pais, 517, 529, y - 31, 9)
         })
 
-        // La plantilla trae su propio "___ de ___     ___.-" con tres huecos separados
-        // (día / mes / año) — antes se pisaban todos poniendo la fecha entera en el primer
-        // hueco, quedando duplicada contra el "de" impreso. Se reparte acá, uno por hueco.
-        const hoy = new Date()
-        p3.drawText(String(hoy.getDate()), { x: 65, y: 745, size: f, font, color: negro })
-        p3.drawText(MESES[hoy.getMonth()], { x: 162, y: 745, size: f, font, color: negro })
-        p3.drawText(String(hoy.getFullYear()), { x: 270, y: 745, size: f, font, color: negro })
-        if (declarante) {
-          // Centrado dentro de la caja de "Aclaración de Firma" (x≈380 a 545, estimado — falta
-          // verificar contra un render real de la plantilla) en vez del x=390 fijo de antes, que
-          // no quedaba centrado con nombres de largo variable.
-          const firmaBoxX = 380, firmaBoxW = 165
-          const wNombre = bold.widthOfTextAtSize(nombreDeclarante, f)
-          p3.drawText(nombreDeclarante, { x: firmaBoxX + (firmaBoxW - wNombre) / 2, y: 683, size: f, font: bold, color: negro })
+        campo(inmueble?.propietario_anterior ?? '', 260, 316)
+
+        // Última página (RUBRO 4 + declaración jurada). El párrafo original de la plantilla trae
+        // una oración de ejemplo completa con nombre y DNI de otro contribuyente — se tapa con un
+        // rectángulo blanco (sin tocar el borde de la caja) y se escribe encima el texto real.
+        if (paginaDeclaracion) {
+          const p3 = paginaDeclaracion
+          // Alto 48 (y=795 a 843) se quedaba corto: la 4ª línea del párrafo de abajo cae en
+          // y=787.5, por debajo del borde inferior del rectángulo, y quedaba pisando el texto
+          // original de la plantilla sin tapar — es la superposición que marcó Franco. Se agranda
+          // hacia abajo para cubrir las 4 líneas completas con margen.
+          p3.drawRectangle({ x: 61, y: 780, width: 475, height: 63, color: rgb(1, 1, 1) })
+
+          // El declarante de esta página es el profesional (agrimensor), no el comitente —
+          // confirmado contra el ejemplo real de Franco ("El que suscribe FRANCO ARTURO NIGRO
+          // CARRIERE... en su carácter de AGRIMENSOR"). `profiles` no tiene columna de
+          // nacionalidad ni tipo de documento — se asume Argentina/DNI, que en la práctica es
+          // siempre así para un agrimensor matriculado acá (no amerita una columna nueva).
+          const declarante = profile as any
+          const nombreDeclarante = declarante ? `${declarante.nombre ?? ''} ${declarante.apellido ?? ''}`.toUpperCase() : ''
+          const parrafo = `El que suscribe ${nombreDeclarante} nacionalidad Argentina documento de identidad DNI Nº ${declarante?.dni ?? ''} en su carácter de AGRIMENSOR declara bajo juramento que es verdad toda información suministrada por el y transcripta en el presente formulario y que tiene conocimiento de las penalidades establecidas por omision, falsedad y toda transgresión a las disposiciones legales.`
+
+          // El recuadro de la declaración va de x≈55 a x≈539 (medido en el content stream del PDF)
+          // — con ancho 500 el párrafo se pasaba del borde derecho de la caja en las líneas largas.
+          const lineasParrafo = partirEnLineas(parrafo, 465, f, fontActual)
+          lineasParrafo.slice(0, 4).forEach((linea, i) => {
+            p3.drawText(linea, { x: 62, y: 825 - i * 12.5, size: f, font: fontActual, color: negro })
+          })
+
+          // La plantilla trae su propio "___ de ___     ___.-" con tres huecos separados
+          // (día / mes / año) — antes se pisaban todos poniendo la fecha entera en el primer
+          // hueco, quedando duplicada contra el "de" impreso. Se reparte acá, uno por hueco.
+          const hoy = new Date()
+          p3.drawText(String(hoy.getDate()), { x: 65, y: 745, size: f, font: fontActual, color: negro })
+          p3.drawText(MESES[hoy.getMonth()], { x: 162, y: 745, size: f, font: fontActual, color: negro })
+          p3.drawText(String(hoy.getFullYear()), { x: 270, y: 745, size: f, font: fontActual, color: negro })
+          if (declarante) {
+            // Centrado dentro de la caja de "Aclaración de Firma" (x≈380 a 545, estimado — falta
+            // verificar contra un render real de la plantilla) en vez del x=390 fijo de antes, que
+            // no quedaba centrado con nombres de largo variable.
+            const firmaBoxX = 380, firmaBoxW = 165
+            const wNombre = boldActual.widthOfTextAtSize(nombreDeclarante, f)
+            p3.drawText(nombreDeclarante, { x: firmaBoxX + (firmaBoxW - wNombre) / 2, y: 683, size: f, font: boldActual, color: negro })
+          }
         }
+      }
+
+      const listaPoligonosDDJJ = poligonos.length > 0 ? poligonos : [poligono]
+      dibujarFormularioU(pdfDoc, page, font, bold, listaPoligonosDDJJ[0])
+      for (let i = 1; i < listaPoligonosDDJJ.length; i++) {
+        const plantillaBytesExtra = await readFile(join(process.cwd(), 'public', 'pdf-templates', 'formulario_u.pdf'))
+        const pdfDocExtra = await PDFDocument.load(plantillaBytesExtra)
+        const pageExtra = pdfDocExtra.getPages()[0]
+        const fontExtra = await pdfDocExtra.embedFont(StandardFonts.Helvetica)
+        const boldExtra = await pdfDocExtra.embedFont(StandardFonts.HelveticaBold)
+        dibujarFormularioU(pdfDocExtra, pageExtra, fontExtra, boldExtra, listaPoligonosDDJJ[i])
+        const copiadasU = await pdfDoc.copyPages(pdfDocExtra, pdfDocExtra.getPageIndices())
+        copiadasU.forEach(p => pdfDoc.addPage(p))
       }
 
     } else if (tipo === 'formulario_sor') {
@@ -992,23 +1024,30 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       // criterio que el "100"/"DNI" de Formulario U) — si el destino real es ese, no se dibuja
       // nada encima; para cualquier otro destino si se marca el casillero real.
       const destinoSeleccionado = (edificacion as any)?.destino_edificio
+      // Filas de 10pt (no 19pt como estaba antes) — verificado dibujando una grilla de
+      // referencia sobre la plantilla real: con el espaciado viejo cada casillero cayó una fila
+      // más abajo de la que correspondía (ej. "negocios" marcaba el renglón de "espectaculos").
+      // "casa_familia"/"asociaciones" (y=889) son las únicas dos que ya estaban bien porque
+      // coinciden con las X que trae la plantilla de fábrica — el resto se corrigió contra eso.
       const DESTINO_XY: Record<string, [number, number]> = {
         casa_familia: [308, 889],
-        casa_departamentos: [308, 870],
-        hotel: [308, 851],
-        sanatorio: [308, 832],
-        oficina: [308, 813],
+        casa_departamentos: [308, 879],
+        hotel: [308, 869],
+        sanatorio: [308, 859],
+        oficina: [308, 849],
         asociaciones: [538, 889],
-        negocios: [538, 870],
-        espectaculos: [538, 851],
-        otros: [538, 832],
+        negocios: [538, 879],
+        espectaculos: [538, 869],
+        otros: [538, 859],
       }
       if (destinoSeleccionado && destinoSeleccionado !== 'casa_familia' && DESTINO_XY[destinoSeleccionado]) {
         const [dx, dy] = DESTINO_XY[destinoSeleccionado]
         marcarE1(dx, dy)
       }
       if (destinoSeleccionado === 'otros') {
-        campoE1((edificacion as any)?.destino_otros_detalle ?? '', 460, 826, 7)
+        // Mismo renglón que la fila "otros" recién corregida (antes estaba en y=826, que
+        // correspondía a la posición vieja e incorrecta de esa fila).
+        campoE1((edificacion as any)?.destino_otros_detalle ?? '', 460, 859, 7)
       }
 
       // Rubro 1 — Características: 13 categorías × 5 incisos (a-e). Límites de fila/columna
@@ -1790,6 +1829,33 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
     const { data: docInsertado } = await db.from('documentos_generados').insert({
       expediente_id: expedienteId,
       tipo_documento: 'expediente_completo',
+      storage_path: uploadError ? null : storagePath,
+      estado: uploadError ? 'error_storage' : 'generado',
+      generado_at: new Date().toISOString(),
+    }).select('id, tipo_documento, storage_path, estado, generado_at').single()
+
+    if (docInsertado) documentosCreados.push(docInsertado as any)
+  } else if (esBundleDDJJ) {
+    // "Declaraciones Juradas": junta el/los formulario/s DDJJ del expediente en un solo PDF,
+    // sin páginas divisorias ni membrete NICA — son el/los formulario/s oficial/es de Catastro
+    // tal cual, ya se explican solos (mismo criterio que ya usa esDDJJ más arriba: "no aplica
+    // a las DDJJ, son el PDF oficial de Catastro tal cual, sin nada de NICA encima").
+    const bundleDoc = await PDFDocument.create()
+    for (const { pdfBytes } of documentosParaSubir) {
+      const docCargado = await PDFDocument.load(pdfBytes)
+      const paginasCopiadas = await bundleDoc.copyPages(docCargado, docCargado.getPageIndices())
+      paginasCopiadas.forEach(p => bundleDoc.addPage(p))
+    }
+
+    const bundleBytes = await bundleDoc.save()
+    const storagePath = `${expedienteId}/declaraciones_juradas_${Date.now()}.pdf`
+    const { error: uploadError } = await db.storage
+      .from('documentos')
+      .upload(storagePath, bundleBytes, { contentType: 'application/pdf', upsert: true })
+
+    const { data: docInsertado } = await db.from('documentos_generados').insert({
+      expediente_id: expedienteId,
+      tipo_documento: 'declaraciones_juradas',
       storage_path: uploadError ? null : storagePath,
       estado: uploadError ? 'error_storage' : 'generado',
       generado_at: new Date().toISOString(),

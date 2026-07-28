@@ -136,12 +136,82 @@ Sin `@astrojs/check`/`typescript` como dependencia del proyecto, no se pudo corr
 
 ### Pendiente
 
-1. **Formulario U — croquis con objetos tachados:** Franco pidió eliminarlos y dejar la caja en blanco. No es código — vive dentro del PDF base `public/pdf-templates/formulario_u.pdf`, mismo tipo de edición puntual que ya se hizo una vez para neutralizar las referencias en rojo (v0.9).
-2. **Formulario U — "SI"/"NO" cortados** en los casilleros de Agua Corriente/Cloacas: mismo caso, es la plantilla base, no el código.
-3. **Formulario E1 — posición de textos de Rubro 1/2:** sigue siendo el primer calibrado de v0.10, nunca confirmado contra un PDF real (quedó anotado como pendiente en esa sesión y no se retomó hasta ahora).
-4. **Declaraciones juradas por parcela** (replicar cuando hay más de una parcela cargada): Franco pidió dejarlo para el final, no se tocó.
-5. **Botones separados** de descarga (expediente sin DDJJ / todas las DDJJ juntas): mismo caso, para el final.
-6. **A verificar visualmente antes de dar por cerrado:** posición del campo Departamento en Formulario U, tamaño del rectángulo del dorso, y el tamaño del logo del membrete en el resto de los documentos (Franco sólo probó Carátula y el membrete suelto hasta el momento).
+1. ~~Formulario U — croquis con objetos tachados~~, ~~"SI"/"NO" cortados (Agua Corriente/Cloacas)~~ y ~~Departamento/Localidad amontonados~~ → **resueltos, ver v0.16 más abajo** (no hizo falta tocar la plantilla base, se pudo con la misma técnica de tapar+redibujar que ya se usaba en el resto del archivo).
+2. **Formulario U — plantilla con defectos que no se pudieron resolver bien por código:** "FOLIO" partido en "FOLI"/"O", y "NO" partido en "N"/"O" en el casillero de "Ausente del País" (Rubro 3). Ambos se probaron con la técnica de tapar+redibujar (que sí funcionó para Agua Corriente/Cloacas), pero en estos dos casos el resultado no quedó bien — Juan decidió dejarlos tal cual vienen de la plantilla y pedirle a Franco una plantilla nueva con esos casilleros puntuales corregidos de origen, ver detalle en v0.16.
+3. ~~Formulario E1 — posición de textos de Rubro 1/2~~ → **revisado, ver v0.17 más abajo.** El grid de Rubro 1 y Rubro 2 estaban bien; se encontró y corrigió un bug real en "Destino del Edificio".
+4. ~~Declaraciones juradas por parcela~~ → **resuelto para Formulario U, ver v0.18 más abajo.** SOR y E1 no se replican — no tienen ningún dato que varíe por parcela (avisar a Franco).
+5. ~~Botones separados de descarga~~ → **resuelto, ver v0.18 más abajo.**
+6. **A verificar visualmente antes de dar por cerrado:** tamaño del rectángulo del dorso de Formulario U y el tamaño del logo del membrete en el resto de los documentos (Franco sólo probó Carátula, el membrete suelto y Formulario U hasta el momento — falta Nota de Elevación, Actas, Memoria, Planillas, E1).
+
+---
+
+## 📋 Cambios de la sesión — 28 Julio 2026 (v0.16) — Formulario U: croquis, "SI"/"NO" cortados, Departamento/Localidad y FOLIO
+
+Cierre de todos los puntos de Formulario U que en v0.15 habían quedado marcados como "no es código, vive en la plantilla" o "coordenadas aproximadas, falta verificar". Se resolvieron sin tocar `formulario_u.pdf`, con la misma técnica de tapar con un rectángulo blanco y redibujar encima que ya usa el resto del archivo (ej. el párrafo de la declaración jurada en Rubro 4) — todo en la rama `formulario_u` de `generar.ts`. Repartido en dos partes: la primera (croquis + SI/NO) se hizo anoche desde otra máquina (commit `e4d5d0c "terminar de corregir U"`), la segunda (Departamento/Localidad + FOLIO) hoy, retomando con Juan tras el pull.
+
+**Croquis de la Parcela (Rubro 2):** la plantilla traía 4 marcas de esquina (trazos gruesos en L, tipo "marca de recorte") alrededor del recuadro en blanco. Se cubrieron con 4 rectángulos blancos, medidos contra la plantilla real para no tocar el borde fino del recuadro.
+
+**"SI"/"NO" partidos en dos renglones (Agua Corriente, Cloacas, Ausente del País x2 filas):** la columna angosta exportada desde Google Sheets partía la palabra en dos líneas ("S" arriba / "I" abajo, ídem "N"/"O"). Se tapa cada etiqueta partida con un rectángulo angosto y se reescribe en una sola línea (5.5-6pt). Un primer intento tapaba de más y se comía el borde punteado del casillero; se corrigió midiendo los bordes reales pixel a pixel. El "SI" de Cloacas no estaba partido en la plantilla original y se dejó tal cual.
+
+**Departamento/Localidad amontonados:** Franco marcó que el texto "no quedaba acorde al renglón al que pertenece" — con captura de un caso real se vio que ambos valores aparecían pegoteados arriba, sin usar los dos renglones reales de la plantilla. Causa: las coordenadas de v0.15 fueron una estimación ("11pt arriba de Localidad") nunca confirmada — el renglón real de Departamento está en y≈845 (termina en x≈460) y el de Localidad en y≈820 (termina en x≈615, con 3 casilleros al lado), no separados por 11pt sino por 25. Se recalibraron dibujando una grilla de referencia sobre una copia de la plantilla real y comparando visualmente contra los renglones (mismo método que ya usaron sesiones anteriores para SOR/E1) — confirmado con un PDF de prueba aparte antes de tocar el archivo real.
+
+**FOLIO partido en "FOLI"/"O":** se armó un fix (tapar + reescribir en una línea, igual que el resto), pero Juan pidió revertirlo — a diferencia de los SI/NO, éste no está priorizado para corregir y se prefiere dejarlo tal cual viene en la plantilla. Revertido, sin cambios en el archivo final.
+
+**"NO" de "Ausente del País" seguía partido tras el pull:** Juan mandó una captura real donde el "NO" seguía viéndose "N" arriba / "O" abajo pese al fix de anoche. Un primer merge de prueba standalone (mismo código del commit de anoche, `pdf-lib`, fuera del servidor) no reproducía el problema a la escala de zoom usada — pero repitiendo la prueba con una grilla mucho más fina (2pt) y a mayor zoom se encontró la causa real: el rectángulo de anoche (8.5×11.7pt) tapaba la "N" pero se quedaba corto para la "O", que cae más abajo de lo que parecía a la escala de calibración anterior. Recalibrado en varias pasadas visuales (una versión intermedia se pasó para el otro lado y tapaba parte del renglón divisorio de "Ausente del País") hasta dar con un rectángulo (14×23pt) que cubre "N" y "O" completos sin tocar el renglón divisorio de arriba ni el borde negro exterior del casillero.
+
+**Segunda vuelta — "NO" desalineado de "SI" entre las dos filas:** con el rectángulo ya corregido, Juan reportó asimetría entre las dos filas de comitentes en el mismo casillero. Causa: "SI" es texto original de la plantilla (nunca se tocó) mientras que "NO" es el texto que se redibuja — el primer redibujado usaba una altura propia (y-37) en vez de la línea de base real donde cae "SI", así que no quedaban a la misma altura, y al no ser la misma diferencia en las dos filas se notaba como asimetría. Solución: alinear "NO" a la misma línea de base que ya usa la marca X de ese casillero (y-31, coordenada preexistente ya calibrada correctamente contra "SI") en vez de una altura inventada — mismo criterio que ya usan Agua Corriente/Cloacas (ahí "SI" y "NO" comparten línea de base porque las dos se redibujan a mano al mismo y).
+
+**Tercera vuelta — dos problemas más, con capturas nuevas de Juan:**
+- La marca X (que sí depende del dato, `ec.ausente_pais`) quedaba a la misma altura que el "NO" recién alineado (y-31 los dos) — antes se notaba menos porque el texto estaba descolocado, pero ahora la X caía justo encima de la "N", amontonado. Se bajó la X a y-37.5 (6.5pt por debajo del texto), mismo desfasaje que ya usan Agua Corriente/Cloacas entre su X y su "SI"/"NO".
+- La fila b) (segundo comitente) seguía mostrando el defecto original de la plantilla sin arreglar — el fix de tapar+redibujar "NO" estaba adentro del `forEach` de comitentes cargados, así que si el expediente de prueba sólo tenía un comitente, la fila b) nunca se tocaba. Se sacó del forEach a un loop propio sobre las dos posiciones fijas (`filasY`), igual que Agua Corriente/Cloacas.
+
+**Revertido — Juan decidió dejarlo como estaba en la plantilla:** después de esta tercera vuelta el resultado seguía sin convencer. A diferencia de Agua Corriente/Cloacas (que sí funcionaron bien con la técnica de tapar+redibujar), el casillero de "Ausente del País" resultó más frágil — parece que el margen real alrededor de "N"/"O" en la plantilla es más angosto, y cada intento de arreglarlo terminaba generando un problema nuevo (tapaba de más, quedaba desalineado de "SI", chocaba con la X). Juan prefirió cortar por lo sano: se revirtió todo (el rectángulo, el redibujado, y el offset de la X vuelve a y-31 como estaba antes de tocar nada) y va a pedirle a Franco una plantilla con ese casillero puntual ya corregido de origen, en vez de seguir iterando con parches de código. Queda igual que "FOLIO": defecto conocido de la plantilla, no priorizado para arreglar por código.
+
+**Verificado:** `astro build` sin errores después de cada tanda (mismo criterio que v0.15 — sin `@astrojs/check` instalado no se corrió typecheck completo).
+
+---
+
+## 📋 Cambios de la sesión — 28 Julio 2026 (v0.17) — Formulario E1: revisión de Rubro 1/2
+
+Retomando el pendiente marcado desde v0.10 ("el calibrado de E1 quedó en su primera pasada... puede necesitar un corrimiento fino"). Se armó un merge de prueba standalone (`pdf-lib`, contra la plantilla real `formulario_e1.pdf`, fuera del servidor) con una grilla de referencia dibujada encima — mismo método ya usado para Formulario U — para verificar cada bloque de coordenadas con datos de ejemplo antes de dar el pendiente por cerrado.
+
+**Rubro 1 (grilla de 13 categorías × 5 incisos) y Rubro 2 (12 renglones de datos numéricos):** se probaron con una diagonal de valores de ejemplo cubriendo las 13 filas y las 5 columnas — las cruces quedaron bien contenidas dentro de cada casillero, sin invadir el texto ni las filas vecinas. Ya estaban bien calibrados de antes (quedan igual, no se tocó nada acá).
+
+**Destino del Edificio — bug real encontrado y corregido:** las coordenadas Y de las 9 opciones (`DESTINO_XY`) estaban espaciadas 19pt entre sí (889, 870, 851, 832...), pero la plantilla real tiene los renglones a 10pt de distancia — cada casillero después del primero terminaba marcando la fila siguiente a la que correspondía (ej. tildar "Negocios" en realidad marcaba el casillero de "Sala de Espectáculos Públicos"). Sólo las dos primeras opciones de cada columna (`casa_familia` y `asociaciones`, en y=889) daban bien, porque coinciden con las X que la plantilla ya trae pre-marcadas de fábrica — el resto nunca se había confirmado contra un render real. Recalibrado a 10pt de espaciado real, confirmado con grilla fina superpuesta sobre la plantilla para las 9 opciones (5 de la columna izquierda + 4 de la derecha). De paso se corrigió la posición del campo de texto libre "Otros Destinos (Indique):" (`destino_otros_detalle`), que dependía de la posición vieja de esa fila.
+
+**Encabezado (Departamento/Localidad/Apellido):** se verificaron los tres contra la plantilla real, caen bien apoyados en su renglón correspondiente — sin cambios.
+
+**Verificado:** `astro build` sin errores.
+
+---
+
+## 📋 Cambios de la sesión — 28 Julio 2026 (v0.18) — Botones de descarga separados + declaraciones juradas por parcela
+
+Últimos dos pendientes que Franco había dejado para el final (WhatsApp, 24/07): separar la descarga de las DDJJ del expediente completo, y replicar las declaraciones juradas cuando hay más de una parcela cargada. Se hizo en dos pasos independientes, cada uno verificado antes de pasar al siguiente — el primero de bajo riesgo (sólo arma listas distintas de qué incluir en cada bundle), el segundo tocando el código de Formulario U recién calibrado hoy mismo (v0.16), así que se armó con una técnica que garantiza que el caso de un solo polígono (el más común) queda exactamente igual a como estaba.
+
+### Paso 1 — Botón "Generar declaraciones juradas" aparte
+
+Franco: *"deberíamos descargar el expte completo (sin las declaraciones juradas) y por otro un botón de todas las declaraciones juradas juntas, así no se hace un archivo tan grande en casos de muchas parcelas"*.
+
+- Nuevo marcador de bundle `declaraciones_juradas_completo` (mismo mecanismo que ya usaba `expediente_completo`: el cliente sólo manda el marcador, el servidor arma su propia lista fija).
+- "Generar expediente completo" ya **no incluye** Formulario U/SOR/E1 — sólo los 8 documentos base.
+- El nuevo bundle junta el/los formulario/s DDJJ que correspondan (U o SOR + E1 si hay edificación cargada) en un solo PDF, **sin páginas divisorias** — son 1-2 formularios oficiales de Catastro que ya se bastan solos, mismo criterio que ya estaba comentado en el archivo sobre las DDJJ ("no aplica nada de NICA encima").
+- Nueva fila en `documentos_generados` con `tipo_documento: 'declaraciones_juradas'` — se lista sola en la tabla existente, sin tocarla (ya formatea cualquier tipo con `.replace(/_/g,' ')`).
+- Nuevo botón "Generar declaraciones juradas (PDF único)" en Tab Documentos, mismo patrón visual que el de expediente completo (form oculto + `form="..."` en el botón). El handler de submit de ambos botones se unificó en una función (`armarHandlerBundle`) para no duplicar el código de validación/fetch/inserción de fila.
+
+### Paso 2 — Formulario U replicado por parcela
+
+Franco: *"las declaraciones juradas se generan por parcela cargada... hay que replicar las declaraciones por la cantidad de parcelas generadas"*.
+
+**Técnica:** todo el código de dibujo de Formulario U (sin cambiar una sola línea de las coordenadas/lógica calibradas hoy) se movió adentro de una función local `dibujarFormularioU(pdfDoc, page, font, bold, poligono)`. Con un solo polígono cargado (el caso común) se llama una sola vez, igual que antes — **comportamiento idéntico, verificado con un merge de prueba standalone contra la plantilla real**. Con más de un polígono, por cada uno extra se carga una copia nueva de la plantilla, se llama a la misma función con la superficie de ESE polígono, y sus páginas se pegan al final del documento con `copyPages()` (misma técnica que ya usa el armado de "expediente completo"). Probado con 3 polígonos simulados (superficies 304.48, 224.23 y 150 m²): salieron 6 páginas (2 por parcela — página de datos + página de declaración jurada), cada una con su propia superficie y sin contenido cruzado entre copias.
+
+**Formulario SOR — decisión de NO replicarlo:** revisando la plantilla real de Catastro (`formulario_sor.pdf`) se confirmó que el SOR **no tiene ningún campo de "Superficie del Terreno"** — a diferencia de Formulario U, que sí lo tiene (Inc. e). El contenido del SOR (designación según títulos/catastro/registro, datos de propietarios, receptoría) no varía por parcela en absoluto. Replicarlo hubiera generado N copias exactamente idénticas, sin ningún valor agregado. **Se decidió con Juan dejar SOR generándose una sola vez, como siempre** — si Franco confirma después que necesita algo específico por parcela en el SOR, es un agregado chico sobre esta misma base (mismo mecanismo que Formulario U). **Importante para la próxima charla con Franco: avisarle de este detalle.**
+
+Formulario E1 tampoco se replica (ver v0.15/v0.16: `edificacion` es 1:1 con el expediente, no con cada polígono — mismo motivo que SOR).
+
+**Verificado:** `astro build` sin errores después de cada paso; merge de prueba standalone (`pdf-lib`, fuera del servidor) confirmando 6 páginas correctas para 3 polígonos antes de dar el paso 2 por cerrado.
+
+**Sin cambios de base de datos** — todo lo necesario (`poligonos`, `edificacion`, tabla `documentos_generados` genérica) ya existía.
 
 ---
 
