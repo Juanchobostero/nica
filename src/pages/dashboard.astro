@@ -4,8 +4,25 @@ import { supabase, getSupabase } from '../lib/supabase'
 
 const token = Astro.cookies.get('sb-access-token')?.value ?? ''
 const { data: { user } } = await supabase.auth.getUser(token)
-const uid = user?.id ?? ''
+// Token vencido -> user:null sin error; sin este chequeo la página quedaba "vacía" en vez de
+// mandar a loguearse de nuevo (ver perfil.astro para el detalle del bug).
+if (!user) return Astro.redirect('/login')
+const uid = user.id
 const db = getSupabase(token)
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  if (form.get('_action') === 'actualizar_datos_dgc') {
+    // Nº Expediente y Área de Catastro se cargan acá (no en Tab Mensura del expediente) porque
+    // al iniciar la mensura todavía no existe el expediente ante la Dirección de Catastro —
+    // Franco los completa después, cuando la Dirección se lo asigna.
+    const expId = form.get('expediente_id') as string
+    await db.from('expedientes').update({
+      numero_expediente: form.get('numero_expediente') || null,
+      area_catastro: form.get('area_catastro') || null,
+    }).eq('id', expId).eq('user_id', uid)
+  }
+}
 
 const [{ count: total }, { count: enProceso }, { count: finalizado }, { count: docs }] = await Promise.all([
   db.from('expedientes').select('*', { count: 'exact', head: true }).eq('user_id', uid),
@@ -16,7 +33,7 @@ const [{ count: total }, { count: enProceso }, { count: finalizado }, { count: d
 
 const { data: ultimos } = await db
   .from('expedientes')
-  .select('id, numero_expediente, tipo_mensura, estado, fecha_inicio')
+  .select('id, numero_expediente, tipo_mensura, estado, fecha_inicio, area_catastro')
   .eq('user_id', uid)
   .order('created_at', { ascending: false })
   .limit(5)
@@ -51,6 +68,7 @@ const { data: ultimos } = await db
         <thead>
           <tr>
             <th>Nº Expediente</th>
+            <th>Área de Catastro</th>
             <th>Tipo</th>
             <th>Estado</th>
             <th>Fecha</th>
@@ -59,22 +77,77 @@ const { data: ultimos } = await db
         </thead>
         <tbody>
           {(ultimos ?? []).length === 0 && (
-            <tr><td colspan="5" style="text-align:center;color:var(--color-text-secondary);padding:2rem">No hay expedientes aún</td></tr>
+            <tr><td colspan="6" style="text-align:center;color:var(--color-text-secondary);padding:2rem">No hay expedientes aún</td></tr>
           )}
           {(ultimos ?? []).map(exp => (
             <tr>
               <td><strong>{exp.numero_expediente ?? '—'}</strong></td>
+              <td>{(exp as any).area_catastro ?? '—'}</td>
               <td>{exp.tipo_mensura ?? '—'}</td>
               <td><span class={`badge badge-${exp.estado}`}>{exp.estado}</span></td>
               <td>{exp.fecha_inicio ? new Date(exp.fecha_inicio).toLocaleDateString('es-AR') : '—'}</td>
-              <td><a href={`/expedientes/${exp.id}`} class="btn btn-secondary btn-sm">Ver</a></td>
+              <td style="display:flex;gap:0.5rem">
+                <a href={`/expedientes/${exp.id}`} class="btn btn-secondary btn-sm">Ver</a>
+                <button type="button" class="btn btn-secondary btn-sm btn-editar-dgc-trigger"
+                  data-id={exp.id}
+                  data-numero={exp.numero_expediente ?? ''}
+                  data-area={(exp as any).area_catastro ?? ''}>
+                  Nº Exp. / Catastro
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
   </div>
+
+  <div id="modal-overlay-dgc" class="modal-overlay" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-dgc-title">
+      <h3 id="modal-dgc-title">Nº Expediente / Área de Catastro</h3>
+      <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:0.75rem">
+        Se cargan acá porque al iniciar la mensura todavía no existen ante la Dirección de Catastro.
+      </p>
+      <form method="POST" id="form-editar-dgc">
+        <input type="hidden" name="_action" value="actualizar_datos_dgc" />
+        <input type="hidden" name="expediente_id" id="dgc_expediente_id" />
+        <div class="field">
+          <label>Nº Expediente</label>
+          <input class="input" name="numero_expediente" id="dgc_numero_expediente" />
+        </div>
+        <div class="field">
+          <label>Área de Catastro</label>
+          <input class="input" name="area_catastro" id="dgc_area_catastro" placeholder="Ej: Dirección General de Catastro - Mesa de entradas" />
+        </div>
+        <div class="modal-actions" style="margin-top:1rem">
+          <button type="button" class="btn btn-secondary" id="modal-dgc-cancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
 </AppLayout>
+
+<script>
+  const overlayDgc = document.getElementById('modal-overlay-dgc')
+  const btnDgcCancel = document.getElementById('modal-dgc-cancel')
+  const inputId = document.getElementById('dgc_expediente_id')
+  const inputNumero = document.getElementById('dgc_numero_expediente')
+  const inputArea = document.getElementById('dgc_area_catastro')
+
+  document.querySelectorAll('.btn-editar-dgc-trigger').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      inputId.value = btn.dataset.id || ''
+      inputNumero.value = btn.dataset.numero || ''
+      inputArea.value = btn.dataset.area || ''
+      overlayDgc.hidden = false
+    })
+  })
+  function cerrarModalDgc() { overlayDgc.hidden = true }
+  if (btnDgcCancel) btnDgcCancel.addEventListener('click', cerrarModalDgc)
+  overlayDgc.addEventListener('click', function(e) { if (e.target === overlayDgc) cerrarModalDgc() })
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !overlayDgc.hidden) cerrarModalDgc() })
+</script>
 
 <style>
 .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
@@ -85,4 +158,21 @@ const { data: ultimos } = await db
 .stat-card { text-align:center; }
 .stat-value { display:block; font-family:var(--font-display); font-size:2.25rem; font-weight:700; }
 .stat-label { font-size:0.8125rem; color:var(--color-text-secondary); }
+
+.modal-overlay {
+  position:fixed; inset:0; background:rgba(15,23,42,0.5);
+  display:flex; align-items:center; justify-content:center; z-index:1000;
+  animation:modal-fade-in 0.15s ease-out;
+}
+.modal-overlay[hidden] { display:none; }
+.modal-card {
+  background:var(--color-surface); border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-md); padding:1.5rem; width:100%; max-width:400px;
+  margin:1rem; animation:modal-pop-in 0.15s ease-out;
+}
+.modal-card h3 { font-size:1.05rem; font-weight:700; color:var(--color-text); margin-bottom:0.4rem; }
+.modal-actions { display:flex; justify-content:flex-end; gap:0.6rem; }
+
+@keyframes modal-fade-in { from { opacity:0; } to { opacity:1; } }
+@keyframes modal-pop-in { from { opacity:0; transform:scale(0.96) translateY(4px); } to { opacity:1; transform:scale(1) translateY(0); } }
 </style>

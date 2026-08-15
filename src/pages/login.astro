@@ -24,7 +24,7 @@ if (Astro.request.method === 'POST') {
 <AuthLayout title="Ingresar">
   <div class="login-card">
     <div class="login-logo">
-      <span class="logo-icon">⊙</span>
+      <img src="/images/nica-logo-icono.png" alt="NICA" class="logo-icon" />
       <h1>NICA</h1>
       <p>Sistema de Gestión de Mensuras</p>
     </div>
@@ -65,9 +65,12 @@ if (Astro.request.method === 'POST') {
   text-align: center;
 }
 .logo-icon {
-  font-size: 2.5rem;
-  color: var(--color-primary);
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  object-fit: cover;
   display: block;
+  margin: 0 auto;
 }
 .login-logo h1 {
   font-family: var(--font-display);

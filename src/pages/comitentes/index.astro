@@ -4,15 +4,52 @@ import { supabase, getSupabase } from '../../lib/supabase'
 
 const token = Astro.cookies.get('sb-access-token')?.value ?? ''
 const { data: { user } } = await supabase.auth.getUser(token)
-const uid = user?.id ?? ''
+// Token vencido -> user:null sin error; sin este chequeo la página quedaba "vacía" en vez de
+// mandar a loguearse de nuevo (ver perfil.astro para el detalle del bug).
+if (!user) return Astro.redirect('/login')
+const uid = user.id
 const db = getSupabase(token)
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  const action = form.get('_action')
+
+  if (action === 'eliminar_comitente') {
+    // Soft delete (igual que expedientes): un comitente puede estar vinculado a expedientes ya
+    // cerrados vía exp_comitentes (con on delete cascade) — borrarlo de verdad rompería esos
+    // vínculos históricos sin que el usuario lo note. Se oculta de la lista, no se pierde.
+    const comId = form.get('comitente_id') as string
+    await db.from('comitentes')
+      .update({ eliminado_at: new Date().toISOString() })
+      .eq('id', comId).eq('user_id', uid)
+  }
+
+  if (action === 'editar_comitente') {
+    const comId = form.get('comitente_id') as string
+    await db.from('comitentes').update({
+      nombre: form.get('nombre') || null,
+      apellido: form.get('apellido') || null,
+      dni: form.get('dni') || null,
+      telefono: form.get('telefono') || null,
+      email: form.get('email') || null,
+      domicilio: form.get('domicilio') || null,
+      tipo_documento: form.get('tipo_documento') || 'DNI',
+      nacionalidad: form.get('nacionalidad') || null,
+      domicilio_calle: form.get('domicilio_calle') || null,
+      domicilio_numero: form.get('domicilio_numero') || null,
+      domicilio_localidad: form.get('domicilio_localidad') || null,
+      domicilio_provincia: form.get('domicilio_provincia') || null,
+    }).eq('id', comId).eq('user_id', uid)
+  }
+}
 
 const busqueda = Astro.url.searchParams.get('q') ?? ''
 
 let query = db
   .from('comitentes')
-  .select('id, nombre, apellido, dni, telefono, email')
+  .select('id, nombre, apellido, dni, telefono, email, domicilio, tipo_documento, nacionalidad, domicilio_calle, domicilio_numero, domicilio_localidad, domicilio_provincia')
   .eq('user_id', uid)
+  .is('eliminado_at', null)
   .order('apellido')
 
 if (busqueda) {
@@ -49,12 +86,13 @@ const { data: comitentes } = await query
             <th>DNI</th>
             <th>Teléfono</th>
             <th>Email</th>
+            <th>Acciones</th>
           </tr>
         </thead>
         <tbody>
           {(comitentes ?? []).length === 0 && (
             <tr>
-              <td colspan="4" style="text-align:center;color:var(--color-text-secondary);padding:2rem">
+              <td colspan="5" style="text-align:center;color:var(--color-text-secondary);padding:2rem">
                 {busqueda ? 'Sin resultados para la búsqueda.' : 'No hay comitentes registrados aún.'}
               </td>
             </tr>
@@ -65,16 +103,191 @@ const { data: comitentes } = await query
               <td>{c.dni ?? '—'}</td>
               <td>{c.telefono ?? '—'}</td>
               <td>{c.email ?? '—'}</td>
+              <td style="display:flex;gap:0.5rem">
+                <button type="button" class="btn btn-secondary btn-sm btn-editar-trigger"
+                  data-id={c.id}
+                  data-nombre={c.nombre ?? ''}
+                  data-apellido={c.apellido ?? ''}
+                  data-dni={c.dni ?? ''}
+                  data-telefono={c.telefono ?? ''}
+                  data-email={c.email ?? ''}
+                  data-domicilio={c.domicilio ?? ''}
+                  data-tipo_documento={c.tipo_documento ?? 'DNI'}
+                  data-nacionalidad={c.nacionalidad ?? ''}
+                  data-domicilio_calle={c.domicilio_calle ?? ''}
+                  data-domicilio_numero={c.domicilio_numero ?? ''}
+                  data-domicilio_localidad={c.domicilio_localidad ?? ''}
+                  data-domicilio_provincia={c.domicilio_provincia ?? ''}>
+                  Editar
+                </button>
+                <form method="POST" class="form-eliminar-comitente" style="display:inline"
+                  data-nombre={`${c.apellido}, ${c.nombre}`}
+                  data-dni={c.dni || '—'}>
+                  <input type="hidden" name="_action" value="eliminar_comitente" />
+                  <input type="hidden" name="comitente_id" value={c.id} />
+                  <button type="button" class="btn btn-danger btn-sm btn-eliminar-trigger">Eliminar</button>
+                </form>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
   </div>
+
+  <!-- Modal de edición -->
+  <div id="modal-overlay-editar" class="modal-overlay" hidden>
+    <div class="modal-card modal-card-editar" role="dialog" aria-modal="true" aria-labelledby="modal-editar-title">
+      <h3 id="modal-editar-title">Editar comitente</h3>
+      <form method="POST" id="form-editar-comitente">
+        <input type="hidden" name="_action" value="editar_comitente" />
+        <input type="hidden" name="comitente_id" id="edit_comitente_id" />
+        <div class="form-grid form-grid-2">
+          <div class="field"><label>Nombre</label><input class="input" name="nombre" id="edit_nombre" required /></div>
+          <div class="field"><label>Apellido</label><input class="input" name="apellido" id="edit_apellido" required /></div>
+          <div class="field">
+            <label>Tipo de documento</label>
+            <select class="input" name="tipo_documento" id="edit_tipo_documento">
+              <option value="DNI">DNI</option>
+              <option value="LC">LC</option>
+              <option value="LE">LE</option>
+            </select>
+          </div>
+          <div class="field"><label>DNI</label><input class="input" name="dni" id="edit_dni" /></div>
+          <div class="field"><label>Teléfono</label><input class="input" name="telefono" id="edit_telefono" /></div>
+          <div class="field"><label>Email</label><input class="input" name="email" type="email" id="edit_email" /></div>
+          <div class="field"><label>Nacionalidad</label><input class="input" name="nacionalidad" id="edit_nacionalidad" /></div>
+          <div class="field"><label>Domicilio (general)</label><input class="input" name="domicilio" id="edit_domicilio" /></div>
+          <div class="field"><label>Domicilio — Calle</label><input class="input" name="domicilio_calle" id="edit_domicilio_calle" /></div>
+          <div class="field"><label>Domicilio — Número</label><input class="input" name="domicilio_numero" id="edit_domicilio_numero" /></div>
+          <div class="field"><label>Domicilio — Localidad</label><input class="input" name="domicilio_localidad" id="edit_domicilio_localidad" /></div>
+          <div class="field"><label>Domicilio — Provincia</label><input class="input" name="domicilio_provincia" id="edit_domicilio_provincia" /></div>
+        </div>
+        <div class="modal-actions" style="margin-top:1rem">
+          <button type="button" class="btn btn-secondary" id="modal-editar-cancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Guardar cambios</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal de confirmación de borrado -->
+  <div id="modal-overlay" class="modal-overlay" hidden>
+    <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+          <line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" />
+        </svg>
+      </div>
+      <h3 id="modal-title">Eliminar comitente</h3>
+      <p id="modal-desc">Esta acción ocultará el siguiente comitente de la lista:</p>
+      <div class="modal-info">
+        <div class="modal-info-row"><span>Nombre</span><strong id="modal-nombre"></strong></div>
+        <div class="modal-info-row"><span>DNI</span><strong id="modal-dni"></strong></div>
+      </div>
+      <p class="modal-note">
+        No se borra de forma permanente: queda oculto de la lista (y sigue intacto en los expedientes donde ya estaba vinculado). Se puede recuperar luego desde la base de datos si fue un error.
+      </p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="modal-cancel">Cancelar</button>
+        <button type="button" class="btn btn-danger" id="modal-confirm">Eliminar</button>
+      </div>
+    </div>
+  </div>
 </AppLayout>
+
+<script>
+  // ── Modal de edición ──────────────────────────────────────────────
+  const overlayEditar = document.getElementById('modal-overlay-editar')
+  const btnEditarCancel = document.getElementById('modal-editar-cancel')
+  const camposEdit = ['id', 'nombre', 'apellido', 'dni', 'telefono', 'email', 'domicilio', 'tipo_documento', 'nacionalidad', 'domicilio_calle', 'domicilio_numero', 'domicilio_localidad', 'domicilio_provincia']
+
+  document.querySelectorAll('.btn-editar-trigger').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      camposEdit.forEach(function(campo) {
+        const elId = campo === 'id' ? 'edit_comitente_id' : 'edit_' + campo
+        const el = document.getElementById(elId)
+        if (el) el.value = btn.dataset[campo] || ''
+      })
+      overlayEditar.hidden = false
+    })
+  })
+  function cerrarModalEditar() { overlayEditar.hidden = true }
+  if (btnEditarCancel) btnEditarCancel.addEventListener('click', cerrarModalEditar)
+  overlayEditar.addEventListener('click', function(e) { if (e.target === overlayEditar) cerrarModalEditar() })
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !overlayEditar.hidden) cerrarModalEditar() })
+
+  // ── Modal de confirmación de borrado ─────────────────────────────
+  const overlay      = document.getElementById('modal-overlay')
+  const elNombre      = document.getElementById('modal-nombre')
+  const elDni          = document.getElementById('modal-dni')
+  const btnCancel    = document.getElementById('modal-cancel')
+  const btnConfirm   = document.getElementById('modal-confirm')
+  let formPendiente = null
+
+  function abrirModal(form) {
+    formPendiente = form
+    elNombre.textContent = form.dataset.nombre || '—'
+    elDni.textContent    = form.dataset.dni || '—'
+    overlay.hidden = false
+  }
+  function cerrarModal() {
+    overlay.hidden = true
+    formPendiente = null
+  }
+
+  document.querySelectorAll('.btn-eliminar-trigger').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      abrirModal(btn.closest('.form-eliminar-comitente'))
+    })
+  })
+
+  btnCancel.addEventListener('click', cerrarModal)
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) cerrarModal() })
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !overlay.hidden) cerrarModal() })
+
+  btnConfirm.addEventListener('click', function() {
+    if (formPendiente) formPendiente.submit()
+  })
+</script>
 
 <style>
 .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
 .page-header h2 { font-size:1.5rem; }
 .filters { display:flex; gap:0.75rem; align-items:center; }
+
+.modal-overlay {
+  position:fixed; inset:0; background:rgba(15,23,42,0.5);
+  display:flex; align-items:center; justify-content:center; z-index:1000;
+  animation:modal-fade-in 0.15s ease-out;
+}
+.modal-overlay[hidden] { display:none; }
+.modal-info { border:1px solid var(--color-border); border-radius:var(--radius-sm); margin-bottom:1rem; overflow:hidden; }
+.modal-info-row { display:flex; justify-content:space-between; gap:0.75rem; padding:0.45rem 0.75rem; font-size:0.85rem; }
+.modal-info-row:not(:last-child) { border-bottom:1px solid var(--color-border); }
+.modal-info-row span { color:var(--color-text-secondary); }
+.modal-info-row strong { color:var(--color-text); font-weight:600; text-align:right; }
+.modal-card {
+  background:var(--color-surface); border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-md); padding:1.5rem; width:100%; max-width:400px;
+  margin:1rem; animation:modal-pop-in 0.15s ease-out;
+}
+.modal-card-editar { max-width:640px; max-height:88vh; overflow-y:auto; }
+.modal-icon {
+  width:40px; height:40px; border-radius:50%;
+  background:#FEF2F2; color:var(--color-danger);
+  display:flex; align-items:center; justify-content:center; margin-bottom:0.875rem;
+}
+.modal-card h3 { font-size:1.05rem; font-weight:700; color:var(--color-text); margin-bottom:0.4rem; }
+.modal-card p#modal-desc { font-size:0.9rem; color:var(--color-text-secondary); margin-bottom:0.75rem; }
+.modal-note {
+  font-size:0.8rem; color:var(--color-text-secondary); background:var(--color-bg);
+  border-radius:var(--radius-sm); padding:0.6rem 0.75rem; margin-bottom:1.25rem;
+}
+.modal-actions { display:flex; justify-content:flex-end; gap:0.6rem; }
+
+@keyframes modal-fade-in { from { opacity:0; } to { opacity:1; } }
+@keyframes modal-pop-in { from { opacity:0; transform:scale(0.96) translateY(4px); } to { opacity:1; transform:scale(1) translateY(0); } }
 </style>

@@ -4,7 +4,12 @@ import { supabase, getSupabase } from '../lib/supabase'
 
 const token = Astro.cookies.get('sb-access-token')?.value ?? ''
 const { data: { user } } = await supabase.auth.getUser(token)
-const uid = user?.id ?? ''
+// Con el token vencido, getUser() devuelve user:null sin tirar error — antes esto seguía de
+// largo con uid='', y la página renderizaba "bien" pero vacía (síntoma reportado: "guardo y
+// queda en blanco, tengo que reloguearme"). Ahora se manda directo a /login en vez de mostrar
+// una página vacía sin explicación.
+if (!user) return Astro.redirect('/login')
+const uid = user.id
 const db = getSupabase(token)
 
 let successMsg = ''

@@ -78,6 +78,93 @@
 
 ---
 
+## 📋 Cambios de la sesión — 13 Agosto 2026 (v0.16-v0.17) — Roadmap grande de Franco: Fase 1 y Fase 2
+
+Franco mandó una tanda de 14 pedidos juntos (bugs + mejoras + un rediseño visual grande). Se armó un roadmap de 5 fases con el usuario (guardado como plan de esta sesión) y se ejecutan una por una, probando cada una antes de seguir con la próxima.
+
+### Fase 1 (v0.16) — Bugs y formato de PDFs
+Todos en `src/pages/api/documentos/generar.ts` (y dos ajustes chicos en `[id].astro`). **Probada por Franco vía capturas — confirmado que el formato de superficie, la Planilla y demás salen bien.**
+
+### Fase 2 (v0.17) — Datos: rol "Intendente", limpieza de E1 huérfano
+
+**Rol "Intendente"**: agregado a los tipos de comitente. Cambios:
+- `supabase/schema.sql:116` — el `check` de la columna `rol` en `exp_comitentes` ahora incluye `'intendente'`. **Franco tiene que correr esto a mano en Supabase** (el `create table if not exists` no actualiza una tabla que ya existe):
+  ```sql
+  alter table exp_comitentes drop constraint if exists exp_comitentes_rol_check;
+  alter table exp_comitentes add constraint exp_comitentes_rol_check
+    check (rol in ('titular','apoderado','heredero','poseedor','intendente'));
+  ```
+- `<option value="intendente">Intendente</option>` agregado en los dos `<select>` de rol en `[id].astro` (agregar comitente existente y crear comitente nuevo).
+- Revisado `generar.ts` (donde se usa `rolComitente` para el texto de la firma en los PDFs, 3 lugares): ya imprime el rol de forma genérica, sin ningún `switch` limitado a los 4 roles viejos — no hizo falta tocar nada ahí, "Intendente" ya sale bien.
+
+**Formulario E1 — limpiar dato huérfano al marcar un lote como baldío**: antes, desmarcar "¿tiene construcciones?" en Tab DDJJ solo ocultaba el formulario en el cliente (`display:none`) — la fila `edificacion` ya guardada quedaba huérfana en la base y el Formulario E1 se seguía incluyendo en el expediente completo, aunque el lote ahora figurara como baldío. Se agregó:
+- Nueva acción server-side `eliminar_edificacion` (mismo patrón que `quitar_comitente`/`quitar_testigo`: `delete().eq('expediente_id', id)`).
+- Un botón nuevo "Eliminar datos de edificación" que aparece **solo** cuando ya había una fila `edificacion` guardada y el usuario destilda el checkbox (antes, en ese estado, no había ningún botón visible con el que guardar ese cambio — el formulario entero, botón incluido, se ocultaba).
+
+**Formulario U por polígono**: confirmado en el código que **ya está implementado** — `generar.ts` (función `dibujarFormularioU`, usada en un loop sobre `listaPoligonosDDJJ`) ya genera una copia completa del Formulario U por cada polígono cargado en el expediente, agregando cada una como páginas nuevas al PDF. No hizo falta programar el botón que había sugerido Franco. Pendiente: probarlo con un expediente real de 3+ polígonos y confirmárselo.
+
+### Verificado (Fase 2)
+`astro build` completo sin errores de tipo después de cada tanda (el único error de build sigue siendo el `EPERM` de symlinks de Windows al empaquetar para Vercel, no relacionado con el código). Falta probar en la app corriendo: alta de un comitente con rol Intendente y su reflejo en un documento generado, el flujo de tildar/destildar construcciones + eliminar datos, y el conteo de copias del Formulario U en un expediente con varios polígonos.
+
+### Fase 3 (v0.18) — Arreglo rápido del bug de sesión
+
+**Causa confirmada**: ninguna página verificaba que `supabase.auth.getUser(token)` hubiera devuelto un usuario válido — solo que las cookies existieran. Con el token vencido, `getUser()` devuelve `user: null` sin tirar error; `uid` quedaba en `''` y la página renderizaba "bien" pero vacía. En `expedientes/[id].astro` era peor: el lookup del expediente (`if (!exp) return redirect('/expedientes')`) fallaba con `uid=''` y mandaba a la lista de expedientes **antes** de llegar a la lógica de guardado del POST — el submit se perdía en silencio, sin ningún aviso. Cerrar sesión y volver a entrar era el único camino que renovaba el token, por eso "arreglaba" el síntoma.
+
+**Fix aplicado** (alcance acordado: detectar y redirigir a `/login`, sin refresh silencioso de token):
+- Agregado `if (!user) return Astro.redirect('/login')` justo después de `getUser()` en las 6 páginas que no lo tenían: `dashboard.astro`, `comitentes/index.astro`, `expedientes/index.astro`, `expedientes/nuevo.astro`, `expedientes/[id].astro` (la más importante, por el bug del guardado silencioso) y `perfil.astro`.
+- `src/pages/api/documentos/generar.ts`: ya tenía el chequeo (`if (!user) return redirect('/login')`), pero respondía con un redirect 302 incluso cuando la llamada era AJAX (el fetch del modal de generar documentos) — `fetch` sigue el redirect a `/login`, y el `.json()` sobre ese HTML fallaba, mostrando un alert genérico en vez de avisar que la sesión venció. Corregido para devolver `401` con `{ok:false, warn:'no_autenticado'}` cuando la llamada es AJAX (mismo patrón que `descargar.ts`/`upload-dni.ts`), y mantener el redirect normal para navegación directa.
+- `[id].astro`: los dos handlers de fetch que llaman a `generar.ts` (botón "Generar seleccionados" y el `armarHandlerBundle` compartido por "Generar expediente completo"/"Generar declaraciones juradas") ahora detectan `data.warn === 'no_autenticado'` y muestran un aviso claro ("Tu sesión venció...") + redirigen a `/login`, en vez de cualquiera de los mensajes de error genéricos.
+
+**Nota importante para probar**: con el fix, si el token vencido cachea en medio de estar cargando una pestaña, al guardar se manda a `/login` — el dato que se estaba por guardar **se pierde igual** (no hay refresh silencioso, eso quedó fuera del alcance de este arreglo), pero ahora queda claro qué pasó en vez de una pantalla en blanco sin explicación.
+
+### Verificado (Fase 3)
+Sintaxis (`esbuild`) y `astro build` completo sin errores de tipo. Falta probar en la app corriendo con un token realmente vencido (se puede simular editando la cookie `sb-access-token` a mano en las devtools) — confirmar que cada página manda a `/login` en vez de mostrarse vacía, y que el botón de generar documentos muestra el aviso de sesión vencida en vez de fallar en silencio.
+
+### Fase 4 (v0.19) — Mejoras funcionales
+
+**4.1 — Formulario E1 a botón/modal**: antes era un checkbox ("¿tiene construcciones?") al fondo de Tab DDJJ que mostraba/ocultaba con `display:none` un formulario largo (13 categorías × 5 incisos + Rubro 2) — fácil de no encontrar. Ahora es un botón ("Agregar datos de edificación" / "Editar datos de edificación ✓" si ya hay datos cargados) que abre un modal grande y con scroll propio (`.modal-card-e1`, mismo patrón que el modal de vista previa de PDF). El botón "Eliminar (lote baldío)" de la Fase 2 quedó al lado, con un `confirm()` de JS antes de mandar el POST. La acción de guardado (`guardar_ddjj_e1`) no se tocó — mismo formulario, mismos campos, solo cambió dónde vive en el DOM.
+
+**4.2 — Comitentes: editar y eliminar**: `src/pages/comitentes/index.astro` era una lista de solo lectura. Se agregó:
+- Columna "Acciones" con botones Editar y Eliminar por fila.
+- **Eliminar es soft-delete**: se agregó la columna `eliminado_at` a la tabla `comitentes` (`schema.sql`, **Franco tiene que agregarla a mano en Supabase**: `alter table comitentes add column if not exists eliminado_at timestamptz;`) — un comitente puede estar vinculado a expedientes ya cerrados vía `exp_comitentes` (con `on delete cascade`), así que un borrado de verdad rompería esos vínculos históricos sin que nadie lo note. El listado ahora filtra `.is('eliminado_at', null)`.
+- **Editar** abre un modal con todos los campos relevantes (nombre, apellido, tipo y nº de documento, teléfono, email, nacionalidad, domicilio completo) — reusa el patrón de modal de confirmación ya existente en `expedientes/index.astro`, adaptado a un formulario en vez de un mensaje.
+
+**4.3 — Logo circular real en el login**: `login.astro` usaba un carácter Unicode (⊙) como "logo". Reemplazado por `<img src="/images/nica-logo-icono.png">` (el mismo PNG circular que ya usa el membrete de los PDFs), con `border-radius:50%` y tamaño fijo (84px).
+
+**4.4 — Nº Expediente / Área de Catastro movidos al Dashboard**: sacados de Tab Mensura (donde no tenía sentido cargarlos al iniciar la mensura, cuando el expediente todavía no existe ante la Dirección de Catastro). Ahora se editan desde un botón "Nº Exp. / Catastro" en la tabla de "Últimos expedientes" del Dashboard, que abre un modal chico con los 2 campos (nueva acción `actualizar_datos_dgc`, primera vez que `dashboard.astro` maneja un POST). **Importante**: se sacaron ambos campos del `update` de `guardar_mensura` en `[id].astro` — si se hubieran dejado ahí sin los inputs correspondientes en el form, cada guardado de Tab Mensura los habría pisado con `null`. Limitación conocida: el Dashboard solo muestra los últimos 5 expedientes, así que uno más viejo no aparece ahí para editar sus datos DGC — no se pidió resolver esto, queda anotado por si hace falta más adelante (subir el límite o agregar el mismo botón en `expedientes/index.astro`).
+
+### Verificado (Fase 4)
+`astro build` completo sin errores de tipo. Falta probar en la app corriendo: abrir/guardar el modal de E1, editar y eliminar un comitente de prueba (y confirmar que sigue apareciendo en expedientes donde ya estaba vinculado), ver el logo nuevo en `/login`, y cargar Nº Expediente/Área de Catastro desde el Dashboard confirmando que se reflejan en el título del expediente y en `expedientes/index.astro`.
+
+### Detalle técnico de la Fase 1 (v0.16)
+
+### 1.1 — Bug real: suma angular mal en Planilla de Cálculos
+La fila de totales sumaba solo el campo `grados` de cada ángulo y dejaba minutos/segundos hardcodeados en `0`/`0` — nunca hacía el acarreo (carry) de segundos→minutos→grados, por eso dos ángulos con minutos/segundos daban un total menor al real en el PDF, aunque la web (que sí hace el acarreo) mostraba el valor correcto. Ahora la Planilla suma todo en segundos y vuelve a convertir con `Math.floor`/`%`, igual que ya hacía `actualizarVisor()` en la web.
+
+### 1.2 — Carátula: texto más grande
+Título 22→27pt, campos (Departamento/Ubicación/Partida/Comitente) 15→18pt, con más espacio entre líneas. Probado con un caso extremo (comitente con nombre muy largo, el campo envuelve a 3 líneas) — queda con margen de sobra antes del logo del pie, no se pisan.
+
+### 1.3 — Superficies: redondeo real a 2 decimales (al centímetro), en el guardado
+Encontramos 3 lugares en `generar.ts` que imprimían `superficie_m2` sin ningún `.toFixed()` (Capítulo de Ubicación, Acta de Mensura, Memoria de Mensura) — ya corregidos. Pero el arreglo de fondo se hizo en el guardado (`[id].astro`, acción `guardar_mensura`): antes se guardaba el float crudo del cálculo (ej. `179.6667`), arrastrando esa imprecisión a cualquier lugar que lo mostrara. Ahora se redondea a 2 decimales ahí mismo, así todo (web y los 5 documentos que la imprimen) sale bien desde un solo lugar. De paso: el input de superficie en Tab Mensura pasó de autocompletarse con 4 decimales a 2, y su `step` de `0.0001` a `0.01`; la "Suma total" de lados (que se ve en vivo mientras se cargan los lados) también pasó de 4 a 2 decimales.
+
+### 1.4 — Memoria de Mensura: designación de lado/ángulo antes de la medida
+Antes: `"30,00 m = TREINTA METROS"` a secas. Ahora: `"Lado AB: 30,00 m = TREINTA METROS"` (reusa `generarEtiquetasLados`, ya usada en la Planilla de Cálculos) y `"Ángulo en vértice 2: 90°00' (NOVENTA GRADOS...)."`. El texto de ángulo pasó de `drawText` plano a `dibujarParrafo` (con wrap) porque con el prefijo nuevo un ángulo de nombre largo podía pasarse del ancho de la hoja.
+
+### 1.5 — Sangría de párrafos aumentada
+`dibujarParrafo`/`dibujarParrafoMixto`: sangría por defecto 18→30pt. Los llamados que pasan `sangria=0` explícitamente (filas tipo lista: lados/ángulos de Memoria, algunas líneas de cierre) no cambian.
+
+### Verificado
+Sintaxis (`esbuild` sobre `generar.ts` y los `<script>` de `[id].astro`) y compilación completa (`astro build`, sin errores de tipo — el único error del build fue un `EPERM` de symlinks de Windows al empaquetar para Vercel, no relacionado con el código). Carátula probada con datos sintéticos en caso extremo (ver 1.2). El resto (suma angular con datos reales, Memoria con varios lados/ángulos, superficies en un expediente real) queda pendiente de probar en la app corriendo con datos reales — recomendado antes de dar la Fase 1 por cerrada.
+
+### Pendiente — roadmap completo (Fase 5)
+
+Franco mandó 14 pedidos juntos (por chat y por captura). Fases 1 a 4 ya hechas (ver arriba). Pendiente de probar con la app corriendo: Fase 2 (migración SQL del rol "Intendente" — **ya corrida por Franco** —, flujo de eliminar edificación, conteo de Formularios U con varios polígonos), Fase 3 (token vencido real), Fase 4 (modal de E1, editar/eliminar comitente, logo del login, editor de Nº Expediente/Área de Catastro en Dashboard — incluye correr a mano en Supabase `alter table comitentes add column if not exists eliminado_at timestamptz;`). Queda 1 fase más, la más grande:
+
+**Fase 5 — Rediseño visual: tabs del expediente estilo wizard** (la más grande, se hace al final y sola)
+Franco pasó capturas de otra app ("Taita") solo como referencia visual: un sidebar vertical con pasos numerados en círculos (✓ si está completo), conectados por una línea, con el contenido en una card a la derecha. Reemplaza la barra horizontal de tabs actual (`[id].astro:545-558`, 6 tabs: Comitente/Inmueble/Mensura/Testigos/DDJJ/Documentos) **solo en layout y estilo** — la lógica de guardado (cada tab con sus mismos `<form>` y acciones `_action`, mismo patrón PRG con `?tab=`) no se toca. Sin precedente de este patrón en el resto de la app, se construye de cero reusando las variables de `src/styles/global.css`.
+
+---
+
 ## 📋 Cambios de la sesión — 27 Julio 2026 (v0.15) — Correcciones de Franco: membrete, actas, tolerancias, formularios
 
 Franco pasó `CORRECCIONES_NICA.pdf` — un expediente de prueba con anotaciones en rojo, página por página, marcando ajustes puntuales — más el detalle de las fórmulas de tolerancia y una propuesta de membrete nuevo por WhatsApp. Se repasaron todas las anotaciones contra el código real antes de tocar nada, y se implementó todo lo que no dependía de información pendiente de Franco.

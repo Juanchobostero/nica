@@ -49,7 +49,8 @@ create table if not exists comitentes (
   domicilio_calle       text,
   domicilio_numero      text,
   domicilio_localidad   text,
-  domicilio_provincia   text
+  domicilio_provincia   text,
+  eliminado_at          timestamptz
 );
 
 alter table comitentes enable row level security;
@@ -113,7 +114,7 @@ create table if not exists exp_comitentes (
   id              uuid primary key default gen_random_uuid(),
   expediente_id   uuid references expedientes(id) on delete cascade not null,
   comitente_id    uuid references comitentes(id) on delete cascade not null,
-  rol             text default 'titular' check (rol in ('titular','apoderado','heredero','poseedor')),
+  rol             text default 'titular' check (rol in ('titular','apoderado','heredero','poseedor','intendente')),
   orden           int default 1,
   -- Para Declaraciones Juradas: propios de esta relación expediente↔comitente,
   -- no de la persona en general (el mismo comitente puede tener % distinto en otro expediente).

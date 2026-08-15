@@ -6,7 +6,13 @@ import { CATEGORIAS_E1, INCISOS_E1, DESTINOS_E1 } from '../../lib/edificacionE1'
 
 const token = Astro.cookies.get('sb-access-token')?.value ?? ''
 const { data: { user } } = await supabase.auth.getUser(token)
-const uid = user?.id ?? ''
+// Token vencido -> user:null sin error. Esta era la causa más grave del bug reportado
+// ("guardo y queda en blanco, tengo que reloguearme"): sin este chequeo, `uid` quedaba en ''
+// y el lookup del expediente de más abajo fallaba, mandando a /expedientes ANTES de llegar a
+// la lógica de guardado del POST (línea ~63 en adelante) — el submit se perdía en silencio,
+// sin ningún aviso. Ahora se manda directo a /login, explicando el motivo real.
+if (!user) return Astro.redirect('/login')
+const uid = user.id
 const db = getSupabase(token)
 const { id } = Astro.params
 
@@ -153,11 +159,12 @@ if (Astro.request.method === 'POST') {
     }
 
     if (!errorMsg) {
+      // Nº Expediente y Área de Catastro ya no se cargan desde esta pestaña (se mueven al
+      // Dashboard) — OJO: no incluirlos acá es a propósito, si el form ya no los manda
+      // `form.get(...)` daría null y pisaría el valor cargado desde el Dashboard.
       await db.from('expedientes').update({
-        numero_expediente: form.get('numero_expediente') || null,
         fecha_inicio: form.get('fecha_mensura') || null,
         hora_mensura: form.get('hora_mensura') || null,
-        area_catastro: form.get('area_catastro') || null,
       }).eq('id', id)
 
       let maxParcelaHasta = 0
@@ -205,6 +212,11 @@ if (Astro.request.method === 'POST') {
           const calc = n >= 3 ? calcularPoligonal(ladosForm, angulosForm) : null
           superficieM2 = calc ? calcularSuperficie(calc) : null
         }
+        // Franco pidió que toda superficie quede al centímetro (2 decimales) — antes se
+        // guardaba el float crudo del cálculo (ej. 179.6667), arrastrando esa imprecisión a
+        // todos los documentos que la imprimen. Se redondea acá, en el guardado, para que
+        // quede bien en un solo lugar en vez de parchear cada pantalla/PDF que la muestra.
+        if (superficieM2 != null) superficieM2 = Number(superficieM2.toFixed(2))
 
         const polPayload = {
           expediente_id: id,
@@ -372,6 +384,15 @@ if (Astro.request.method === 'POST') {
       return Astro.redirect(`/expedientes/${id}?tab=ddjj&warn=ddjj_e1_error&detalle=${encodeURIComponent(errorE1.message)}`)
     }
     successMsg = 'Características del edificio guardadas.'
+  }
+
+  if (action === 'eliminar_edificacion') {
+    // Desmarcar "¿tiene construcciones?" solo ocultaba el formulario E1 en el cliente — la
+    // fila `edificacion` ya guardada quedaba huérfana y un lote marcado como baldío seguía
+    // trayendo el Formulario E1 en el expediente completo. Este botón (solo visible cuando
+    // ya había datos cargados y se destildó el checkbox) borra esa fila de verdad.
+    await db.from('edificacion').delete().eq('expediente_id', id)
+    successMsg = 'Datos de edificación eliminados.'
   }
 
   if (action === 'agregar_comitente') {
@@ -660,6 +681,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
                   <option value="apoderado">Apoderado</option>
                   <option value="heredero">Heredero</option>
                   <option value="poseedor">Poseedor</option>
+                  <option value="intendente">Intendente</option>
                 </select>
               </div>
             </div>
@@ -685,6 +707,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
                   <option value="apoderado">Apoderado</option>
                   <option value="heredero">Heredero</option>
                   <option value="poseedor">Poseedor</option>
+                  <option value="intendente">Intendente</option>
                 </select>
               </div>
             </div>
@@ -927,11 +950,9 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
               <span style="font-size:0.75rem;margin-left:0.5rem">(se define al crear el expediente)</span>
             </div>
           )}
+          <!-- Nº Expediente y Área de Catastro se cargan desde el Dashboard (no acá): al
+               iniciar la mensura todavía no existe el expediente en la Dirección de Catastro. -->
           <div class="form-grid form-grid-2" style="margin-bottom:1.25rem">
-            <div class="field">
-              <label>Nº Expediente</label>
-              <input class="input" name="numero_expediente" value={exp.numero_expediente ?? ''} />
-            </div>
             <div class="field">
               <label>Fecha de mensura</label>
               <input class="input" type="date" name="fecha_mensura" value={exp.fecha_inicio ?? ''} />
@@ -939,10 +960,6 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
             <div class="field">
               <label>Hora de mensura</label>
               <input class="input" type="time" name="hora_mensura" value={(exp as any).hora_mensura ?? ''} />
-            </div>
-            <div class="field">
-              <label>Área de Catastro (ubicación actual del expediente)</label>
-              <input class="input" name="area_catastro" value={(exp as any).area_catastro ?? ''} placeholder="Ej: Dirección General de Catastro - Mesa de entradas" />
             </div>
           </div>
 
@@ -1027,7 +1044,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
                       <>
                         <div class="field">
                           <label>Superficie total (m²)</label>
-                          <input class="input" type="number" step="0.0001" name={`pol_${idx}_superficie_m2`} id={`superficie_m2_${idx}`}
+                          <input class="input" type="number" step="0.01" name={`pol_${idx}_superficie_m2`} id={`superficie_m2_${idx}`}
                             value={pol?.superficie_m2 ?? ''}
                             disabled={(pol as any)?.superficie_manual !== true} />
                         </div>
@@ -1437,12 +1454,33 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
         </form>
 
         <div class="section-label" style="margin-top:1.5rem">Formulario E1 — Características constructivas</div>
-        <label style="display:flex;align-items:center;gap:8px;margin-bottom:1rem;font-weight:400;cursor:pointer">
-          <input type="checkbox" id="chk_tiene_construcciones" checked={!!edificacion} />
-          ¿El inmueble tiene construcciones?
-        </label>
+        <p style="color:var(--color-text-secondary);font-size:0.85rem;margin-bottom:0.75rem">
+          Solo si el lote tiene construcciones — un lote baldío no necesita este formulario.
+        </p>
+        <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin-bottom:1.5rem">
+          <button type="button" class="btn btn-secondary" id="btn-abrir-e1">
+            {edificacion ? 'Editar datos de edificación (Formulario E1) ✓' : 'Agregar datos de edificación (Formulario E1)'}
+          </button>
+          {edificacion && (
+            <form method="POST" style="margin:0">
+              <input type="hidden" name="_action" value="eliminar_edificacion" />
+              <input type="hidden" name="_tab" value="ddjj" />
+              <button type="submit" class="btn btn-danger btn-sm"
+                onclick="return confirm('¿Eliminar los datos de edificación cargados? El lote pasa a listarse como baldío y el Formulario E1 deja de incluirse en el expediente.')">
+                Eliminar (lote baldío)
+              </button>
+            </form>
+          )}
+        </div>
 
-        <form method="POST" id="form_e1" style={edificacion ? '' : 'display:none'}>
+        <div id="modal-overlay-e1" class="modal-overlay" hidden>
+          <div class="modal-card modal-card-e1" role="dialog" aria-modal="true" aria-labelledby="modal-e1-title">
+            <div class="modal-e1-header">
+              <h3 id="modal-e1-title">Formulario E1 — Características constructivas</h3>
+              <button type="button" class="modal-e1-close" id="modal-e1-close" aria-label="Cerrar">✕</button>
+            </div>
+            <div class="modal-e1-body">
+        <form method="POST" id="form_e1">
           <input type="hidden" name="_action" value="guardar_ddjj_e1" />
           <input type="hidden" name="_tab" value="ddjj" />
 
@@ -1508,6 +1546,9 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
 
           <button type="submit" class="btn btn-primary">Guardar características del edificio</button>
         </form>
+            </div>
+          </div>
+        </div>
       </div>
     )}
   </div>
@@ -1835,7 +1876,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
       const inputs = ladosRows ? ladosRows.querySelectorAll('[data-lado-m]') : []
       let suma = 0
       inputs.forEach(inp => { suma += parseFloat(inp.value) || 0 })
-      if (ladosSuma) ladosSuma.textContent = `Suma total: ${suma.toFixed(4)} m`
+      if (ladosSuma) ladosSuma.textContent = `Suma total: ${suma.toFixed(2)} m`
     }
 
     function generarFilas(cantidad) {
@@ -1983,7 +2024,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
         if (inputCa) inputCa.value = ca
         if (inputSupLetras) inputSupLetras.value = superficieHaALetras(ha, a, ca)
       } else {
-        if (inputM2) inputM2.value = areaM2.toFixed(4)
+        if (inputM2) inputM2.value = areaM2.toFixed(2)
         if (inputSupLetras) inputSupLetras.value = superficieALetrasM2(areaM2.toFixed(2))
       }
     }
@@ -2115,13 +2156,15 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     })
   }
 
-  // ── Toggle Formulario E1 (¿tiene construcciones?) ───────────────────────
-  var chkConstrucciones = document.getElementById('chk_tiene_construcciones')
-  var formE1 = document.getElementById('form_e1')
-  if (chkConstrucciones && formE1) {
-    chkConstrucciones.addEventListener('change', function() {
-      formE1.style.display = chkConstrucciones.checked ? '' : 'none'
-    })
+  // ── Modal del Formulario E1 ──────────────────────────────────────────
+  var btnAbrirE1    = document.getElementById('btn-abrir-e1')
+  var overlayE1     = document.getElementById('modal-overlay-e1')
+  var btnCerrarE1   = document.getElementById('modal-e1-close')
+  if (btnAbrirE1 && overlayE1) {
+    btnAbrirE1.addEventListener('click', function() { overlayE1.hidden = false })
+    if (btnCerrarE1) btnCerrarE1.addEventListener('click', function() { overlayE1.hidden = true })
+    overlayE1.addEventListener('click', function(e) { if (e.target === overlayE1) overlayE1.hidden = true })
+    document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !overlayE1.hidden) overlayE1.hidden = true })
   }
 
   // ── Auto-conversión superficie a letras (Tab 3) ───────────────────────
@@ -2559,6 +2602,11 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
         .then(function(res) { return res.json() })
         .then(function(data) {
           if (!data.ok) {
+            if (data.warn === 'no_autenticado') {
+              alert('Tu sesión venció. Volvé a iniciar sesión para poder generar los documentos.')
+              window.location.href = '/login'
+              return
+            }
             const mensajesGenerar = {
               ddjj_no_implementada: 'Ese formulario de Declaración Jurada todavía no está implementado.',
               ddjj_falta_inmueble: 'Completá primero la Tab 2 Inmueble antes de generar la Declaración Jurada.',
@@ -2616,6 +2664,11 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
         .then(function(res) { return res.json() })
         .then(function(data) {
           if (!data.ok) {
+            if (data.warn === 'no_autenticado') {
+              alert('Tu sesión venció. Volvé a iniciar sesión para poder generar los documentos.')
+              window.location.href = '/login'
+              return
+            }
             alert(mensajeError)
             return
           }
@@ -2826,6 +2879,21 @@ tr[data-doc-row] { transition: background-color 1.6s ease, opacity 0.3s ease; }
   overflow:hidden; background:#525659; display:flex; align-items:center; justify-content:center;
 }
 .modal-pdf-body iframe { width:100%; height:100%; border:0; }
+
+/* Modal del Formulario E1 — antes era un checkbox que mostraba/ocultaba un form largo al fondo
+   de la Tab DDJJ (fácil de no encontrar); ahora vive en un modal grande, disparado por un botón. */
+.modal-card-e1 {
+  max-width:820px; width:92vw; max-height:88vh;
+  display:flex; flex-direction:column; padding:1.25rem;
+}
+.modal-e1-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem; }
+.modal-e1-header h3 { margin-bottom:0; }
+.modal-e1-close {
+  background:none; border:none; cursor:pointer; font-size:1.1rem; line-height:1;
+  color:var(--color-text-secondary); padding:0.25rem 0.5rem; border-radius:var(--radius-sm);
+}
+.modal-e1-close:hover { background:var(--color-bg); color:var(--color-text); }
+.modal-e1-body { overflow-y:auto; flex:1; min-height:0; padding-right:0.25rem; }
 
 @keyframes modal-fade-in { from { opacity:0; } to { opacity:1; } }
 @keyframes modal-pop-in { from { opacity:0; transform:scale(0.96) translateY(4px); } to { opacity:1; transform:scale(1) translateY(0); } }

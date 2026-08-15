@@ -271,7 +271,7 @@ function dibujarLineaJustificada(page: PDFPage, palabras: string[], x: number, y
 
 // Dibuja un párrafo justificado (ambos márgenes alineados, salvo la última línea) con sangría en la primera línea.
 // Devuelve la coordenada Y donde termina (para encadenar el siguiente párrafo).
-function dibujarParrafo(page: PDFPage, texto: string, x: number, y: number, maxWidth: number, size: number, font: PDFFont, color: any, lineHeight?: number, sangria = 18): number {
+function dibujarParrafo(page: PDFPage, texto: string, x: number, y: number, maxWidth: number, size: number, font: PDFFont, color: any, lineHeight?: number, sangria = 30): number {
   const lh = lineHeight ?? size * 1.55
   const palabras = texto.replace(/\r?\n/g, ' ').split(' ').filter(Boolean)
   const lineas: string[] = []
@@ -324,7 +324,7 @@ function dibujarLineaJustificadaMixta(page: PDFPage, palabras: PalabraConEstilo[
 // Como dibujarParrafo, pero acepta varios segmentos con su propia fuente (ej. una oración fija
 // en regular con un tramo puntual en negrita en el medio) — se explota todo a nivel de palabra
 // para que el ajuste de línea y la justificación funcionen igual que en un párrafo normal.
-function dibujarParrafoMixto(page: PDFPage, segmentos: PalabraConEstilo[], x: number, y: number, maxWidth: number, size: number, color: any, lineHeight?: number, sangria = 18): number {
+function dibujarParrafoMixto(page: PDFPage, segmentos: PalabraConEstilo[], x: number, y: number, maxWidth: number, size: number, color: any, lineHeight?: number, sangria = 30): number {
   const lh = lineHeight ?? size * 1.55
   const palabras: PalabraConEstilo[] = []
   segmentos.forEach(seg => {
@@ -510,11 +510,22 @@ function valorLindero(linderos: any, lado: 'norte' | 'sur' | 'este' | 'oeste'): 
 }
 
 export const POST: APIRoute = async ({ request, cookies, redirect }) => {
+  const isAjax = request.headers.get('X-Requested-With') === 'fetch'
   const token = cookies.get('sb-access-token')?.value ?? ''
   const { data: { user } } = await supabase.auth.getUser(token)
-  if (!user) return redirect('/login')
+  // Antes esto redirigía (302) incluso cuando la llamada venía del fetch/AJAX del modal de
+  // "generar expediente completo" — el cliente hace fetch(...).then(res => res.json()), pero
+  // fetch sigue el redirect a /login y el .json() sobre el HTML de esa página falla, mostrando
+  // un alert genérico en vez de un aviso claro de sesión vencida. Mismo patrón ya usado en
+  // descargar.ts/upload-dni.ts: JSON 401 para AJAX, redirect normal para navegación directa.
+  if (!user) {
+    // `warn` (no `error`) para que el cliente lo pueda mostrar con el mismo mecanismo que ya
+    // usa para `sin_seleccion`/`ddjj_falta_inmueble`/etc. más abajo en este mismo archivo.
+    return isAjax
+      ? new Response(JSON.stringify({ ok: false, warn: 'no_autenticado' }), { status: 401 })
+      : redirect('/login')
+  }
 
-  const isAjax = request.headers.get('X-Requested-With') === 'fetch'
   const db = getSupabase(token)
   const form = await request.formData()
   const expedienteId = form.get('expediente_id') as string
@@ -1117,11 +1128,17 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
     } else if (tipo === 'caratula') {
       // ── Carátula con datos reales del expediente ──────────────────────
-      const tituloLineas = partirEnLineas(tipoMensuraTexto, width - 100, 22, boldItalic)
+      // Franco pidió agrandar el texto para que ocupe más la hoja (antes quedaba chico con
+      // mucho blanco de sobra entre el encabezado y el logo del pie). Subido de 22→27
+      // (título) y 15→18 (campos); el ajuste a texto largo sigue resuelto por el wrap a
+      // varias líneas que ya hacía `partirEnLineas` (no hace falta encoger la letra: con 4
+      // campos cortos como estos, uno solo más largo shrinkeando todos parejo se vería
+      // inconsistente contra el resto — el wrap ya evita que se salga de la hoja).
+      const tituloLineas = partirEnLineas(tipoMensuraTexto, width - 100, 27, boldItalic)
       let yTitulo = yEncabezadoFin - 60
       tituloLineas.forEach(linea => {
-        dibujarCentrado(page, linea, yTitulo, 22, boldItalic, negro, width)
-        yTitulo -= 28
+        dibujarCentrado(page, linea, yTitulo, 27, boldItalic, negro, width)
+        yTitulo -= 34
       })
 
       // Bloque de datos (lo que Franco marcó en rojo en su carátula, a modo de ejemplo de qué completar)
@@ -1131,13 +1148,13 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         ['Partida Inmobiliaria: ', inmueble?.matricula_catastral ?? '—'],
         ['Comitente: ',            nombreComitente],
       ]
-      let yCampos = yTitulo - 45
+      let yCampos = yTitulo - 50
       camposCaratula.forEach(([clave, valor]) => {
-        const lineasValor = partirEnLineas(`${clave}${valor}`, width - 145, 15, boldItalic)
+        const lineasValor = partirEnLineas(`${clave}${valor}`, width - 145, 18, boldItalic)
         lineasValor.forEach((linea, i) => {
-          page.drawText(linea, { x: 90, y: yCampos - i * 20, size: 15, font: boldItalic, color: negro })
+          page.drawText(linea, { x: 90, y: yCampos - i * 24, size: 18, font: boldItalic, color: negro })
         })
-        yCampos -= lineasValor.length * 20 + 14
+        yCampos -= lineasValor.length * 24 + 16
       })
 
       // Logo PNG — ocupa todo el pie (incluye sello, nombre y contacto)
@@ -1278,7 +1295,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       let y = yEncabezadoFin - 70
 
       const superficieTexto = poligono?.superficie_m2
-        ? `${poligono.superficie_m2} metros cuadrados${poligono.superficie_letras ? ` (${poligono.superficie_letras})` : ''}`
+        ? `${Number(poligono.superficie_m2).toFixed(2)} metros cuadrados${poligono.superficie_letras ? ` (${poligono.superficie_letras})` : ''}`
         : '— metros cuadrados'
       const parrafoUbicacion =
         `Las presentes operaciones se realizan en el Departamento de ${inmueble?.departamento ?? '—'}` +
@@ -1458,7 +1475,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         // propiedad del" — corrección de Franco sobre el Acta de Mensura.
         `se deja constancia mediante la presente, que se han medido los límites de ${rolComitente === 'poseedor' ? 'la posesión ejercida por el' : 'la propiedad del'} ` +
         `Sr. ${nombreComitente.toUpperCase()} (DNI: ${comitentePrincipal?.dni ?? '—'}). Habiendo materializado todos ` +
-        `los vértices con mojones de madera dura, determinando una superficie TOTAL de ${poligono?.superficie_m2 ?? '—'} ` +
+        `los vértices con mojones de madera dura, determinando una superficie TOTAL de ${poligono?.superficie_m2 != null ? Number(poligono.superficie_m2).toFixed(2) : '—'} ` +
         `metros cuadrados${poligono?.superficie_letras ? ` (${poligono.superficie_letras.toUpperCase()})` : ''}.`
       y = dibujarParrafo(page, parrafoActa, margenX, y, anchoTexto, 11, font, negro)
       y -= 16
@@ -1610,9 +1627,14 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
           pag.page.drawText('—', { x: margenX, y, size: 11, font, color: negro })
           y -= 18
         }
-        ladosPol.forEach((lado: any) => {
+        // Franco pidió que cada lado/ángulo diga primero de cuál se trata (antes solo se
+        // listaba el valor, sin ninguna designación) — se reusa `generarEtiquetasLados` (ya
+        // usado en la Planilla de Cálculos) para los lados, y el número de vértice para los
+        // ángulos.
+        const etiquetasLadosMemoria = generarEtiquetasLados(ladosPol.length)
+        ladosPol.forEach((lado: any, i: number) => {
           const valorM = lado.valor_m != null ? Number(lado.valor_m).toFixed(2).replace('.', ',') : '—'
-          const texto = `${valorM} m = ${lado.valor_letras ?? '—'}`
+          const texto = `Lado ${etiquetasLadosMemoria[i] ?? i + 1}: ${valorM} m = ${lado.valor_letras ?? '—'}`
           y = dibujarParrafo(pag.page, texto, margenX, y, anchoTexto, 11, font, negro, undefined, 0)
           y -= 4
         })
@@ -1624,16 +1646,20 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
           pag.page.drawText('—', { x: margenX, y, size: 11, font, color: negro })
           y -= 18
         }
-        angulosPol.forEach((ang: any) => {
+        angulosPol.forEach((ang: any, i: number) => {
           const g = ang.grados ?? 0, m = ang.minutos ?? 0, s = ang.segundos ?? 0
-          const texto = `${formatearDMS(g, m, s)} (${anguloALetrasConComa(g, m, s)}).`
-          pag.page.drawText(texto, { x: margenX, y, size: 11, font, color: negro })
-          y -= 18
+          // Con el prefijo "Ángulo en vértice N:" el texto puede pasarse del ancho de página en
+          // ángulos con nombres largos (ej. "TREINTA Y CINCO GRADOS, CINCUENTA Y NUEVE MINUTOS Y
+          // CINCUENTA Y NUEVE SEGUNDOS") — se pasa a `dibujarParrafo` (con wrap) en vez de
+          // `drawText` plano, mismo criterio ya usado para LADOS más arriba.
+          const texto = `Ángulo en vértice ${i + 1}: ${formatearDMS(g, m, s)} (${anguloALetrasConComa(g, m, s)}).`
+          y = dibujarParrafo(pag.page, texto, margenX, y, anchoTexto, 11, font, negro, undefined, 0)
+          y -= 4
         })
         y -= 20
 
         const superficieTexto = pol?.superficie_m2
-          ? `${pol.superficie_m2} metros cuadrados${pol.superficie_letras ? ` (${pol.superficie_letras.toUpperCase()})` : ''}`
+          ? `${Number(pol.superficie_m2).toFixed(2)} metros cuadrados${pol.superficie_letras ? ` (${pol.superficie_letras.toUpperCase()})` : ''}`
           : '—'
         const labelSup = 'SUPERFICIE TOTAL: '
         pag.page.drawText(labelSup, { x: margenX, y, size: 11, font: bold, color: negro })
@@ -1713,10 +1739,17 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
             fmt(dxc[i]), fmt(dyc[i]), fmt(xc[i]), fmt(yc[i]),
           ])
         }
-        // Fila de totales
+        // Fila de totales — la suma angular se hace en segundos y se vuelve a convertir a
+        // grados/minutos/segundos con acarreo (mismo criterio que ya usa la web en
+        // actualizarVisor() y la validación server-side de [id].astro): sumar solo el campo
+        // `grados` de cada ángulo, como se hacía antes, ignoraba minutos/segundos y daba un
+        // total menor al real cada vez que algún ángulo no era un número entero de grados.
         const sumLado = ladosPol.reduce((a: number, l: any) => a + Number(l?.valor_m ?? 0), 0)
-        const sumGrados = angulosPol.reduce((a: number, an: any) => a + (an.grados ?? 0), 0)
-        filas.push(['', String(sumGrados), '0', '0', fmt(sumLado), '', '', '', fmt(sumDX), fmt(sumDY), '', '', fmt(0), fmt(0), '', ''])
+        const totalSeg = angulosPol.reduce((a: number, an: any) => a + (an.grados ?? 0) * 3600 + (an.minutos ?? 0) * 60 + (an.segundos ?? 0), 0)
+        const sumG = Math.floor(totalSeg / 3600)
+        const sumM = Math.floor((totalSeg % 3600) / 60)
+        const sumS = totalSeg % 60
+        filas.push(['', String(sumG), String(sumM), String(sumS), fmt(sumLado), '', '', '', fmt(sumDX), fmt(sumDY), '', '', fmt(0), fmt(0), '', ''])
 
         const yDespuesTabla = dibujarTabla(pag.page, margenX, pag.yEncabezadoFin - 42, anchos, encabezados, filas, { font, bold }, negro, 13, 7)
 
