@@ -136,6 +136,19 @@ Sintaxis (`esbuild`) y `astro build` completo sin errores de tipo. Falta probar 
 ### Verificado (Fase 4)
 `astro build` completo sin errores de tipo. Falta probar en la app corriendo: abrir/guardar el modal de E1, editar y eliminar un comitente de prueba (y confirmar que sigue apareciendo en expedientes donde ya estaba vinculado), ver el logo nuevo en `/login`, y cargar Nº Expediente/Área de Catastro desde el Dashboard confirmando que se reflejan en el título del expediente y en `expedientes/index.astro`.
 
+### Fase 5 (v0.20) — Rediseño visual: tabs del expediente estilo wizard
+
+Reemplazada la barra horizontal de pestañas (`.tabs-nav`/`.tab-btn` de `global.css`) por un sidebar vertical con los 6 pasos numerados en círculos, en `[id].astro`: círculo con ✓ (verde) si el paso tiene datos cargados, o el número si no, conectados por una línea vertical, más un resaltado de fondo en toda la fila del paso activo (necesario: el color de texto "activo" solía confundirse con el texto normal, dos tonos de azul/negro casi idénticos — el fondo resaltado lo deja inequívoco). El contenido de cada pestaña pasa a vivir en una card a la derecha (`.wizard-content`).
+
+**Solo layout y estilo — cero cambios de lógica**: cada paso sigue siendo el mismo `<a href="?tab=...">` de siempre (navegación server-rendered, no SPA), mismo `activeTab` calculado en el server, y ninguno de los `<form>`/acciones `_action`/patrón de guardado (PRG con redirect a `?tab=...&ok=1`) de cada pestaña se tocó — literalmente se movieron los mismos bloques `{activeTab === 'x' && (...)}` de lugar (de ser hijos de `.card` junto al `.tabs-nav`, a ser hijos de `.wizard-content` dentro de `.wizard-layout`), sin tocar una línea de su contenido interno.
+
+"Completado" por paso se infiere de datos ya disponibles en la página (sin queries nuevas): comitente = hay algún `exp_comitentes`; inmueble = existe la fila `inmueble`; mensura = hay al menos un lado cargado; testigos = hay algún `exp_testigos`; DDJJ = se cargó `personas_habitan` o hay `edificacion`; documentos = hay algún documento generado.
+
+Responsive: por debajo de 860px el sidebar colapsa a una fila horizontal con scroll (sin la línea conectora ni el subtítulo de cada paso, para que entre en pantallas chicas).
+
+### Verificado (Fase 5)
+`astro build` completo sin errores de tipo. Como es un cambio puramente visual y no hay forma de loguearse en la app real desde acá, se armó una réplica estática del sidebar (mismas clases CSS, copiadas tal cual del archivo) y se renderizó con Playwright (headless) en dos anchos (1100px y 480px) para confirmar visualmente: los círculos ✓/número, la línea conectora, el resaltado del paso activo, y el colapso responsive a fila horizontal — los tres se ven correctos. Esto valida el CSS en aislado, no reemplaza probar la página real con datos de Franco — recomendado antes de dar la Fase 5 (y el roadmap completo de las 14 cosas) por cerrado: recorrer las 6 pestañas, guardar en cada una y confirmar que el dato persiste y el redirect vuelve al tab correcto.
+
 ### Detalle técnico de la Fase 1 (v0.16)
 
 ### 1.1 — Bug real: suma angular mal en Planilla de Cálculos
@@ -156,12 +169,14 @@ Antes: `"30,00 m = TREINTA METROS"` a secas. Ahora: `"Lado AB: 30,00 m = TREINTA
 ### Verificado
 Sintaxis (`esbuild` sobre `generar.ts` y los `<script>` de `[id].astro`) y compilación completa (`astro build`, sin errores de tipo — el único error del build fue un `EPERM` de symlinks de Windows al empaquetar para Vercel, no relacionado con el código). Carátula probada con datos sintéticos en caso extremo (ver 1.2). El resto (suma angular con datos reales, Memoria con varios lados/ángulos, superficies en un expediente real) queda pendiente de probar en la app corriendo con datos reales — recomendado antes de dar la Fase 1 por cerrada.
 
-### Pendiente — roadmap completo (Fase 5)
+### Pendiente — las 5 fases están implementadas, falta terminar de probar
 
-Franco mandó 14 pedidos juntos (por chat y por captura). Fases 1 a 4 ya hechas (ver arriba). Pendiente de probar con la app corriendo: Fase 2 (migración SQL del rol "Intendente" — **ya corrida por Franco** —, flujo de eliminar edificación, conteo de Formularios U con varios polígonos), Fase 3 (token vencido real), Fase 4 (modal de E1, editar/eliminar comitente, logo del login, editor de Nº Expediente/Área de Catastro en Dashboard — incluye correr a mano en Supabase `alter table comitentes add column if not exists eliminado_at timestamptz;`). Queda 1 fase más, la más grande:
-
-**Fase 5 — Rediseño visual: tabs del expediente estilo wizard** (la más grande, se hace al final y sola)
-Franco pasó capturas de otra app ("Taita") solo como referencia visual: un sidebar vertical con pasos numerados en círculos (✓ si está completo), conectados por una línea, con el contenido en una card a la derecha. Reemplaza la barra horizontal de tabs actual (`[id].astro:545-558`, 6 tabs: Comitente/Inmueble/Mensura/Testigos/DDJJ/Documentos) **solo en layout y estilo** — la lógica de guardado (cada tab con sus mismos `<form>` y acciones `_action`, mismo patrón PRG con `?tab=`) no se toca. Sin precedente de este patrón en el resto de la app, se construye de cero reusando las variables de `src/styles/global.css`.
+Franco mandó 14 pedidos juntos (por chat y por captura). Las 5 fases del roadmap ya están implementadas (ver arriba, v0.16 a v0.20) — lo que falta es terminar de probarlas en la app corriendo con datos reales:
+- Fase 1: suma angular con datos reales, Memoria con varios lados/ángulos, superficies en un expediente real. **Confirmado por Franco vía capturas.**
+- Fase 2: **migración SQL del rol "Intendente" ya corrida por Franco.** Falta probar el flujo de eliminar edificación y el conteo de Formularios U con varios polígonos.
+- Fase 3: token vencido real (se puede simular editando la cookie `sb-access-token` a mano).
+- Fase 4: modal de E1, editar/eliminar comitente, logo del login, editor de Nº Expediente/Área de Catastro en Dashboard — incluye correr a mano en Supabase `alter table comitentes add column if not exists eliminado_at timestamptz;`.
+- Fase 5: recorrer las 6 pestañas con el layout nuevo, guardar en cada una y confirmar que el dato persiste y el redirect vuelve al tab correcto — la verificación hecha esta sesión fue solo visual/CSS en aislado (ver arriba), no un recorrido real de la página.
 
 ---
 
