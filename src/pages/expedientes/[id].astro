@@ -1,11 +1,11 @@
 ---
 import AppLayout from '../../layouts/AppLayout.astro'
-import { supabase, getSupabase } from '../../lib/supabase'
+import { getSupabaseAnon, getSupabase } from '../../lib/supabase'
 import { calcularPoligonal, calcularSuperficie } from '../../lib/poligonal'
 import { CATEGORIAS_E1, INCISOS_E1, DESTINOS_E1 } from '../../lib/edificacionE1'
 
 const token = Astro.cookies.get('sb-access-token')?.value ?? ''
-const { data: { user } } = await supabase.auth.getUser(token)
+const { data: { user } } = await getSupabaseAnon().auth.getUser(token)
 // Token vencido -> user:null sin error. Esta era la causa más grave del bug reportado
 // ("guardo y queda en blanco, tengo que reloguearme"): sin este chequeo, `uid` quedaba en ''
 // y el lookup del expediente de más abajo fallaba, mandando a /expedientes ANTES de llegar a

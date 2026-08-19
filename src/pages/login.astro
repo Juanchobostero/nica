@@ -1,6 +1,6 @@
 ---
 import AuthLayout from '../layouts/AuthLayout.astro'
-import { supabase } from '../lib/supabase'
+import { getSupabaseAnon } from '../lib/supabase'
 
 let error = ''
 
@@ -9,7 +9,7 @@ if (Astro.request.method === 'POST') {
   const email = form.get('email') as string
   const password = form.get('password') as string
 
-  const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password })
+  const { data, error: authError } = await getSupabaseAnon().auth.signInWithPassword({ email, password })
 
   if (authError || !data.session) {
     error = 'Email o contraseña incorrectos.'

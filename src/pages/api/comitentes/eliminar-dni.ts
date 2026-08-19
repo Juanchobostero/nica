@@ -1,9 +1,9 @@
 import type { APIRoute } from 'astro'
-import { supabase, getSupabase } from '../../../lib/supabase'
+import { getSupabaseAnon, getSupabase } from '../../../lib/supabase'
 
 export const POST: APIRoute = async ({ request, cookies }) => {
   const token = cookies.get('sb-access-token')?.value ?? ''
-  const { data: { user } } = await supabase.auth.getUser(token)
+  const { data: { user } } = await getSupabaseAnon().auth.getUser(token)
   if (!user) return new Response(JSON.stringify({ ok: false }), { status: 401 })
 
   const db = getSupabase(token)

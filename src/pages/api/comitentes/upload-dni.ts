@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro'
-import { supabase, getSupabase } from '../../../lib/supabase'
+import { getSupabaseAnon, getSupabase } from '../../../lib/supabase'
 
 export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const isAjax = request.headers.get('X-Requested-With') === 'fetch'
@@ -9,7 +9,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       : redirect(`/expedientes/${expedienteId}?tab=comitente&warn=${warn}`)
 
   const token = cookies.get('sb-access-token')?.value ?? ''
-  const { data: { user } } = await supabase.auth.getUser(token)
+  const { data: { user } } = await getSupabaseAnon().auth.getUser(token)
   if (!user) return isAjax ? new Response(JSON.stringify({ ok: false, warn: 'no_auth' }), { status: 401 }) : redirect('/login')
 
   const db = getSupabase(token)

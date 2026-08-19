@@ -3,25 +3,24 @@ import { createClient } from '@supabase/supabase-js'
 const URL = import.meta.env.PUBLIC_SUPABASE_URL
 const ANON_KEY = import.meta.env.PUBLIC_SUPABASE_ANON_KEY
 
-// autoRefreshToken/persistSession apagados a propósito: este cliente corre en el servidor y es
-// un singleton compartido entre requests de usuarios distintos (login.astro lo usa para
-// signInWithPassword, y todas las páginas protegidas para validar el token de la cookie). Los
-// defaults del SDK están pensados para un solo usuario en un browser — con ellos prendidos,
-// cada login exitoso deja una sesión guardada ADENTRO de este cliente compartido y arranca un
-// timer de auto-refresh en segundo plano que nunca se apaga (el cliente nunca se destruye).
-// Ese timer termina reintentando refrescar un token de otro usuario ya vencido, en loop (los
-// "GET /user 403 token expired" repetidos), y como el SDK serializa las operaciones de auth con
-// un lock interno, un login nuevo puede quedarse esperando ese lock para siempre — el request
-// que nunca resuelve. Acá los tokens ya se manejan a mano (cookies httpOnly + el `token` que se
-// pasa explícitamente a cada supabase.auth.getUser(token)), así que el SDK no necesita guardar
-// ni refrescar ninguna sesión por su cuenta.
-export const supabase = createClient(URL, ANON_KEY, {
-  auth: { autoRefreshToken: false, persistSession: false },
-})
+// Ya no hay un cliente único a nivel de módulo (`export const supabase = ...`) — apagar
+// autoRefreshToken/persistSession no alcanzaba. El SDK sigue serializando con un lock interno
+// las operaciones de auth (getUser, signInWithPassword) hechas sobre UN MISMO cliente: con
+// varios usuarios/pestañas pegándole al mismo singleton compartido en el servidor, cada
+// operación se ponía en fila detrás de la anterior en vez de correr en paralelo — eso era lo que
+// causaba logueos que tardaban 30-90 segundos en vez de ser instantáneos (confirmado con los
+// logs de Vercel: el POST a /login sí devolvía 302 enseguida en algunos casos, pero el GET a
+// /dashboard que le seguía tardaba casi un minuto y medio en resolver).
+// Cada request crea ahora su propio cliente, sin nada compartido entre ellos — mismo criterio
+// que ya usaba getSupabase() de acá abajo, aplicado también al cliente "sin autenticar" que usa
+// el login y cada página protegida para validar el token de la cookie.
+export function getSupabaseAnon() {
+  return createClient(URL, ANON_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  })
+}
 
 // Cliente autenticado: envía el JWT del usuario en cada request → activa RLS correctamente.
-// Mismo motivo que arriba: se crea uno nuevo por request, no hace falta que guarde ni refresque
-// sesión propia.
 export function getSupabase(accessToken: string) {
   return createClient(URL, ANON_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
