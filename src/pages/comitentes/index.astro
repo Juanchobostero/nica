@@ -45,23 +45,41 @@ if (Astro.request.method === 'POST') {
 
 const busqueda = Astro.url.searchParams.get('q') ?? ''
 
+// Paginado — mismo patrón ya usado para "Documentos generados" en expedientes/[id].astro
+// (DOCS_POR_PAGINA/docPage/docFrom/docTo con .range() + count:'exact').
+const POR_PAGINA = 10
+const pagina = Math.max(1, parseInt(Astro.url.searchParams.get('pag') ?? '1') || 1)
+const desde = (pagina - 1) * POR_PAGINA
+const hasta = desde + POR_PAGINA - 1
+
 let query = db
   .from('comitentes')
-  .select('id, nombre, apellido, dni, telefono, email, domicilio, tipo_documento, nacionalidad, domicilio_calle, domicilio_numero, domicilio_localidad, domicilio_provincia')
+  .select('id, nombre, apellido, dni, telefono, email, domicilio, tipo_documento, nacionalidad, domicilio_calle, domicilio_numero, domicilio_localidad, domicilio_provincia', { count: 'exact' })
   .eq('user_id', uid)
   .is('eliminado_at', null)
   .order('apellido')
+  .range(desde, hasta)
 
 if (busqueda) {
   query = query.or(`nombre.ilike.%${busqueda}%,apellido.ilike.%${busqueda}%,dni.ilike.%${busqueda}%`)
 }
 
-const { data: comitentes } = await query
+const { data: comitentes, count: comitentesCount, error: errorComitentes } = await query
+if (errorComitentes) console.error('comitentes/index — error al consultar:', errorComitentes.message)
+const totalPaginas = Math.max(1, Math.ceil((comitentesCount ?? 0) / POR_PAGINA))
+// Al buscar, el parámetro de búsqueda se re-agrega a los links de paginado para no perderlo.
+const qParam = busqueda ? `&q=${encodeURIComponent(busqueda)}` : ''
 ---
 <AppLayout title="Comitentes">
   <div class="page-header">
     <h2>Comitentes</h2>
   </div>
+
+  {errorComitentes && (
+    <div class="alert alert-error" style="margin-bottom:1rem">
+      No se pudo cargar la lista de comitentes (error de la base de datos): {errorComitentes.message}
+    </div>
+  )}
 
   <div class="card" style="margin-bottom:1rem">
     <form class="filters" method="GET">
@@ -133,6 +151,18 @@ const { data: comitentes } = await query
         </tbody>
       </table>
     </div>
+
+    {totalPaginas > 1 && (
+      <div style="display:flex;gap:0.5rem;align-items:center;justify-content:center;margin-top:1rem">
+        <a href={`?pag=${Math.max(1, pagina - 1)}${qParam}`}
+          class={`btn btn-secondary btn-sm ${pagina <= 1 ? 'btn-disabled' : ''}`}
+          aria-disabled={pagina <= 1}>← Anterior</a>
+        <span style="font-size:0.875rem;color:var(--color-text-secondary)">Página {pagina} de {totalPaginas}</span>
+        <a href={`?pag=${Math.min(totalPaginas, pagina + 1)}${qParam}`}
+          class={`btn btn-secondary btn-sm ${pagina >= totalPaginas ? 'btn-disabled' : ''}`}
+          aria-disabled={pagina >= totalPaginas}>Siguiente →</a>
+      </div>
+    )}
   </div>
 
   <!-- Modal de edición -->
@@ -257,6 +287,7 @@ const { data: comitentes } = await query
 .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
 .page-header h2 { font-size:1.5rem; }
 .filters { display:flex; gap:0.75rem; align-items:center; }
+.btn-disabled { opacity:0.4; pointer-events:none; }
 
 .modal-overlay {
   position:fixed; inset:0; background:rgba(15,23,42,0.5);

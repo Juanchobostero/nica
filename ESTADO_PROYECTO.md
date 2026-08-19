@@ -78,7 +78,39 @@
 
 ---
 
-## 📋 Cambios de la sesión — 13 Agosto 2026 (v0.16-v0.17) — Roadmap grande de Franco: Fase 1 y Fase 2
+## 📋 Cambios de la sesión — 14 Agosto 2026 (v0.21) — Feedback de Franco tras probar las 5 fases
+
+Franco probó las 5 fases del roadmap grande (v0.16-v0.20) y mandó 4 items nuevos de ajuste.
+
+### Requisitos (tal como los mandó Franco, agrupados)
+1. Login: sacar la palabra "NICA" del texto (el logo circular ya la tiene grabada adentro) y agrandar el logo.
+2. Pestaña Comitentes (`/comitentes`) aparece vacía ("No hay comitentes registrados aún"), pero los comitentes siguen existiendo — se ven igual al buscarlos desde el desplegable de un expediente.
+3. Generación de documentos:
+   - 3.1: un polígono de 32 lados (caso real de Franco) no entra en una sola página de la Memoria de Mensura — el texto de los últimos lados/ángulos queda dibujado fuera del borde inferior de la hoja, invisible, en vez de continuar en una página nueva.
+   - 3.2: la designación de lados por letras (AB, BC, CD...) se queda sin letras del abecedario después de 26 lados y empieza a repetirse desde "A" — Franco pidió cambiar a designación numérica ("Lado 1-2", "Lado 2-3"...) tanto en la Memoria de Mensura como en la Planilla de Cálculo, y que esta última también pueda continuar en una página siguiente si hay muchas filas.
+
+### Implementado
+
+**1 — Logo del login**: sacado el `<h1>NICA</h1>` de `login.astro` (quedan el logo circular, que ya tiene "NICA" grabado en el sello, y el subtítulo "Sistema de Gestión de Mensuras"). Logo agrandado de 84px a 160px — con el texto afuera, pasa a ser el elemento visual principal.
+
+**3.2 — Numeración de lados**: `generarEtiquetasLados()` en `generar.ts` generaba pares de letras de vértices consecutivos (`String.fromCharCode(65 + (i % 26))`) — con más de 26 vértices, `i % 26` vuelve a dar 0 y repite "A". Reescrita para devolver `"1-2", "2-3", ..., "n-1"` — sin techo, y el pedido explícito de Franco. Usada en Memoria de Mensura y Planilla de Cálculo (única función, dos usos), ningún otro cambio necesario en esos dos lugares para este punto.
+
+**3.1 y 3.2 (paginación) — Memoria de Mensura y Planilla de Cálculo**: ninguna de las dos tenía chequeo de espacio restante en la página — los lados/ángulos (Memoria) o las filas de la tabla (Planilla) se seguían dibujando con `y` decreciente sin límite, y lo que caía por debajo del borde de la hoja quedaba invisible (bug real, no solo estético: para un polígono con muchos lados se perdía información).
+- **Memoria de Mensura** (rama `memoria_mensura`): nueva función `asegurarEspacioMemoria(texto, tituloSeccion)`, llamada antes de dibujar cada lado y cada ángulo — mide cuántas líneas va a ocupar el texto (`partirEnLineas`, ya existente) y, si no entra en lo que queda de página, crea una página nueva (`crearPaginaConEncabezado`, ya usado para el caso de varios polígonos) con el título "MEMORIA DE LAS OPERACIONES (continuación):" y el título de sección repetido ("LADOS (continuación):" / "ANGULOS (continuación):"). Mismo resguardo agregado antes de la línea final de "SUPERFICIE TOTAL".
+- **Planilla de Cálculo** (rama `planilla_calculos`): la función genérica `dibujarTabla()` ahora acepta un parámetro opcional `paginacion: { yMinimo, nuevaPagina }` — antes de dibujar cada fila, si no entra, llama a `nuevaPagina()` (crea una página apaisada nueva con membrete) y repite la fila de encabezados de columna arriba. Cambió su tipo de retorno de `number` a `{page, y}` (antes solo devolvía la posición Y final, asumiendo que seguía siendo la misma página) — el único call site (línea ~1772) fue actualizado para dibujar el pie (ERROR TOTAL/TOLERANCIA/SUPERFICIE) en la página que la tabla haya terminado usando, con un resguardo extra: si esa página quedó con poco margen para el pie, se abre una página más solo para eso.
+
+### 2 — Comitentes vacío: resuelto
+
+Confirmado: era la migración SQL de la Fase 4 (`eliminado_at` en `comitentes`) que no se había corrido — el cartel de error agregado (`comitentes/index.astro`, ver más abajo) mostró literalmente `column comitentes.eliminado_at does not exist`. Franco corrió la migración y la lista volvió a mostrarse con normalidad.
+
+Se dejó el manejo de error permanente en la página (`const { data: comitentes, error: errorComitentes } = await query`, con un cartel rojo si `errorComitentes` viene con algo) — antes solo se destructuraba `data` y cualquier error de Supabase se perdía en silencio, mostrando "No hay comitentes registrados aún" sin ninguna pista de que en realidad era un error de query. Vale la pena aplicar este mismo criterio si aparece otro caso de "lista vacía sospechosa" en otra página.
+
+### 2.1 — Comitentes: paginado
+
+Franco pidió agregar paginado a `/comitentes` (mismo caso que Documentos generados, que ya lo tenía) para no listar todo de una. Mismo patrón ya usado en `expedientes/[id].astro` para "Documentos generados": `POR_PAGINA = 20`, `?pag=N` en la URL, `.range(desde, hasta)` + `count: 'exact'` en la query de Supabase, controles "← Anterior / Página X de Y / Siguiente →" con `.btn-disabled` en los extremos. El término de búsqueda (`q`) se re-agrega a los links de paginado para no perderlo al cambiar de página.
+
+### Verificado
+Sintaxis (`esbuild`) y `astro build` completos sin errores de tipo. La paginación de ambos documentos se probó con un script aislado que replica la lógica agregada (mismo método ya usado varias veces esta sesión para no depender de loguearse en la app real) con un polígono sintético de 32 lados — confirmado visualmente: la Memoria corta limpio antes del borde inferior y continúa en una página nueva con el título repetido (4 páginas para 32 lados + 32 ángulos), y la Planilla repite el encabezado de columnas en la página 2 y ubica el pie sin superposiciones (2 páginas para 32 filas). Confirmado en la app real por Juan: la lista de Comitentes volvió a andar después de correr la migración, y el paginado de esa misma página quedó agregado. **Sigue pendiente que Franco confirme su caso real de 32 lados en la app corriendo** (la Memoria/Planilla se probaron con datos sintéticos, no con ese expediente puntual).
 
 Franco mandó una tanda de 14 pedidos juntos (bugs + mejoras + un rediseño visual grande). Se armó un roadmap de 5 fases con el usuario (guardado como plan de esta sesión) y se ejecutan una por una, probando cada una antes de seguir con la próxima.
 

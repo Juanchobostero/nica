@@ -450,39 +450,57 @@ function formatearDMS(grados: number, minutos: number, segundos: number): string
   return segundos > 0 ? `${base}${String(Math.round(segundos)).padStart(2, '0')}”` : base
 }
 
-// Genera etiquetas de lado AB, BC, CD, ... a partir de vértices A, B, C, ...
+// Genera etiquetas de lado "1-2", "2-3", "3-4"... — antes eran letras (AB, BC, CD...), pero con
+// solo 26 letras un polígono de más de 26 vértices repetía el ciclo desde "A" (un caso real de
+// Franco, polígono de 32 lados, terminaba con dos lados distintos llamados "AB"). Con números no
+// hay techo.
 function generarEtiquetasLados(n: number): string[] {
-  const vertices: string[] = []
-  for (let i = 0; i < n; i++) vertices.push(String.fromCharCode(65 + (i % 26)))
-  return vertices.map((v, i) => v + vertices[(i + 1) % n])
+  const etiquetas: string[] = []
+  for (let i = 0; i < n; i++) etiquetas.push(`${i + 1}-${((i + 1) % n) + 1}`)
+  return etiquetas
 }
 
 // Dibuja una tabla con grilla: encabezado en negrita + filas de datos
+// `paginacion` (opcional) permite que una tabla con muchas filas (ej. un polígono de 32 lados)
+// continúe en una página nueva en vez de seguir dibujando filas fuera del borde inferior de la
+// hoja (bug real: con pocos lados nunca se notaba, pero con muchos las filas de más abajo
+// quedaban directamente invisibles/cortadas). `nuevaPagina()` crea la página siguiente (con su
+// propio membrete) y el encabezado de columnas se vuelve a dibujar arriba de cada una.
 function dibujarTabla(
   page: PDFPage, x0: number, yTop: number,
   anchos: number[], encabezados: string[], filas: string[][],
   fonts: { font: PDFFont; bold: PDFFont }, color: any, rowHeight = 14, fontSize = 7,
-): number {
+  paginacion?: { yMinimo: number; nuevaPagina: () => { page: PDFPage; yTop: number } },
+): { page: PDFPage; y: number } {
   const { font, bold } = fonts
   const totalWidth = anchos.reduce((a, w) => a + w, 0)
+  let paginaActual = page
   let y = yTop
 
   const dibujarFila = (valores: string[], esEncabezado: boolean) => {
-    page.drawRectangle({ x: x0, y: y - rowHeight, width: totalWidth, height: rowHeight, borderColor: color, borderWidth: 0.6 })
+    paginaActual.drawRectangle({ x: x0, y: y - rowHeight, width: totalWidth, height: rowHeight, borderColor: color, borderWidth: 0.6 })
     let cx = x0
     valores.forEach((valor, i) => {
-      if (i > 0) page.drawLine({ start: { x: cx, y }, end: { x: cx, y: y - rowHeight }, thickness: 0.5, color })
+      if (i > 0) paginaActual.drawLine({ start: { x: cx, y }, end: { x: cx, y: y - rowHeight }, thickness: 0.5, color })
       const fnt = esEncabezado ? bold : font
       const w = fnt.widthOfTextAtSize(valor, fontSize)
-      page.drawText(valor, { x: cx + (anchos[i] - w) / 2, y: y - rowHeight + 4, size: fontSize, font: fnt, color })
+      paginaActual.drawText(valor, { x: cx + (anchos[i] - w) / 2, y: y - rowHeight + 4, size: fontSize, font: fnt, color })
       cx += anchos[i]
     })
     y -= rowHeight
   }
 
   dibujarFila(encabezados, true)
-  filas.forEach(fila => dibujarFila(fila, false))
-  return y
+  filas.forEach(fila => {
+    if (paginacion && y - rowHeight < paginacion.yMinimo) {
+      const nueva = paginacion.nuevaPagina()
+      paginaActual = nueva.page
+      y = nueva.yTop
+      dibujarFila(encabezados, true)
+    }
+    dibujarFila(fila, false)
+  })
+  return { page: paginaActual, y }
 }
 
 const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
@@ -1605,7 +1623,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       page.drawText('MEMORIA DE LAS OPERACIONES:', { x: margenX, y: yEncabezadoFin - 30, size: 13, font: bold, color: azul })
 
       listaPoligonos.forEach((pol: any, idx: number) => {
-        const pag = idx === 0
+        let pag = idx === 0
           ? { page, yEncabezadoFin }
           : crearPaginaConEncabezado(pdfDoc, { font, bold }, datosEncabezadoComun, logoMembrete)
 
@@ -1621,6 +1639,25 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         pag.page.drawText(tituloPoligono, { x: margenX, y, size: 11, font: bold, color: negro })
         y -= 26
 
+        // Polígonos con muchos lados (Franco pasó un caso real de 32) no entraban en una sola
+        // página — el texto de los últimos lados/ángulos quedaba dibujado por debajo del borde
+        // inferior de la hoja, invisible. Antes de cada línea se mide cuánto va a ocupar
+        // (puede wrappear a más de un renglón) y, si no entra, se abre una página nueva con su
+        // propio membrete y se repite el título de la sección.
+        const margenInferior = 70
+        const asegurarEspacioMemoria = (texto: string, tituloSeccion: string) => {
+          const lineasTexto = partirEnLineas(texto, anchoTexto, 11, font)
+          const alturaTexto = lineasTexto.length * 17 + 4
+          if (y - alturaTexto < margenInferior) {
+            pag = crearPaginaConEncabezado(pdfDoc, { font, bold }, datosEncabezadoComun, logoMembrete)
+            y = pag.yEncabezadoFin - 30
+            pag.page.drawText('MEMORIA DE LAS OPERACIONES (continuación):', { x: margenX, y, size: 13, font: bold, color: azul })
+            y -= 25
+            pag.page.drawText(tituloSeccion, { x: margenX, y, size: 11, font: bold, color: negro })
+            y -= 20
+          }
+        }
+
         pag.page.drawText('LADOS:', { x: margenX, y, size: 11, font: bold, color: negro })
         y -= 20
         if (!ladosPol.length) {
@@ -1635,6 +1672,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         ladosPol.forEach((lado: any, i: number) => {
           const valorM = lado.valor_m != null ? Number(lado.valor_m).toFixed(2).replace('.', ',') : '—'
           const texto = `Lado ${etiquetasLadosMemoria[i] ?? i + 1}: ${valorM} m = ${lado.valor_letras ?? '—'}`
+          asegurarEspacioMemoria(texto, 'LADOS (continuación):')
           y = dibujarParrafo(pag.page, texto, margenX, y, anchoTexto, 11, font, negro, undefined, 0)
           y -= 4
         })
@@ -1653,10 +1691,20 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
           // CINCUENTA Y NUEVE SEGUNDOS") — se pasa a `dibujarParrafo` (con wrap) en vez de
           // `drawText` plano, mismo criterio ya usado para LADOS más arriba.
           const texto = `Ángulo en vértice ${i + 1}: ${formatearDMS(g, m, s)} (${anguloALetrasConComa(g, m, s)}).`
+          asegurarEspacioMemoria(texto, 'ANGULOS (continuación):')
           y = dibujarParrafo(pag.page, texto, margenX, y, anchoTexto, 11, font, negro, undefined, 0)
           y -= 4
         })
         y -= 20
+
+        // Mismo resguardo que arriba: si el último ángulo dejó poco margen, la línea de
+        // superficie total pasa a una página nueva en vez de quedar cortada.
+        if (y - 20 < margenInferior) {
+          pag = crearPaginaConEncabezado(pdfDoc, { font, bold }, datosEncabezadoComun, logoMembrete)
+          y = pag.yEncabezadoFin - 30
+          pag.page.drawText('MEMORIA DE LAS OPERACIONES (continuación):', { x: margenX, y, size: 13, font: bold, color: azul })
+          y -= 30
+        }
 
         const superficieTexto = pol?.superficie_m2
           ? `${Number(pol.superficie_m2).toFixed(2)} metros cuadrados${pol.superficie_letras ? ` (${pol.superficie_letras.toUpperCase()})` : ''}`
@@ -1751,21 +1799,46 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         const sumS = totalSeg % 60
         filas.push(['', String(sumG), String(sumM), String(sumS), fmt(sumLado), '', '', '', fmt(sumDX), fmt(sumDY), '', '', fmt(0), fmt(0), '', ''])
 
-        const yDespuesTabla = dibujarTabla(pag.page, margenX, pag.yEncabezadoFin - 42, anchos, encabezados, filas, { font, bold }, negro, 13, 7)
+        // Polígonos con muchos lados (Franco pasó un caso real de 32) no entraban en una sola
+        // página apaisada — la tabla seguía dibujando filas por debajo del borde inferior de la
+        // hoja, invisibles. `crearNuevaPaginaPlanilla` arma una página apaisada nueva con su
+        // propio membrete, igual que ya se hace para el polígono siguiente (idx > 0) más arriba.
+        const crearNuevaPaginaPlanilla = () => {
+          const nuevaPagina = pdfDoc.addPage([841.89, 595.28])
+          const { width: wN, height: hN } = nuevaPagina.getSize()
+          const yFinN = dibujarEncabezado(nuevaPagina, wN, hN, { font, bold }, datosEncabezadoComun, logoMembrete)
+          return { page: nuevaPagina, yTop: yFinN - 42 }
+        }
+
+        const resultadoTabla = dibujarTabla(
+          pag.page, margenX, pag.yEncabezadoFin - 42, anchos, encabezados, filas, { font, bold }, negro, 13, 7,
+          { yMinimo: 90, nuevaPagina: crearNuevaPaginaPlanilla },
+        )
+        let paginaPie = resultadoTabla.page
+        let yDespuesTabla = resultadoTabla.y
+
+        // El pie (ERROR TOTAL / TOLERANCIA / SUPERFICIE) necesita ~70pt más debajo de la
+        // tabla — si la última página de la tabla terminó demasiado cerca del borde, se pasa
+        // el pie a una página nueva en vez de superponerlo/cortarlo.
+        if (yDespuesTabla < 90) {
+          const nueva = crearNuevaPaginaPlanilla()
+          paginaPie = nueva.page
+          yDespuesTabla = nueva.yTop
+        }
 
         let yPie = yDespuesTabla - 16
-        pag.page.drawText('ERROR TOTAL: ', { x: margenX + 300, y: yPie, size: 9, font: bold, color: negro })
-        pag.page.drawText(error.toFixed(2), { x: margenX + 380, y: yPie, size: 9, font, color: negro })
+        paginaPie.drawText('ERROR TOTAL: ', { x: margenX + 300, y: yPie, size: 9, font: bold, color: negro })
+        paginaPie.drawText(error.toFixed(2), { x: margenX + 380, y: yPie, size: 9, font, color: negro })
         yPie -= 14
         const tolerancia = calcularTolerancia(sumLado, (inmueble as any)?.tipo_inmueble)
-        pag.page.drawText('TOLERANCIA: ', { x: margenX + 300, y: yPie, size: 9, font: bold, color: negro })
-        pag.page.drawText(tolerancia.toFixed(2), { x: margenX + 380, y: yPie, size: 9, font, color: negro })
+        paginaPie.drawText('TOLERANCIA: ', { x: margenX + 300, y: yPie, size: 9, font: bold, color: negro })
+        paginaPie.drawText(tolerancia.toFixed(2), { x: margenX + 380, y: yPie, size: 9, font, color: negro })
         yPie -= 20
 
         const superficieValor = pol?.superficie_m2 ? Number(pol.superficie_m2).toFixed(2) : '—'
-        pag.page.drawRectangle({ x: margenX, y: yPie - 18, width: pag.width - margenX * 2, height: 22, color: rgb(0.92, 0.92, 0.92) })
-        pag.page.drawText('SUPERFICIE:', { x: margenX + 300, y: yPie - 12, size: 10, font: bold, color: negro })
-        pag.page.drawText(`${superficieValor}   m2`, { x: margenX + 390, y: yPie - 12, size: 10, font, color: negro })
+        paginaPie.drawRectangle({ x: margenX, y: yPie - 18, width: pag.width - margenX * 2, height: 22, color: rgb(0.92, 0.92, 0.92) })
+        paginaPie.drawText('SUPERFICIE:', { x: margenX + 300, y: yPie - 12, size: 10, font: bold, color: negro })
+        paginaPie.drawText(`${superficieValor}   m2`, { x: margenX + 390, y: yPie - 12, size: 10, font, color: negro })
       })
 
     } else {
