@@ -78,6 +78,18 @@
 
 ---
 
+## 🐛 Bug crítico — 19 Agosto 2026 (v0.22) — Login se quedaba colgado indefinidamente
+
+Juan reportó que `/login` se quedaba cargando para siempre (el request nunca devolvía status code, ni en incógnito). En los logs de Auth de Supabase aparecían llamadas repetidas a `GET /user` devolviendo 403 "Token has invalid claims: token is expired" cada 6-10 segundos. Las keys, la config de expiración de sesión y los timeouts de Supabase ya estaban descartados como causa.
+
+**Causa real:** `src/lib/supabase.ts` exporta un cliente único a nivel de módulo (`export const supabase = createClient(...)`), reusado por `login.astro` (`signInWithPassword`) y por las 9 páginas/endpoints protegidos (`supabase.auth.getUser(token)`). El SDK de `@supabase/supabase-js` trae por defecto `autoRefreshToken: true` y `persistSession: true` — pensado para un cliente de un solo usuario en un browser. Al reusarse ese mismo cliente en el servidor entre requests de usuarios distintos: cada login exitoso dejaba la sesión de ese usuario guardada adentro del cliente compartido y arrancaba un timer de auto-refresh en segundo plano que nunca se apagaba (el cliente nunca se destruye, vive mientras el proceso/función serverless esté caliente). Ese timer terminaba reintentando refrescar un token ya vencido en loop — los 403 repetidos de los logs — y como el SDK serializa las operaciones de auth con un lock interno, un login nuevo podía quedarse esperando ese lock para siempre: el request colgado.
+
+**Arreglo:** `auth: { autoRefreshToken: false, persistSession: false }` en los dos clientes de `supabase.ts` (el singleton y el que arma `getSupabase(accessToken)` por request). No hace falta que el SDK guarde ni refresque ninguna sesión por su cuenta — la app ya maneja los tokens a mano con cookies httpOnly y pasa el token explícito a cada `getUser(token)`.
+
+**Verificado:** `astro build` sin errores. **Pendiente de que Juan confirme en el browser** que el login ya no se cuelga — recomendable un redeploy limpio en Vercel además del push, para descartar que alguna instancia serverless ya caliente siga con el timer viejo trabado en memoria.
+
+---
+
 ## 📋 Cambios de la sesión — 14 Agosto 2026 (v0.21) — Feedback de Franco tras probar las 5 fases
 
 Franco probó las 5 fases del roadmap grande (v0.16-v0.20) y mandó 4 items nuevos de ajuste.
