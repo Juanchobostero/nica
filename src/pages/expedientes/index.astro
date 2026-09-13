@@ -1,11 +1,7 @@
 ---
 import AppLayout from '../../layouts/AppLayout.astro'
-<<<<<<< HEAD
-import { supabase, getSupabase } from '../../lib/supabase'
-import { AREAS_CATASTRO } from '../../lib/areaCatastro'
-=======
 import { getSupabaseAnon, getSupabase } from '../../lib/supabase'
->>>>>>> 67743d33b9a31d5dc42ca47c6ca1448cd4f5b01f
+import { AREAS_CATASTRO } from '../../lib/areaCatastro'
 
 const token = Astro.cookies.get('sb-access-token')?.value ?? ''
 const { data: { user } } = await getSupabaseAnon().auth.getUser(token)
