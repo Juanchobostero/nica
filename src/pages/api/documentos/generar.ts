@@ -561,7 +561,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
   const { data: exp } = await db
     .from('expedientes')
-    .select('numero_expediente, tipo_mensura, fecha_inicio, hora_mensura')
+    .select('numero_expediente, tipo_mensura, fecha_inicio, hora_mensura, observaciones')
     .eq('id', expedienteId)
     .single()
 
@@ -922,6 +922,14 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
             const firmaBoxX = 380, firmaBoxW = 165
             const wNombre = boldActual.widthOfTextAtSize(nombreDeclarante, f)
             p3.drawText(nombreDeclarante, { x: firmaBoxX + (firmaBoxW - wNombre) / 2, y: 683, size: f, font: boldActual, color: negro })
+          }
+
+          // La plantilla ya trae su propia sección "OBSERVACIONES :" con renglones punteados
+          // (medida vía pdftotext -bbox: la etiqueta termina en x≈145, y arranca en y≈624
+          // bottom-up; el aviso de "EXTRAVIO DE ESTE TALÓN" empieza en y≈249, así que hay
+          // margen de sobra para varias líneas de texto envuelto).
+          if (exp?.observaciones) {
+            dibujarParrafo(p3, exp.observaciones, 152, 626, 400, 9, fontActual, negro, undefined, 0)
           }
         }
       }
@@ -1635,7 +1643,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
           pag.page.drawText('MEMORIA DE LAS OPERACIONES (continuación):', { x: margenX, y, size: 13, font: bold, color: azul })
           y -= 25
         }
-        const tituloPoligono = listaPoligonos.length > 1 ? labelParcela(pol, idx) : 'POLIGONO GENERAL'
+        const tituloPoligono = pol?.nombre || (listaPoligonos.length > 1 ? labelParcela(pol, idx) : 'POLIGONO GENERAL')
         pag.page.drawText(tituloPoligono, { x: margenX, y, size: 11, font: bold, color: negro })
         y -= 26
 
@@ -1667,11 +1675,12 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         // Franco pidió que cada lado/ángulo diga primero de cuál se trata (antes solo se
         // listaba el valor, sin ninguna designación) — se reusa `generarEtiquetasLados` (ya
         // usado en la Planilla de Cálculos) para los lados, y el número de vértice para los
-        // ángulos.
+        // ángulos. Si Franco cargó una designación manual (Tab Mensura — los lados no siempre
+        // van en orden correlativo), esa tiene prioridad sobre la automática.
         const etiquetasLadosMemoria = generarEtiquetasLados(ladosPol.length)
         ladosPol.forEach((lado: any, i: number) => {
           const valorM = lado.valor_m != null ? Number(lado.valor_m).toFixed(2).replace('.', ',') : '—'
-          const texto = `Lado ${etiquetasLadosMemoria[i] ?? i + 1}: ${valorM} m = ${lado.valor_letras ?? '—'}`
+          const texto = `Lado ${lado.etiqueta || etiquetasLadosMemoria[i] || i + 1}: ${valorM} m = ${lado.valor_letras ?? '—'}`
           asegurarEspacioMemoria(texto, 'LADOS (continuación):')
           y = dibujarParrafo(pag.page, texto, margenX, y, anchoTexto, 11, font, negro, undefined, 0)
           y -= 4
@@ -1690,7 +1699,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
           // ángulos con nombres largos (ej. "TREINTA Y CINCO GRADOS, CINCUENTA Y NUEVE MINUTOS Y
           // CINCUENTA Y NUEVE SEGUNDOS") — se pasa a `dibujarParrafo` (con wrap) en vez de
           // `drawText` plano, mismo criterio ya usado para LADOS más arriba.
-          const texto = `Ángulo en vértice ${i + 1}: ${formatearDMS(g, m, s)} (${anguloALetrasConComa(g, m, s)}).`
+          const texto = `Ángulo ${ang.etiqueta || `en vértice ${i + 1}`}: ${formatearDMS(g, m, s)} (${anguloALetrasConComa(g, m, s)}).`
           asegurarEspacioMemoria(texto, 'ANGULOS (continuación):')
           y = dibujarParrafo(pag.page, texto, margenX, y, anchoTexto, 11, font, negro, undefined, 0)
           y -= 4
@@ -1741,9 +1750,11 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         const angulosPol = (pol?.angulos ?? []).slice().sort((a: any, b: any) => a.orden - b.orden)
         const calc = calcularPoligonal(ladosPol, angulosPol)
 
-        const tituloPlanilla = listaPoligonos.length > 1
-          ? `PLANILLA DE CALCULO DE COORDENADAS Y SUPERFICIE — ${labelParcela(pol, idx)}`
-          : 'PLANILLA DE CALCULO DE COORDENADAS Y SUPERFICIE'
+        const tituloPlanilla = pol?.nombre
+          ? `PLANILLA DE CALCULO DE COORDENADAS Y SUPERFICIE — ${pol.nombre}`
+          : listaPoligonos.length > 1
+            ? `PLANILLA DE CALCULO DE COORDENADAS Y SUPERFICIE — ${labelParcela(pol, idx)}`
+            : 'PLANILLA DE CALCULO DE COORDENADAS Y SUPERFICIE'
         pag.page.drawText(tituloPlanilla, {
           x: margenX, y: pag.yEncabezadoFin - 22, size: 12, font: bold, color: azul,
         })
@@ -1780,7 +1791,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
           const azGrados = Math.floor(azRad)
           const azMinutos = Math.round((azRad - azGrados) * 60)
           filas.push([
-            etiquetas[i], ag, am, as_,
+            ladosPol[i]?.etiqueta || etiquetas[i], ag, am, as_,
             fmt(Number(ladosPol[i]?.valor_m ?? 0)),
             String(azGrados), String(azMinutos), '0',
             fmt(dx[i]), fmt(dy[i]), fmt(x[i]), fmt(yCoord[i]),

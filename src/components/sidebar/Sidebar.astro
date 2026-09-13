@@ -9,8 +9,11 @@ const current = Astro.url.pathname
 ---
 <aside class="sidebar">
   <div class="sidebar-logo">
-    <span class="logo-icon">⊙</span>
-    <span class="logo-text">NICA</span>
+    <img src="/images/nica-logo-icono.png" alt="NICA" class="logo-badge" />
+    <div class="logo-textwrap">
+      <span class="logo-text">NICA</span>
+      <span class="logo-subtitle">Estudio de Agrimensura</span>
+    </div>
   </div>
 
   <nav class="sidebar-nav">
@@ -45,21 +48,39 @@ const current = Astro.url.pathname
 .sidebar-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   padding: 0 1.25rem 1.75rem;
   border-bottom: 1px solid rgba(255,255,255,0.08);
   margin-bottom: 1rem;
 }
-.logo-icon {
-  font-size: 1.5rem;
-  color: var(--color-accent);
+.logo-badge {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.14), 0 2px 6px rgba(0,0,0,0.25);
+  flex-shrink: 0;
+}
+.logo-textwrap {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
 }
 .logo-text {
   font-family: var(--font-display);
-  font-size: 1.5rem;
+  font-size: 1.35rem;
   font-weight: 700;
   color: var(--color-text-inverse);
   letter-spacing: 0.05em;
+}
+.logo-subtitle {
+  font-size: 0.6rem;
+  font-weight: 500;
+  color: rgba(255,255,255,0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 .sidebar-nav {
   display: flex;

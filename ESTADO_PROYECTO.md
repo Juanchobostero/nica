@@ -14,8 +14,8 @@
 - Protección de rutas: redirige a `/login` si no hay sesión
 
 ### Dashboard
-- 4 contadores: total expedientes, en proceso, finalizados, docs generados
-- Tabla de últimos 5 expedientes con estado y acceso directo
+- 5 contadores generales: total expedientes, en proceso, observados, finalizados, docs generados
+- Accesos rápidos (Nuevo expediente / Ver expedientes / Comitentes) — sin listado de expedientes acá (ver v0.22, evita duplicar `/expedientes`, que es la página con el listado completo, búsqueda y filtro)
 
 ### Expedientes
 - Listado con filtro por estado y búsqueda por nº expediente
@@ -75,6 +75,165 @@
 
 ### Perfil
 - Formulario con datos del profesional (nombre, matrícula, domicilio, etc.)
+
+---
+
+## 📋 Cambios de la sesión — 12 Septiembre 2026 (v0.22) — Roadmap 2
+
+Franco mandó una nueva tanda de pedidos (12 chicos/medianos + un pedido grande: pasar las DDJJ — Formulario U/SOR/E1 — a formularios PDF rellenables reales en vez de calcular coordenadas para centrar cada valor). Se armó un roadmap de 7 fases nuevas (Fase 6 a 12, continuando la numeración del roadmap anterior) — plan completo guardado en el plan de la sesión.
+
+**Investigación clave, antes de tocar código**: confirmado que sí es factible convertir las 3 plantillas de DDJJ a formularios PDF reales (AcroForm) con `pdf-lib` (ya instalado, sin agregar dependencias) — `PDFForm.createTextField/createCheckBox/createRadioGroup` + `.addToPage()`. Alcance acordado con el usuario: la app autocompleta por nombre de campo (no coordenadas) y sirve el PDF sin aplanar en el modal de vista previa ya existente — ahí Franco puede tildar/completar lo que falte con el visor nativo del navegador. Para bajar su copia editada usa el botón de descarga del visor de PDF, no el de la app. Esto es la Fase 11, la más grande — todavía no implementada.
+
+### Fase 6 (v0.22) — Ajustes chicos de datos/UI
+
+**6.1 — Estado "observado"**: agregado al `check` de `estado` en `expedientes` (`schema.sql`, **Franco tiene que correr la migración a mano**: `alter table expedientes drop constraint if exists expedientes_estado_check; alter table expedientes add constraint expedientes_estado_check check (estado in ('borrador','en_proceso','observado','finalizado'));`), a los dos `<select>` (`[id].astro` y `expedientes/index.astro`), y un `.badge-observado` (violeta, `#EDE9FE`/`#5B21B6`, distinto de los otros 3 colores). De paso se agregó un 5º stat card "Observados" en el Dashboard (la grilla pasó de 4 a 5 columnas, con nuevos breakpoints responsive).
+
+**6.2 — Área de Catastro: selector fijo**: antes un `<input>` de texto libre en el modal del Dashboard. Ahora un `<select>` con las 7 opciones que pidió Franco (Mesa de entradas y salidas, Agrimensores, Jurídico, Dirección, Carga/sistema, Actualización Gráfica, Profesional). Se creó `src/lib/areaCatastro.ts` (mismo patrón que `edificacionE1.ts`: constantes compartidas + un helper `labelAreaCatastro()`) para no duplicar la lista entre `dashboard.astro` y la futura Fase 7 en `expedientes/index.astro`. Expedientes viejos con texto libre guardado de antes de este cambio no rompen: si el valor no matchea ninguna opción, el `<select>` simplemente no preselecciona nada (el helper de display muestra el texto crudo tal cual en la tabla).
+
+**6.3 — Observaciones**: la columna ya existía en `expedientes` pero no se podía ver/editar después de crear el expediente, ni se imprimía en ningún documento. Franco confirmó que quiere que aparezcan en el **Formulario U**, y específicamente encontramos que la plantilla (`formulario_u.pdf`, página 3 — la misma del Rubro 4/declaración jurada) **ya trae impresa una sección "OBSERVACIONES :"** con renglones punteados en blanco, nunca usada por el código hasta ahora (medida su posición vía `pdftotext -bbox`: la etiqueta termina en x≈145, arranca en y≈624 bottom-up, con margen de sobra hasta el aviso de "extravío" que empieza en y≈249). Se agregó:
+- Un campo de observaciones editable en Tab 1 Comitente (nueva acción `guardar_observaciones`, mismo patrón que el resto).
+- En `generar.ts`, rama `formulario_u`: si `exp.observaciones` tiene texto, se escribe envuelto (`dibujarParrafo`) justo después de la etiqueta impresa.
+
+**Importante para la Fase 11**: esta implementación usa el mismo mecanismo de coordenadas que el resto del Formulario U hoy — a propósito, para no adelantar trabajo de un mecanismo distinto (AcroForm) antes de que le toque el turno a esa fase. Cuando llegue la Fase 11, este mismo campo se convierte en un `createTextField` más, reusando esta misma posición ya calibrada.
+
+### Verificado (Fase 6)
+`astro build` completo sin errores de tipo. Probado con un script aislado (mismo método de esta sesión: PDF sintético con datos de prueba, sin depender de loguearse en la app real): el texto de observaciones cae correctamente en la sección impresa, envuelto a varias líneas, sin invadir el aviso de "extravío" de más abajo. Nota cosmética menor: las líneas envueltas no quedan perfectamente centradas entre cada renglón punteado impreso (el interlineado del texto no coincide exactamente con el espaciado de los puntos) — legible y correcto, pero si Franco lo nota se puede afinar. Falta probar en la app corriendo: cambiar un expediente a "Observado", elegir un Área de Catastro del nuevo selector, y cargar/generar observaciones reales en un Formulario U.
+
+### Fase 7 (v0.22) — Nº Expediente / Área de Catastro: acceso completo
+
+El editor solo vivía en el Dashboard (`dashboard.astro`), que lista únicamente los últimos 5 expedientes — uno más viejo que recién ahora consigue número no tenía forma de cargarlo. Se copió el mismo botón "Nº Exp. / Catastro" (mismo modal, misma acción `actualizar_datos_dgc`) a `expedientes/index.astro`, que sí lista todos los expedientes con búsqueda y filtro por estado. Reusa `AREAS_CATASTRO` de `src/lib/areaCatastro.ts` (agregado en la Fase 6) para no duplicar la lista de opciones.
+
+### Verificado (Fase 7)
+`astro build` completo sin errores de tipo. Falta probar en la app corriendo: desde `/expedientes` (no desde el Dashboard), editar Nº Expediente/Área de Catastro de un expediente viejo que no esté entre los últimos 5, y confirmar que se refleja en el título del expediente.
+
+### Fase 8 (v0.22) — Etiquetas manuales: lado, ángulo, nombre de parcela
+
+Franco cargó un polígono de 32 lados y notó que la designación automática ("Lado 1-2, 2-3...") no siempre sirve porque los lados no van necesariamente en orden correlativo. Se agregó la posibilidad de sobreescribir manualmente:
+- **Migración SQL** (`schema.sql`, **a correr a mano**): columna `etiqueta text` en `lados` y en `angulos`; columna `nombre text` en `poligono`. Todas nullable, sin default — vacías no cambian nada del comportamiento actual.
+- **UI (Tab Mensura, `[id].astro`)**: un campo "Nombre de la parcela" (placeholder = el nombre automático "Parcela N"), y una 4ª columna "Designación" en las tablas de lados/ángulos (placeholder = la designación automática "L{i}"/"A{i}") — todo opcional, se puede dejar en blanco y sigue funcionando como antes.
+- **Guardado** (`guardar_mensura`): se leen y persisten los 3 campos nuevos junto con el resto.
+- **`generar.ts`** (Memoria de Mensura y Planilla de Cálculo): la etiqueta manual tiene prioridad sobre la automática en los 3 lugares que corresponde (título de la parcela, "Lado X:", "Ángulo X:", y la columna "N°" de la tabla de la Planilla) — `lado.etiqueta || etiquetaAutomatica`.
+
+### Fase 9 (v0.22) — Colapsar cada card de parcela
+
+Franco pidió una flecha para minimizar cada parcela cargada (Tab Mensura) y no tener un scroll larguísimo con varias. Se convirtió `.poligono-card` de un `<div>` fijo a un `<details open>` con `.poligono-card-header` (label + botón Eliminar) como `<summary>` — mismo patrón `<details>` ya usado en otras partes de este archivo. Se sacó el marcador nativo del navegador y se reemplazó por una flechita propia (`▸`/rotada 90° cuando está abierto) vía CSS. Por default todas las cards arrancan abiertas (`open`), así que no cambia el comportamiento visual actual hasta que Franco decida colapsar una — cero cambios en los nombres de los inputs ni en el JS de generación de filas/guardado.
+
+### Verificado (Fase 8 y 9)
+`astro build` completo sin errores de tipo. Fase 9 confirmada visualmente con un mockup estático (Playwright headless, mismo método usado para el sidebar del wizard en el Roadmap 1): la card colapsa/expande correctamente, la flecha rota, y el botón "Eliminar" queda accesible dentro del `<summary>` sin problemas. Falta probar en la app corriendo: cargar un polígono con lados fuera de secuencia, ponerles designación manual, guardar, recargar y confirmar que persiste; generar Memoria de Mensura/Planilla de Cálculo y confirmar que usan la designación manual; y colapsar/expandir una parcela real con datos cargados sin perder ningún valor.
+
+### Fase 10 (v0.22) — Recorte y rotación de foto de DNI antes de subir
+
+Franco recibe fotos de DNI mal encuadradas o giradas y hoy las tiene que editar él mismo antes de subirlas. Se agregó un editor propio con `<canvas>` nativo (sin ninguna librería nueva — no había ninguna de imágenes instalada en el proyecto): al elegir un archivo de imagen (jpg/png — un PDF sigue subiéndose tal cual, no se puede "recortar" un PDF con este método) se abre un modal con un recuadro de recorte arrastrable (mover el centro, o cada esquina para redimensionar) y dos botones de giro de 90°. Al confirmar, se recorta+gira en un canvas de salida y se exporta como blob JPEG — el `<form>` de subida arma el `FormData` a mano en vez de `new FormData(form)` (no se puede reasignar `fileInput.files` con el blob editado), así que `upload-dni.ts` no necesitó ningún cambio: sigue recibiendo un archivo `archivo` como siempre.
+
+**Verificación exhaustiva** (esta fue la pieza más "matemática" de toda la tanda — rotar y recortar con canvas requiere que las coordenadas de pantalla y las de píxeles reales de la imagen coincidan bien, así que ameritaba más que una revisión visual): se armó un arnés de prueba aparte con Playwright que **extrae textualmente el mismo bloque de JS del archivo real** (no una versión reescrita a mano, para no probar una copia distinta del código), genera una imagen sintética de 4 cuadrantes de colores (rojo/verde/azul/amarillo), y:
+- **Test de recorte** (arrastrando la esquina inferior-derecha hacia el centro, sin girar): el resultado midió ~203×153px (el objetivo era ~200×150) con el cuadrante rojo puro en el centro — correcto.
+- **Test de rotación** (90° a la derecha, sin recortar): el resultado midió exactamente 300×400 (dimensiones intercambiadas, como corresponde), y los 4 cuadrantes de color aparecieron exactamente en la esquina esperada tras la rotación (calculado a mano con la fórmula de rotación 2D y verificado pixel por pixel) — correcto.
+
+Esto da mucha confianza en la lógica en sí (la matemática de recorte/rotación funciona), pero **no reemplaza probarlo con una foto de DNI real** en la app corriendo — el arnés de prueba no ejercita el flujo completo de selección de archivo real ni la subida a Storage.
+
+### Verificado (Fase 10)
+Ver el detalle exhaustivo arriba. `astro build` completo sin errores de tipo. Falta probar en la app corriendo: elegir una foto de DNI real (girada), recortarla y rotarla en el editor, subirla, y confirmar que la imagen guardada en Storage refleja el recorte/rotación y no el archivo original sin tocar.
+
+### Fase 10.1 (v0.22) — Editar el recorte de una imagen de DNI ya subida
+
+Pedido de seguimiento: poder volver a recortar/girar una imagen que ya se subió (no solo elegir un archivo nuevo o eliminarla). Se agregó un botón "✎" en la preview (al lado del "✕" de eliminar, solo para imágenes — un PDF no se puede recortar) que:
+1. Descarga la imagen ya subida (`fetch` a la misma URL que ya se usa para mostrarla).
+2. Reabre el mismo modal de recorte/rotación de la Fase 10 con esa imagen.
+3. Al confirmar, sube el resultado **automáticamente** (sin un click extra en "Subir") — a diferencia de elegir un archivo nuevo, acá la intención de "guardar el ajuste" ya quedó expresada al abrir el editor desde este botón.
+
+Se agregó un registro `dniFormsPorClave` (comitente+lado → su `<form>` de subida) para poder ubicar el form correcto desde el botón "✎" de la preview y reusar exactamente el mismo flujo de subida que ya existía (mismo endpoint, misma actualización de la preview) — nada nuevo que mantener en paralelo. `abrirModalCrop()` ahora acepta un 5º parámetro opcional `{autoSubmit: true}` para este caso.
+
+**Pendiente de confirmar**: la descarga de la imagen ya subida depende de que la URL firmada de Supabase Storage permita `fetch()` cross-origin (no solo mostrarla en un `<img>`, que es más permisivo) — el modal de vista previa de PDF ya hace algo equivalente con éxito, así que es probable que funcione, pero **hay que probarlo con una imagen real** para confirmarlo.
+
+### Verificado (Fase 10.1)
+`astro build` completo sin errores de tipo. No se repitió el test exhaustivo con Playwright de la Fase 10 (la lógica de recorte/rotación en sí es la misma, ya verificada) — lo nuevo acá es la orquestación (fetch + reapertura del modal + auto-envío), que no se pudo probar sin loguearse en la app real. Falta probar: click en "✎" sobre una imagen de DNI ya subida, ajustar el recorte, confirmar, y verificar que se sube sola y la preview se actualiza con la nueva versión.
+
+### Fix (v0.22) — "Quitar" imagen de DNI dejaba de responder tras un intento fallido
+
+Franco reportó: "cuando vuelvo a subir la imagen no me deja quitarla de nuevo" (el botón "✕" deja de reaccionar después de re-subir una imagen).
+
+**Causa**: el handler del botón "Quitar imagen" (`[id].astro`, confirmación del modal `#modal-overlay-dni`) deshabilitaba el botón (`btn.disabled = true`) antes de llamar a `/api/comitentes/eliminar-dni`, y solo lo "recuperaba" en el camino feliz — al reemplazar todo el bloque de la preview (`previewWrap.innerHTML = renderPreviewVacio(...)`), el botón deshabilitado quedaba destruido junto con el resto. Pero si ese pedido fallaba por cualquier motivo transitorio (sesión vencida, blip de red, un redeploy en curso — el propio flujo de trabajo de este proyecto es "lo pusheo y que pruebe Franco", así que un intento justo durante un deploy es un caso real), el código solo mostraba un `alert()` y **nunca volvía a habilitar el botón** — quedaba `disabled` para siempre en esa preview. Un botón deshabilitado no dispara eventos `click` en el navegador, así que ni siquiera el listener delegado en `document` volvía a enterarse de los clicks siguientes: para el usuario, el botón simplemente dejaba de responder, sin ningún mensaje de error visible la segunda vez.
+
+**Fix**: en las dos ramas de error (`!data.ok` y `.catch`) del handler de confirmación, se agregó `btn.disabled = false` — así un intento fallido dejá el botón usable para volver a intentarlo, en vez de bloquearlo permanentemente.
+
+### Verificado
+Lectura exhaustiva de todo el flujo (subida, recorte/edición Fase 10.1, y eliminación) para descartar otras causas — la lógica de subida (`upload-dni.ts`, el `submit` handler del form) y el flujo de edición (Fase 10.1) ya restauran correctamente sus propios botones en un `.finally()`; el de "Quitar" era el único que no lo hacía, consistente con el síntoma reportado. `astro build` sin errores de tipo. Falta confirmar con Franco en la app real: reproducir el reporte original (re-subir una imagen y quitarla de nuevo) ahora que el botón se recupera ante cualquier fallo.
+
+### Fix (v0.22) — Botones "✎"/"✕" de la preview de DNI "no aparecen" tras subir una imagen nueva
+
+Franco siguió probando y reportó un segundo síntoma relacionado: "quito la imagen subida, vuelvo a subir otra, la subo y no me aparecen los botones de editar y eliminar — recién al actualizar la página vuelven a aparecer".
+
+**Investigación**: se armó un arnés de prueba con Playwright que extrae textualmente el script real completo (agregando también los demás modales/tablas de la página que el script intenta enlazar al cargar, para que se ejecute igual que en la real sin cortarse a mitad de camino) y con `fetch` mockeado (simulando `eliminar-dni`/`upload-dni` exitosos) se recorrió la secuencia exacta: quitar la imagen existente → seleccionar un archivo nuevo → confirmar el recorte → click en "Subir". **El HTML resultante en el DOM sí contiene ambos botones** tras la subida — la lógica de re-renderizado (`renderPreviewArchivo`, la referencia a `previewWrap`) es correcta y no se detectó ningún bug de JavaScript en esta secuencia.
+
+**Diagnóstico**: ambos botones ("✎"/"✕") están siempre en el DOM pero son **invisibles por diseño** (`opacity:0`) hasta que el mouse pasa por encima de la miniatura (`.dni-preview-inner:hover`) — un patrón pensado para no ensuciar visualmente la tabla. El problema: justo después de tocar "Subir", el mouse queda posicionado sobre ese botón (bien por debajo de la miniatura), no sobre la imagen — así que los botones, aunque están ahí, no se ven hasta que el usuario mueve el mouse de nuevo sobre la miniatura. Esto explica el síntoma exacto sin que haya ningún bug funcional: recargar la página "los hace reaparecer" simplemente porque, al mirar la miniatura de nuevo, el usuario pasa el mouse por encima y ahí sí se revelan. En un dispositivo táctil (sin estado `:hover`) el problema sería incluso peor — quedarían invisibles permanentemente.
+
+**Fix**: en vez de depender de este bug de diagnóstico, se sacó el `opacity:0`/`:hover`-para-revelar — ambos botones pasan a estar **siempre visibles** (opacidad 0.85, subiendo a 1 al pasar el mouse por encima, solo como refuerzo visual) tanto en el HTML servido por el servidor como en el HTML insertado por JS (misma clase CSS para los dos casos, un solo cambio en `<style>` alcanza).
+
+### Verificado
+`astro build` sin errores de tipo. Arnés de Playwright confirmó que el HTML de ambos botones se genera correctamente tras la secuencia completa (quitar → subir de nuevo); con el cambio de CSS ya no dependen de ningún estado de hover para ser visibles. Falta confirmar con Franco que ahora los ve aparecer de inmediato tras subir, sin necesidad de recargar.
+
+### Fix (v0.22) — Causa real: referencia de DOM cacheada ("stale") en el flujo de subida
+
+El cambio de CSS de arriba no fue suficiente — Franco reportó que el problema persistía **incluso en la primerísima subida de una imagen** (nunca antes cargada para ese comitente), y que hacía falta recargar la página Y cambiar de pestaña y volver para que aparecieran. Esto descartaba el diagnóstico de hover y apuntaba a algo más de fondo.
+
+**Causa real encontrada**: comparando los dos flujos de DNI (quitar vs. subir), había una asimetría — el de "Quitar" busca el `.dni-preview-wrap` **en el momento del click de confirmación** (`document.querySelector(...)` recién ahí), mientras que el de "Subir" lo buscaba **una sola vez, al cargar la página**, lo guardaba en una variable, y reusaba esa misma referencia adentro del `.then()` de la subida (que responde recién después de un viaje de red, un rato después). Si por cualquier motivo ese nodo puntual dejaba de ser el que está realmente visible en el DOM en ese momento posterior (el guardado en el closure queda "huérfano"), el `.innerHTML = ...` de la subida actualizaba un nodo que ya nadie ve, mientras la miniatura visible seguía mostrando "Sin cargar" — exactamente el síntoma reportado, y coherente con que solo se arreglara al forzar un re-render completo de la página (recarga + cambio de pestaña).
+
+**Fix**: se sacó esa referencia cacheada y ahora la subida busca el `.dni-preview-wrap` **recién en el momento de actualizarlo** (`buscarPreviewWrap()`, la misma estrategia que ya usaba con éxito el flujo de "Quitar") — `[id].astro`, dentro del `forEach` que registra cada form de subida.
+
+### Verificado
+Se armó un segundo test con Playwright que reproduce a propósito el escenario que motivó el fix: reemplaza el nodo `.dni-preview-wrap` por un clon equivalente (mismo HTML, pero otro objeto en memoria — simula cualquier causa real que deje la referencia cacheada apuntando a un nodo que ya no es el vivo) y después ejecuta la subida completa. Con el fix, el nodo que realmente queda en pantalla (consultado de nuevo, en vivo) tiene ambos botones — sin el fix este mismo test hubiera mostrado "Sin cargar" en el nodo visible mientras el nodo huérfano se actualizaba en la sombra. `astro build` sin errores de tipo. Falta confirmar con Franco en la app real: subir una imagen (primera vez, sin pasos previos) y ver que "✎"/"✕" aparecen de inmediato, sin recargar ni cambiar de pestaña.
+
+### Fix (v0.22) — El síntoma seguía igual tras los fixes anteriores: red de seguridad + diagnóstico
+
+El usuario confirmó que, probando en `pnpm dev` local (reiniciando y refrescando entre cada intento), el síntoma seguía exactamente igual incluso en la primerísima subida de una imagen para un comitente. Esto descartó tanto la teoría del CSS/hover como la del nodo huérfano como causa ÚNICA — o hay otra causa más, o algo específico del entorno real que no se pudo reproducir en los tests.
+
+**Verificación exhaustiva adicional**: se armó una página Astro temporal (`testdnidebug.astro`, borrada al terminar) que reproduce la sección de comitente+DNI (frente y dorso, arrancando en "Sin cargar" como el caso reportado) y se sirvió con el propio compilador de Astro/Vite del proyecto (no una copia hecha a mano) en un servidor de desarrollo aparte, para descartar cualquier diferencia entre "lo que yo transcribí a mano" y "lo que Astro realmente compila". Con `fetch` mockeado (simulando `upload-dni` exitoso) se repitió la secuencia exacta reportada: primera subida, sin pasos previos. **Resultado: los botones aparecen correctamente también ahí** — no se pudo reproducir el bug a través del compilador real tampoco.
+
+**Decisión**: dado que no se pudo reproducir el bug pese a dos métodos de verificación rigurosos (incluyendo el compilador real de Astro), pero el usuario lo sigue viendo en su entorno, se agregó una **red de seguridad** en vez de seguir buscando a ciegas: tanto la subida como el "quitar" ahora envuelven la actualización de la preview en un `try/catch`, y si el bloque a actualizar no se encuentra (o cualquier otra cosa falla al armar el HTML nuevo), se hace `console.error(...)` con el detalle Y se recarga la página automáticamente (`window.location.reload()`) — el archivo ya quedó guardado en el servidor en ese punto (la respuesta ok:true ya llegó), así que no se pierde nada, y el usuario nunca más debería quedar viendo una preview vieja/incompleta esperando a recargar manualmente.
+
+### Verificado
+`astro build` sin errores de tipo. **Pendiente, importante**: si el problema persiste después de este cambio, dado que ya no hay forma de que la preview quede "trabada" (el `catch`/reload de respaldo se encarga), el próximo paso es abrir la consola del navegador (F12 → pestaña Console) al momento de subir una imagen y revisar si aparece el mensaje de error en rojo que se agregó (empieza con "DNI: ...") — eso daría el dato concreto que hasta ahora no se pudo obtener por lectura de código ni por los tests, para terminar de encontrar la causa de fondo si es que la red de seguridad se llega a activar.
+
+### Causa real encontrada: extensión "Console Ninja" de VS Code, no un bug del código
+
+El usuario mandó la captura del panel Sources de Chrome DevTools en la línea exacta del error: `i:string,...v:any[]){try{oo_cm().consoleLog(i, v);}catch(e){} return v}`. Eso **no es código del proyecto** — es la instrumentación que inyecta la extensión **Console Ninja** (ya se había visto en el log de arranque de `pnpm dev`: "✔ Console Ninja extension is connected to Vite") para poder mostrar los `console.log` dentro del editor. Esa instrumentación tiene sintaxis de TypeScript (`i:string`, `...v:any[]`) que en este caso se sirvió sin transpilar, rompiendo el parseo de **todo el script de DNI** con un `SyntaxError` — por eso ni "Subir" ni "Quitar" corrían ninguna lógica de JS (ninguno de los `addEventListener` llegaba a registrarse), y solo un refresh + cambio de pestaña (que fuerza un re-render SSR completo, sin depender de que ese script cargue) mostraba el estado correcto. Esto también explica por qué nunca se pudo reproducir ni con el arnés de Playwright ni sirviendo la página con el compilador real de Astro en un servidor aparte: ninguno de esos servidores de prueba tenía Console Ninja enganchado de la misma forma sobre ese archivo puntual.
+
+**Esto confirma que el código en sí nunca tuvo el bug que parecía tener** — pero como la extensión puede seguir interfiriendo (y no es algo que el código pueda controlar), se dejó igual la mejora de robustez de abajo, que además simplifica el código.
+
+### Fix definitivo (v0.22) — Subir/Quitar DNI ahora recargan la pestaña en vez de parchear el DOM
+
+A pedido del usuario ("forzá una recarga de solo ese dato, así siempre se ven los botones") se simplificó el mecanismo: en vez de armar el HTML de la preview a mano en el cliente (`renderPreviewArchivo`/`renderPreviewVacio`, ya eliminadas), tanto "Subir" como "Quitar" ahora, apenas el servidor confirma `ok:true`, llaman a una función nueva `recargarTrasAccionDni()` que recarga la pestaña actual (`window.location.reload()`) — así la preview (imagen + botones "✎"/"✕") queda **siempre** exactamente como la arma el servidor, sin ninguna lógica de parcheo de DOM de la que depender (y sin depender de que el script de DNI se haya cargado bien, aunque algo como Console Ninja vuelva a interferir).
+
+Como esta recarga podría perder texto sin guardar en el textarea de "Observaciones" (misma pestaña, formulario aparte con su propio botón "Guardar"), se agregó una preservación simple: antes de recargar, el valor actual del textarea se guarda en `sessionStorage` (clave por URL del expediente), y al cargar la página se restaura automáticamente y se borra de `sessionStorage` — un borrador sin guardar nunca se pierde por subir o quitar una foto de DNI.
+
+### Verificado
+`astro build` sin errores de tipo. Se probó de punta a punta contra el compilador real de Astro (arnés de Playwright con `fetch` mockeado): se escribe un borrador sin guardar en Observaciones, se sube una imagen de DNI nueva, se confirma que la página navega/recarga (`waitForNavigation`), y que el borrador de Observaciones sigue intacto después — ambas cosas confirmadas. Falta la confirmación final del usuario en su entorno real, ahora que la causa (Console Ninja) está identificada y además el mecanismo ya no depende de que ese script particular cargue sin errores.
+
+**Confirmado por el usuario en su entorno real** ("ahi funciona perfecto"): recarga tras subir/quitar DNI, con el borrador de Observaciones preservado. Cierra este bug definitivamente.
+
+### Fix (v0.22) — Dashboard y Expedientes mostraban lo mismo (listado de expedientes duplicado)
+
+El usuario notó que el Dashboard (tarjetas de stats + tabla de "Últimos 5 expedientes" con acciones "Ver"/"Nº Exp. / Catastro") y `/expedientes` (listado completo con búsqueda, filtro por estado, y las mismas acciones más "Eliminar") mostraban información redundante. Pidió unificar ambas páginas, o — como alternativa más simple si unificar era muy invasivo — sacar el listado del Dashboard y dejarlo más general, sin tocar `/expedientes` para nada.
+
+Se optó por la alternativa simple (menor riesgo, confirmado con el usuario): **no se fusionaron las rutas** — cada página sigue siendo independiente, sin tocar la navegación ni ningún link existente hacia `/dashboard` o `/expedientes`.
+
+- **`dashboard.astro`**: se sacó la tabla "Últimos expedientes" (junto con su modal "Nº Exp. / Catastro" y el script que lo manejaba) — esa acción ya existe de forma completa e independiente en `/expedientes` (agregada en la Fase 7, incluso con la celda del Nº de expediente clickeable), así que no se perdió ninguna funcionalidad. En su lugar, se agregó una sección simple de "Accesos rápidos" (Nuevo expediente / Ver expedientes / Comitentes). El Dashboard ahora es puramente un panel de métricas generales (los 5 contadores) + navegación, sin datos específicos de ningún expediente.
+- **`expedientes/index.astro`**: **sin ningún cambio** — queda exactamente como estaba, tal cual pidió el usuario.
+- Se eliminó del `dashboard.astro` la consulta `ultimos` (los últimos 5 expedientes) y la acción POST `actualizar_datos_dgc` de su frontmatter (ambas ya no se usan ahí — la de `/expedientes` es una copia independiente con sus propios nombres de variable, no se tocó).
+
+### Verificado
+`astro build` sin errores de tipo (se verificó que no quedó ninguna referencia colgante a `AREAS_CATASTRO`/`labelAreaCatastro`/`ultimos`/el modal eliminado). Confirmado visualmente por el usuario con capturas: Dashboard muestra las 5 tarjetas + accesos rápidos, sin tabla; `/expedientes` sigue mostrando el listado completo con búsqueda, filtro, y el botón "Nº Exp. / Catastro" funcionando igual que siempre.
+
+### Fix (v0.22) — Logo real en el sidebar
+
+Pedido: reemplazar el ícono de texto "⊙ NICA" del sidebar (`src/components/sidebar/Sidebar.astro`, usado en TODAS las páginas autenticadas vía `AppLayout`) por el logo real, con una presentación más prolija.
+
+- Se usa `public/images/nica-logo-icono.png` (el mismo logo circular ya usado en `login.astro`) como una insignia circular de 46px (`border-radius:50%`, `object-fit:cover`, fondo blanco + sombra sutil para que resalte sobre el fondo azul oscuro del sidebar).
+- Al lado, un lockup de dos líneas: "NICA" (wordmark, igual que antes) + "Estudio de Agrimensura" como subtítulo chico en mayúsculas (el mismo texto que ya está grabado alrededor del logo) — con el texto correcto puede pasar a dos líneas en vez de cortarse con "...", se probó explícitamente para evitar que quede truncado feo.
+- Cambio puramente visual — la navegación (links, estado activo, botón de cerrar sesión) no se tocó.
+
+### Verificado
+`astro build` sin errores de tipo. Renderizado y capturado con Playwright (import aislado del componente `Sidebar.astro` fuera del flujo de auth, ya que requiere estar logueado) en dos anchos de viewport para confirmar que el subtítulo no queda cortado y que el conjunto se ve prolijo — visto y ajustado (tamaño de fuente del subtítulo) hasta que quedó bien. Pendiente: confirmación visual del usuario en la app real.
 
 ---
 

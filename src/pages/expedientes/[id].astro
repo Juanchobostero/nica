@@ -227,6 +227,7 @@ if (Astro.request.method === 'POST') {
           superficie_manual: superficieManual,
           cantidad_lados: cantLados,
           cantidad_angulos: cantAngulos,
+          nombre: form.get(`pol_${p}_nombre`) || null,
         }
 
         let polId: string | null = existingId || null
@@ -243,12 +244,14 @@ if (Astro.request.method === 'POST') {
           for (let i = 1; i <= cantLados; i++) {
             const vm = form.get(`pol_${p}_lado_${i}_valor_m`) as string
             const vl = form.get(`pol_${p}_lado_${i}_valor_letras`) as string
-            if (vm || vl) {
+            const vet = (form.get(`pol_${p}_lado_${i}_etiqueta`) as string) || ''
+            if (vm || vl || vet) {
               await db.from('lados').insert({
                 poligono_id: polId,
                 orden: i,
                 valor_m:      parseFloat(vm) || null,
                 valor_letras: vl || null,
+                etiqueta:     vet || null,
               })
             }
           }
@@ -260,7 +263,8 @@ if (Astro.request.method === 'POST') {
           for (let i = 1; i <= cantAngulos; i++) {
             const va = form.get(`pol_${p}_angulo_${i}_valor`) as string
             const vl = form.get(`pol_${p}_angulo_${i}_valor_letras`) as string
-            if (va || vl) {
+            const vet = (form.get(`pol_${p}_angulo_${i}_etiqueta`) as string) || ''
+            if (va || vl || vet) {
               const [gradosPart, decimalPart = ''] = (va || '').split('.')
               const decStr = decimalPart.padEnd(4, '0')
               await db.from('angulos').insert({
@@ -270,6 +274,7 @@ if (Astro.request.method === 'POST') {
                 minutos:      parseInt(decStr.substring(0, 2)) || null,
                 segundos:     parseInt(decStr.substring(2, 4)) || null,
                 valor_letras: vl || null,
+                etiqueta:     vet || null,
               })
             }
           }
@@ -472,6 +477,13 @@ if (Astro.request.method === 'POST') {
     successMsg = 'Estado actualizado.'
   }
 
+  if (action === 'guardar_observaciones') {
+    // Se muestran en el Formulario U (sección "OBSERVACIONES :" ya impresa en la plantilla,
+    // ver generar.ts rama formulario_u) — decisión de Franco, no un campo genérico.
+    await db.from('expedientes').update({ observaciones: form.get('observaciones') || null }).eq('id', id)
+    successMsg = 'Observaciones guardadas.'
+  }
+
   return Astro.redirect(`/expedientes/${id}?tab=${form.get('_tab') ?? 'comitente'}&ok=1`)
 }
 
@@ -546,7 +558,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
       <input type="hidden" name="_action" value="cambiar_estado" />
       <input type="hidden" name="_tab" value={activeTab} />
       <select name="nuevo_estado" class="input" style="max-width:160px;display:inline-block">
-        {['borrador','en_proceso','finalizado'].map(e => (
+        {['borrador','en_proceso','observado','finalizado'].map(e => (
           <option value={e} selected={exp.estado === e}>{e.replace('_',' ')}</option>
         ))}
       </select>
@@ -633,6 +645,10 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
                                         </a>
                                       ) : (
                                         <a href={`/api/documentos/descargar?path=${path}`} class="badge badge-finalizado" style="text-decoration:none">Ver PDF</a>
+                                      )}
+                                      {esImagen && (
+                                        <button type="button" class="dni-edit-btn" data-comitente-id={ec.comitentes?.id} data-lado={lado}
+                                          data-url={`/api/documentos/descargar?path=${path}`} title="Editar recorte/giro">✎</button>
                                       )}
                                       <button type="button" class="dni-remove-btn" data-comitente-id={ec.comitentes?.id} data-lado={lado} title="Quitar imagen">✕</button>
                                     </div>
@@ -722,6 +738,17 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
             <button type="submit" class="btn btn-primary" style="margin-top:0.75rem">Crear y agregar</button>
           </form>
         </details>
+
+        <div class="section-label" style="margin-top:1.5rem">Observaciones</div>
+        <p style="color:var(--color-text-secondary);font-size:0.85rem;margin-bottom:0.75rem">
+          Se muestran en la sección "Observaciones" del Formulario U.
+        </p>
+        <form method="POST">
+          <input type="hidden" name="_action" value="guardar_observaciones" />
+          <input type="hidden" name="_tab" value="comitente" />
+          <textarea class="input" name="observaciones" rows="3" style="resize:vertical">{exp.observaciones ?? ''}</textarea>
+          <button type="submit" class="btn btn-primary" style="margin-top:0.75rem">Guardar observaciones</button>
+        </form>
       </div>
     )}
 
@@ -978,10 +1005,10 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
               const desde = pol?.parcela_desde ?? (idx + 1)
               const hasta = pol?.parcela_hasta ?? desde
               return (
-                <div class="poligono-card" id={`poligono_card_${idx}`}>
-                  <div class="poligono-card-header">
+                <details class="poligono-card" id={`poligono_card_${idx}`} open>
+                  <summary class="poligono-card-header">
                     <span class="poligono-card-label" id={`poligono_label_${idx}`}>
-                      {desde === hasta ? `Parcela ${desde}` : `Parcelas ${desde} a ${hasta}`}
+                      {(pol as any)?.nombre || (desde === hasta ? `Parcela ${desde}` : `Parcelas ${desde} a ${hasta}`)}
                     </span>
                     {poligonosParaUI.length > 1 && (
                       <button type="submit" name="eliminar_pol_id" value={pol?.id ?? ''}
@@ -989,9 +1016,14 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
                         Eliminar
                       </button>
                     )}
-                  </div>
+                  </summary>
 
                   <input type="hidden" name={`pol_${idx}_id`} value={pol?.id ?? ''} />
+
+                  <div class="field" style="margin-bottom:0.75rem">
+                    <label>Nombre de la parcela <span style="font-weight:400;font-size:0.78rem;color:var(--color-text-secondary)">(opcional — ej. "Unidad funcional 3"; si se deja vacío se usa "Parcela N")</span></label>
+                    <input class="input" name={`pol_${idx}_nombre`} value={(pol as any)?.nombre ?? ''} placeholder={desde === hasta ? `Parcela ${desde}` : `Parcelas ${desde} a ${hasta}`} />
+                  </div>
 
                   <div class="form-grid form-grid-2" style="margin-bottom:0.75rem">
                     <div class="field">
@@ -1076,7 +1108,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
                   <div id={`lados_section_${idx}`} style="margin-top:1rem;display:none">
                     <div class="section-label">Lados del polígono</div>
                     <div class="lados-header">
-                      <span>Lado</span><span>Longitud (m)</span><span>En letras</span>
+                      <span>Lado</span><span>Longitud (m)</span><span>En letras</span><span>Designación</span>
                     </div>
                     <div id={`lados_rows_${idx}`}></div>
                     {pol?.cantidad_lados > 0 && (
@@ -1087,12 +1119,12 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
                   <div id={`angulos_section_${idx}`} style="margin-top:1.25rem;display:none">
                     <div class="section-label">Ángulos del polígono</div>
                     <div class="lados-header">
-                      <span>Ángulo</span><span>Valor (GG.MMSS)</span><span>En letras</span>
+                      <span>Ángulo</span><span>Valor (GG.MMSS)</span><span>En letras</span><span>Designación</span>
                     </div>
                     <div id={`angulos_rows_${idx}`}></div>
                     <div id={`angulos_visor_${idx}`} style="display:none;margin-top:0.75rem"></div>
                   </div>
-                </div>
+                </details>
               )
             })}
           </div>
@@ -1580,6 +1612,30 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     </div>
   </div>
 
+  <!-- Recorte/rotación de foto de DNI antes de subir — Franco recibe fotos mal encuadradas o
+       giradas y hoy las tiene que editar él mismo antes de cargarlas. -->
+  <div id="modal-overlay-crop" class="modal-overlay" hidden>
+    <div class="modal-card modal-card-crop" role="dialog" aria-modal="true" aria-labelledby="modal-crop-title">
+      <h3 id="modal-crop-title">Ajustar imagen antes de subir</h3>
+      <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:0.75rem">
+        Arrastrá las esquinas para recortar, o el centro para mover el recuadro. Girá si la foto quedó de costado.
+      </p>
+      <div class="crop-canvas-wrap">
+        <canvas id="crop-canvas"></canvas>
+      </div>
+      <div class="modal-actions" style="justify-content:space-between;margin-top:0.75rem">
+        <div style="display:flex;gap:0.5rem">
+          <button type="button" class="btn btn-secondary btn-sm" id="crop-rotar-izq" title="Girar 90° a la izquierda">↺ Girar</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="crop-rotar-der" title="Girar 90° a la derecha">↻ Girar</button>
+        </div>
+        <div style="display:flex;gap:0.5rem">
+          <button type="button" class="btn btn-secondary" id="crop-cancelar">Cancelar</button>
+          <button type="button" class="btn btn-primary" id="crop-confirmar">Usar esta imagen</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="modal-overlay-doc" class="modal-overlay" hidden>
     <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="modal-doc-title">
       <div class="modal-icon">
@@ -1901,6 +1957,8 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
           <input class="input" name="pol_${idx}_lado_${i}_valor_letras"
             value="${exist.valor_letras ?? ''}" placeholder="En letras" data-lado-letras readonly tabindex="-1"
             style="color:var(--color-primary);font-weight:600;background:var(--color-border);cursor:default" />
+          <input class="input" name="pol_${idx}_lado_${i}_etiqueta"
+            value="${exist.etiqueta ?? ''}" placeholder="L${i}" title="Designación manual (opcional) — los lados no siempre van en orden correlativo" />
         `
         ladosRows.appendChild(fila)
       }
@@ -1980,6 +2038,8 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
           <input class="input" name="pol_${idx}_angulo_${i}_valor_letras"
             value="${exist.valor_letras ?? ''}" placeholder="En letras" data-angulo-letras readonly tabindex="-1"
             style="color:var(--color-primary);font-weight:600;background:var(--color-border);cursor:default" />
+          <input class="input" name="pol_${idx}_angulo_${i}_etiqueta"
+            value="${exist.etiqueta ?? ''}" placeholder="A${i}" title="Designación manual (opcional)" />
         `
         angulosRows.appendChild(fila)
       }
@@ -2223,20 +2283,30 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
 </script>
 
 <script>
-  // Nombre de archivo visible + subida/eliminación de DNI sin recargar la página
-  const DNI_BOX = 'width:140px;height:92px;border-radius:8px;overflow:hidden;background:var(--color-surface)'
-  function renderPreviewVacio(comitenteId, lado) {
-    return '<div class="dni-preview-inner" style="' + DNI_BOX + ';border:1px dashed var(--color-border);background:var(--color-bg)">' +
-      '<div class="dni-placeholder" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:0.72rem;color:var(--color-text-secondary)">Sin cargar</div>' +
-      '</div>'
+  // Subir/quitar una foto de DNI ahora SIEMPRE recarga la pestaña tras confirmar el servidor
+  // (ver más abajo, `recargarTrasAccionDni`) — así los botones "✎"/"✕" quedan garantizados por
+  // el propio render del servidor en vez de depender de que el parcheo del DOM en el cliente
+  // funcione siempre en cualquier entorno. Como esta pestaña también tiene el textarea de
+  // "Observaciones" (con su propio botón "Guardar" aparte), un borrador sin guardar ahí no debe
+  // perderse por una recarga disparada desde el lado — se guarda en sessionStorage antes de
+  // recargar y se restaura apenas carga la página de nuevo.
+  const OBS_DRAFT_KEY = 'nica_obs_draft_' + location.pathname
+  ;(function restaurarBorradorObservaciones() {
+    const guardado = sessionStorage.getItem(OBS_DRAFT_KEY)
+    if (guardado == null) return
+    sessionStorage.removeItem(OBS_DRAFT_KEY)
+    const ta = document.querySelector('textarea[name="observaciones"]')
+    if (ta) ta.value = guardado
+  })()
+  function recargarTrasAccionDni() {
+    const ta = document.querySelector('textarea[name="observaciones"]')
+    if (ta) sessionStorage.setItem(OBS_DRAFT_KEY, ta.value)
+    window.location.reload()
   }
-  function renderPreviewArchivo(url, lado, esImagen, comitenteId) {
-    const contenido = esImagen
-      ? '<a href="' + url + '" target="_blank" style="display:block;width:100%;height:100%"><img src="' + url + '" alt="DNI ' + lado + '" class="dni-img" style="width:100%;height:100%;object-fit:cover;display:block" /></a>'
-      : '<a href="' + url + '" class="badge badge-finalizado" style="text-decoration:none">Ver PDF</a>'
-    const btn = '<button type="button" class="dni-remove-btn" data-comitente-id="' + comitenteId + '" data-lado="' + lado + '" title="Quitar imagen">✕</button>'
-    return '<div class="dni-preview-inner" style="position:relative;' + DNI_BOX + ';border:1px solid var(--color-border)">' + contenido + btn + '</div>'
-  }
+
+  // Nombre de archivo visible + subida/eliminación de DNI. Subir o quitar una imagen recarga la
+  // pestaña al confirmar el servidor (ver `recargarTrasAccionDni` más arriba) en vez de armar el
+  // HTML de la preview a mano — así siempre queda igual a como la renderiza el servidor.
 
   // Modal de confirmación para quitar imagen de DNI
   const overlayDni    = document.getElementById('modal-overlay-dni')
@@ -2255,6 +2325,37 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     overlayDni.hidden = false
   })
 
+  // "Editar recorte/giro" sobre una imagen de DNI ya subida: trae el archivo actual, reabre el
+  // mismo modal de ajuste (Fase 10) y, al confirmar, sube el resultado automáticamente (sin
+  // esperar un click extra en "Subir") — se busca el <form> correspondiente por comitente+lado
+  // en `dniFormsPorClave` y se reusa tal cual su propio submit (mismo endpoint, misma preview).
+  document.addEventListener('click', function(e) {
+    const editBtn = e.target.closest('.dni-edit-btn')
+    if (!editBtn) return
+    const comitenteId = editBtn.dataset.comitenteId
+    const lado = editBtn.dataset.lado
+    const url = editBtn.dataset.url
+    const form = dniFormsPorClave[comitenteId + '_' + lado]
+    if (!form || typeof abrirModalCrop !== 'function') return
+    const fileInputDestino = form.querySelector('.dni-file-input')
+    const fileNameDestino  = form.querySelector('.file-name')
+    editBtn.disabled = true
+    fetch(url)
+      .then(function(res) {
+        if (!res.ok) throw new Error('no se pudo descargar')
+        return res.blob()
+      })
+      .then(function(blob) {
+        abrirModalCrop(blob, form, fileInputDestino, fileNameDestino, { autoSubmit: true })
+      })
+      .catch(function() {
+        alert('No se pudo cargar la imagen para editar. Probá de nuevo.')
+      })
+      .finally(function() {
+        editBtn.disabled = false
+      })
+  })
+
   btnDniCancel.addEventListener('click', cerrarModalDni)
   overlayDni.addEventListener('click', function(e) { if (e.target === overlayDni) cerrarModalDni() })
   document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !overlayDni.hidden) cerrarModalDni() })
@@ -2262,9 +2363,6 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
   btnDniConfirm.addEventListener('click', function() {
     if (!dniPendiente) return
     const { comitenteId, lado, btn } = dniPendiente
-    const previewWrap = document.querySelector(
-      '.dni-preview-wrap[data-comitente-id="' + comitenteId + '"][data-lado="' + lado + '"]'
-    )
     btn.disabled = true
     cerrarModalDni()
 
@@ -2275,13 +2373,19 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     fetch('/api/comitentes/eliminar-dni', { method: 'POST', body: fd })
       .then(function(res) { return res.json() })
       .then(function(data) {
-        if (data.ok && previewWrap) {
-          previewWrap.innerHTML = renderPreviewVacio(comitenteId, lado)
-        } else if (!data.ok) {
+        if (data.ok) {
+          // Recarga la pestaña: garantiza que "Sin cargar" y el resto del bloque queden
+          // exactamente como los renderiza el servidor, sin depender de parchear el DOM a mano.
+          recargarTrasAccionDni()
+        } else {
           alert('No se pudo quitar la imagen.')
+          btn.disabled = false
         }
       })
-      .catch(function() { alert('No se pudo quitar la imagen.') })
+      .catch(function() {
+        alert('No se pudo quitar la imagen.')
+        btn.disabled = false
+      })
   })
 
   // Modal de confirmación para eliminar documento generado
@@ -2711,33 +2815,57 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
   if (datosValidacion.edificacionCargada) tiposDDJJValidar.push('formulario_e1')
   armarHandlerBundle('form_declaraciones_juradas', tiposDDJJValidar, 'No se pudieron generar las declaraciones juradas.')
 
+  // Registro de cada form de subida por "comitenteId_lado" — permite reabrir el modal de
+  // recorte sobre una imagen YA SUBIDA (botón ✎ en la preview) y reusar el mismo form/submit
+  // que ya sabe armar el FormData y actualizar la preview, en vez de duplicar esa lógica.
+  const dniFormsPorClave = {}
+
   document.querySelectorAll('.dni-upload-form').forEach(function(form) {
     const fileInput  = form.querySelector('.dni-file-input')
     const fileName    = form.querySelector('.file-name')
     const submitBtn  = form.querySelector('.dni-submit-btn')
     const lado         = form.querySelector('input[name="lado"]').value
     const comitenteId = form.querySelector('input[name="comitente_id"]').value
-    const previewWrap = document.querySelector(
-      '.dni-preview-wrap[data-comitente-id="' + comitenteId + '"][data-lado="' + lado + '"]'
-    )
+    dniFormsPorClave[comitenteId + '_' + lado] = form
+    // Blob recortado/girado en el modal de ajuste (Fase 10) — si hay uno, se sube ESTE en vez
+    // del archivo original sin tocar. null hasta que el usuario confirma un recorte.
+    form._archivoEditado = null
 
     fileInput.addEventListener('change', function() {
       const f = fileInput.files[0]
+      form._archivoEditado = null
       fileName.textContent = f ? f.name : 'Sin archivo seleccionado'
       fileName.classList.toggle('has-file', !!f)
+      // El recorte/giro solo aplica a imágenes — un PDF sigue subiéndose tal cual, como antes.
+      const ext = f ? f.name.split('.').pop().toLowerCase() : ''
+      if (f && ['jpg','jpeg','png'].indexOf(ext) !== -1 && typeof abrirModalCrop === 'function') {
+        abrirModalCrop(f, form, fileInput, fileName)
+      }
     })
 
     form.addEventListener('submit', function(e) {
       e.preventDefault()
       const file = fileInput.files[0]
-      if (!file) return
+      if (!file && !form._archivoEditado) return
 
       submitBtn.disabled = true
       submitBtn.textContent = 'Subiendo...'
 
+      // No se puede reasignar fileInput.files con el Blob editado, así que el FormData se arma
+      // a mano (los campos ocultos + el archivo final) en vez de `new FormData(form)`.
+      const fd = new FormData()
+      fd.append('comitente_id', comitenteId)
+      fd.append('expediente_id', form.querySelector('input[name="expediente_id"]').value)
+      fd.append('lado', lado)
+      if (form._archivoEditado) {
+        fd.append('archivo', form._archivoEditado, 'dni_editado.jpg')
+      } else {
+        fd.append('archivo', file)
+      }
+
       fetch(form.action, {
         method: 'POST',
-        body: new FormData(form),
+        body: fd,
         headers: { 'X-Requested-With': 'fetch' },
       })
         .then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data } }) })
@@ -2751,15 +2879,10 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
             alert(mensajes[result.data.warn] || 'No se pudo subir el archivo.')
             return
           }
-          const ext = file.name.split('.').pop().toLowerCase()
-          const url = '/api/documentos/descargar?path=' + result.data.path + '&t=' + Date.now()
-          const esImagen = ['jpg','jpeg','png'].indexOf(ext) !== -1
-          if (previewWrap) {
-            previewWrap.innerHTML = renderPreviewArchivo(url, lado, esImagen, comitenteId)
-          }
-          fileInput.value = ''
-          fileName.textContent = 'Sin archivo seleccionado'
-          fileName.classList.remove('has-file')
+          // El archivo ya quedó guardado en el servidor en este punto (la respuesta ok:true ya
+          // llegó) — se recarga la pestaña para que la preview (imagen + botones "✎"/"✕") quede
+          // exactamente como la arma el servidor, en vez de parchear el DOM a mano.
+          recargarTrasAccionDni()
         })
         .catch(function() {
           alert('No se pudo subir el archivo. Probá de nuevo.')
@@ -2770,6 +2893,198 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
         })
     })
   })
+
+  // ── Recorte/rotación de foto de DNI antes de subir ────────────────────
+  ;(function() {
+    const overlayCrop = document.getElementById('modal-overlay-crop')
+    const cropCanvas = document.getElementById('crop-canvas')
+    if (!overlayCrop || !cropCanvas) return
+    const cropCtx = cropCanvas.getContext('2d')
+    const btnRotarIzq = document.getElementById('crop-rotar-izq')
+    const btnRotarDer = document.getElementById('crop-rotar-der')
+    const btnCropCancelar = document.getElementById('crop-cancelar')
+    const btnCropConfirmar = document.getElementById('crop-confirmar')
+    const HANDLE = 12 // tamaño (px de pantalla) del cuadradito de cada esquina del recorte
+
+    let cropState = null // { img, rotation, scale, baseW, baseH, rect:{x,y,w,h}, form, fileInput, fileNameEl }
+
+    function canvasDims() {
+      const { rotation, baseW, baseH } = cropState
+      return (rotation % 180 === 0) ? { w: baseW, h: baseH } : { w: baseH, h: baseW }
+    }
+
+    function dibujarCrop() {
+      const { img, rotation, rect, baseW, baseH } = cropState
+      const { w: dispW, h: dispH } = canvasDims()
+      cropCanvas.width = dispW
+      cropCanvas.height = dispH
+      cropCtx.clearRect(0, 0, dispW, dispH)
+      cropCtx.save()
+      cropCtx.translate(dispW / 2, dispH / 2)
+      cropCtx.rotate((rotation * Math.PI) / 180)
+      cropCtx.drawImage(img, -baseW / 2, -baseH / 2, baseW, baseH)
+      cropCtx.restore()
+      // Oscurece todo y "recorta" un agujero nítido donde está el rectángulo elegido
+      cropCtx.fillStyle = 'rgba(0,0,0,0.55)'
+      cropCtx.fillRect(0, 0, dispW, dispH)
+      cropCtx.save()
+      cropCtx.beginPath()
+      cropCtx.rect(rect.x, rect.y, rect.w, rect.h)
+      cropCtx.clip()
+      cropCtx.translate(dispW / 2, dispH / 2)
+      cropCtx.rotate((rotation * Math.PI) / 180)
+      cropCtx.drawImage(img, -baseW / 2, -baseH / 2, baseW, baseH)
+      cropCtx.restore()
+      cropCtx.strokeStyle = '#fff'
+      cropCtx.lineWidth = 2
+      cropCtx.strokeRect(rect.x, rect.y, rect.w, rect.h)
+      ;[[rect.x, rect.y], [rect.x + rect.w, rect.y], [rect.x, rect.y + rect.h], [rect.x + rect.w, rect.y + rect.h]].forEach(function(p) {
+        cropCtx.fillStyle = '#fff'
+        cropCtx.fillRect(p[0] - HANDLE / 2, p[1] - HANDLE / 2, HANDLE, HANDLE)
+      })
+    }
+
+    window.abrirModalCrop = function(file, form, fileInput, fileNameEl, opts) {
+      const reader = new FileReader()
+      reader.onload = function(ev) {
+        const img = new Image()
+        img.onload = function() {
+          const maxDisp = 440
+          const scale = Math.min(maxDisp / img.width, maxDisp / img.height, 1)
+          const baseW = Math.round(img.width * scale)
+          const baseH = Math.round(img.height * scale)
+          cropState = {
+            img: img, rotation: 0, scale: scale, baseW: baseW, baseH: baseH,
+            rect: { x: 0, y: 0, w: baseW, h: baseH },
+            form: form, fileInput: fileInput, fileNameEl: fileNameEl,
+            // Al confirmar un recorte sobre una imagen YA SUBIDA (botón ✎), se sube sola sin
+            // esperar un click extra en "Subir" — en una selección de archivo nueva, en cambio,
+            // se sigue pidiendo confirmación explícita (comportamiento sin cambios).
+            autoSubmit: !!(opts && opts.autoSubmit),
+          }
+          overlayCrop.hidden = false
+          dibujarCrop()
+        }
+        img.src = ev.target.result
+      }
+      reader.readAsDataURL(file)
+    }
+
+    function rotar(delta) {
+      if (!cropState) return
+      cropState.rotation = (cropState.rotation + delta + 360) % 360
+      const { w, h } = canvasDims()
+      cropState.rect = { x: 0, y: 0, w: w, h: h }
+      dibujarCrop()
+    }
+    if (btnRotarIzq) btnRotarIzq.addEventListener('click', function() { rotar(-90) })
+    if (btnRotarDer) btnRotarDer.addEventListener('click', function() { rotar(90) })
+
+    function posEnCanvas(e) {
+      const r = cropCanvas.getBoundingClientRect()
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY
+      // El canvas puede estar escalado por CSS (max-width:100%) — se corrige a coordenadas reales.
+      const escalaX = cropCanvas.width / r.width
+      const escalaY = cropCanvas.height / r.height
+      return { x: (clientX - r.left) * escalaX, y: (clientY - r.top) * escalaY }
+    }
+    function detectarHandle(p) {
+      const rect = cropState.rect
+      const esquinas = {
+        nw: [rect.x, rect.y], ne: [rect.x + rect.w, rect.y],
+        sw: [rect.x, rect.y + rect.h], se: [rect.x + rect.w, rect.y + rect.h],
+      }
+      for (const key in esquinas) {
+        const hx = esquinas[key][0], hy = esquinas[key][1]
+        if (Math.abs(p.x - hx) <= HANDLE && Math.abs(p.y - hy) <= HANDLE) return key
+      }
+      if (p.x >= rect.x && p.x <= rect.x + rect.w && p.y >= rect.y && p.y <= rect.y + rect.h) return 'mover'
+      return null
+    }
+
+    let arrastre = null
+    let inicioArrastre = null
+    function empezarArrastre(e) {
+      if (!cropState) return
+      const p = posEnCanvas(e)
+      arrastre = detectarHandle(p)
+      if (arrastre) { inicioArrastre = { p: p, rect: Object.assign({}, cropState.rect) }; e.preventDefault() }
+    }
+    function moverArrastre(e) {
+      if (!arrastre || !cropState) return
+      const p = posEnCanvas(e)
+      const dx = p.x - inicioArrastre.p.x
+      const dy = p.y - inicioArrastre.p.y
+      const r0 = inicioArrastre.rect
+      const dims = canvasDims()
+      let x = r0.x, y = r0.y, w = r0.w, h = r0.h
+      if (arrastre === 'mover') { x = r0.x + dx; y = r0.y + dy }
+      else if (arrastre === 'se') { w = r0.w + dx; h = r0.h + dy }
+      else if (arrastre === 'sw') { x = r0.x + dx; w = r0.w - dx; h = r0.h + dy }
+      else if (arrastre === 'ne') { y = r0.y + dy; w = r0.w + dx; h = r0.h - dy }
+      else if (arrastre === 'nw') { x = r0.x + dx; y = r0.y + dy; w = r0.w - dx; h = r0.h - dy }
+      w = Math.max(24, w)
+      h = Math.max(24, h)
+      x = Math.max(0, Math.min(x, dims.w - w))
+      y = Math.max(0, Math.min(y, dims.h - h))
+      cropState.rect = { x: x, y: y, w: w, h: h }
+      dibujarCrop()
+    }
+    function terminarArrastre() { arrastre = null }
+
+    cropCanvas.addEventListener('mousedown', empezarArrastre)
+    window.addEventListener('mousemove', moverArrastre)
+    window.addEventListener('mouseup', terminarArrastre)
+    cropCanvas.addEventListener('touchstart', empezarArrastre, { passive: false })
+    window.addEventListener('touchmove', moverArrastre, { passive: true })
+    window.addEventListener('touchend', terminarArrastre)
+
+    function cerrarModalCrop() {
+      overlayCrop.hidden = true
+      cropState = null
+    }
+    if (btnCropCancelar) btnCropCancelar.addEventListener('click', function() {
+      if (cropState) {
+        cropState.fileInput.value = ''
+        cropState.fileNameEl.textContent = 'Sin archivo seleccionado'
+        cropState.fileNameEl.classList.remove('has-file')
+      }
+      cerrarModalCrop()
+    })
+    overlayCrop.addEventListener('click', function(e) { if (e.target === overlayCrop) cerrarModalCrop() })
+
+    if (btnCropConfirmar) btnCropConfirmar.addEventListener('click', function() {
+      if (!cropState) return
+      const img = cropState.img, rotation = cropState.rotation, rect = cropState.rect, scale = cropState.scale
+      // De coordenadas de pantalla (recuadro elegido) a píxeles reales de la imagen rotada.
+      const realRect = { x: rect.x / scale, y: rect.y / scale, w: rect.w / scale, h: rect.h / scale }
+      const rotRealW = (rotation % 180 === 0) ? img.width : img.height
+      const rotRealH = (rotation % 180 === 0) ? img.height : img.width
+      const out = document.createElement('canvas')
+      out.width = Math.max(1, Math.round(realRect.w))
+      out.height = Math.max(1, Math.round(realRect.h))
+      const outCtx = out.getContext('2d')
+      outCtx.save()
+      outCtx.translate(-realRect.x, -realRect.y)
+      outCtx.translate(rotRealW / 2, rotRealH / 2)
+      outCtx.rotate((rotation * Math.PI) / 180)
+      outCtx.drawImage(img, -img.width / 2, -img.height / 2)
+      outCtx.restore()
+      out.toBlob(function(blob) {
+        const formDestino = cropState.form
+        const autoSubmit = cropState.autoSubmit
+        formDestino._archivoEditado = blob
+        cropState.fileNameEl.textContent = 'Imagen ajustada, lista para subir'
+        cropState.fileNameEl.classList.add('has-file')
+        cerrarModalCrop()
+        if (autoSubmit) {
+          if (formDestino.requestSubmit) formDestino.requestSubmit()
+          else formDestino.dispatchEvent(new Event('submit', { cancelable: true }))
+        }
+      }, 'image/jpeg', 0.9)
+    })
+  })()
 </script>
 
 <style>
@@ -2830,10 +3145,20 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
 }
 .input-file { font-size:0.8rem; color:var(--color-text-secondary); max-width:180px; }
 .poligono-card { border:1px solid var(--color-border); border-radius:var(--radius-md); padding:1rem 1.125rem; margin-bottom:1.25rem; background:var(--color-bg); }
-.poligono-card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem; }
-.poligono-card-label { font-weight:700; font-size:0.95rem; color:var(--color-primary); }
-.lados-header { display:grid; grid-template-columns:48px 1fr 1fr; gap:0.5rem; padding:0.25rem 0; font-size:0.75rem; font-weight:600; color:var(--color-text-secondary); text-transform:uppercase; letter-spacing:0.04em; }
-.lado-fila { display:grid; grid-template-columns:48px 1fr 1fr; gap:0.5rem; margin-bottom:0.5rem; align-items:center; }
+/* .poligono-card ahora es un <details> (Franco pidió poder colapsar cada parcela para no
+   tener un scroll larguísimo con varias cargadas) — .poligono-card-header es el <summary>,
+   se le saca el marcador nativo del navegador y se reemplaza por una flechita propia que
+   rota al abrir/cerrar. */
+.poligono-card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem; cursor:pointer; list-style:none; }
+.poligono-card-header::-webkit-details-marker { display:none; }
+.poligono-card-label { font-weight:700; font-size:0.95rem; color:var(--color-primary); display:inline-flex; align-items:center; gap:0.45rem; }
+.poligono-card-label::before {
+  content:'▸'; display:inline-block; font-size:0.8em; color:var(--color-text-secondary);
+  transition:transform 0.15s;
+}
+details[open] > .poligono-card-header .poligono-card-label::before { transform:rotate(90deg); }
+.lados-header { display:grid; grid-template-columns:48px 1fr 1fr 110px; gap:0.5rem; padding:0.25rem 0; font-size:0.75rem; font-weight:600; color:var(--color-text-secondary); text-transform:uppercase; letter-spacing:0.04em; }
+.lado-fila { display:grid; grid-template-columns:48px 1fr 1fr 110px; gap:0.5rem; margin-bottom:0.5rem; align-items:center; }
 .lado-num { font-weight:700; color:var(--color-primary); font-size:0.875rem; }
 .lados-suma { font-size:0.875rem; font-weight:600; color:var(--color-primary); margin-top:0.5rem; padding:0.5rem 0.75rem; background:var(--color-bg); border-radius:var(--radius-sm); display:inline-block; }
 .visor-angulos { background:var(--color-surface); border:1px solid var(--color-border); border-radius:var(--radius-md); padding:0.875rem 1.125rem; box-shadow:0 1px 4px rgba(27,46,94,.07); }
@@ -2858,10 +3183,20 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
   width:22px; height:22px; border-radius:50%; border:none;
   background:rgba(15,23,42,0.55); color:#fff; font-size:0.7rem; line-height:1;
   display:flex; align-items:center; justify-content:center; cursor:pointer;
-  opacity:0; transition:opacity 0.15s ease, background 0.15s ease;
+  /* Antes solo visible al hacer :hover sobre la preview — en touch (sin hover) o cuando el
+     mouse queda sobre el botón "Subir" (bien debajo de la miniatura) tras una subida, el botón
+     quedaba invisible y parecía "no aparecer" hasta recargar la página. Siempre visible ahora. */
+  opacity:0.85; transition:opacity 0.15s ease, background 0.15s ease;
 }
-.dni-preview-inner:hover .dni-remove-btn { opacity:1; }
-.dni-remove-btn:hover { background:rgba(220,38,38,0.85); }
+.dni-remove-btn:hover { opacity:1; background:rgba(220,38,38,0.85); }
+.dni-edit-btn {
+  position:absolute; top:5px; right:31px; z-index:2;
+  width:22px; height:22px; border-radius:50%; border:none;
+  background:rgba(15,23,42,0.55); color:#fff; font-size:0.7rem; line-height:1;
+  display:flex; align-items:center; justify-content:center; cursor:pointer;
+  opacity:0.85; transition:opacity 0.15s ease, background 0.15s ease;
+}
+.dni-edit-btn:hover { opacity:1; background:rgba(27,46,94,0.9); }
 .file-btn {
   display:inline-flex; align-items:center; gap:0.4rem; width:fit-content;
   padding:0.4rem 0.7rem; background:var(--color-surface); border:1px solid var(--color-border);
@@ -2916,6 +3251,11 @@ tr[data-doc-row] { transition: background-color 1.6s ease, opacity 0.3s ease; }
   border-radius:var(--radius-sm); padding:0.6rem 0.75rem; margin-bottom:1.25rem;
 }
 .modal-actions { display:flex; justify-content:flex-end; gap:0.6rem; }
+
+/* Modal de recorte/rotación de foto de DNI */
+.modal-card-crop { max-width:560px; width:92vw; }
+.crop-canvas-wrap { display:flex; align-items:center; justify-content:center; background:#111; border-radius:var(--radius-sm); overflow:hidden; }
+#crop-canvas { max-width:100%; touch-action:none; cursor:move; }
 
 /* Modal de vista previa de PDF — mismo overlay que los de confirmación, pero mucho más grande */
 .modal-card-pdf {

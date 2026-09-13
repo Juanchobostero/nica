@@ -118,6 +118,7 @@ label { font-size: 0.875rem; font-weight: 500; color: var(--color-text); }
 }
 .badge-borrador  { background: #E2E8F0; color: #64748B; }
 .badge-en_proceso { background: #FEF3C7; color: #92400E; }
+.badge-observado { background: #EDE9FE; color: #5B21B6; }
 .badge-finalizado { background: #D1FAE5; color: #065F46; }
 
 /* ── Tabla ── */

@@ -1,6 +1,7 @@
 ---
 import AppLayout from '../../layouts/AppLayout.astro'
 import { supabase, getSupabase } from '../../lib/supabase'
+import { AREAS_CATASTRO } from '../../lib/areaCatastro'
 
 const token = Astro.cookies.get('sb-access-token')?.value ?? ''
 const { data: { user } } = await supabase.auth.getUser(token)
@@ -12,11 +13,24 @@ const db = getSupabase(token)
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData()
-  if (form.get('_action') === 'eliminar_expediente') {
+  const action = form.get('_action')
+
+  if (action === 'eliminar_expediente') {
     const expId = form.get('expediente_id') as string
     await db.from('expedientes')
       .update({ eliminado_at: new Date().toISOString() })
       .eq('id', expId).eq('user_id', uid)
+  }
+
+  if (action === 'actualizar_datos_dgc') {
+    // Mismo caso que en dashboard.astro (donde se agregó primero) — acá porque el Dashboard
+    // solo lista los últimos 5 expedientes, y un expediente más viejo que recién ahora consigue
+    // número de la Dirección de Catastro no tenía forma de cargarlo.
+    const expId = form.get('expediente_id') as string
+    await db.from('expedientes').update({
+      numero_expediente: form.get('numero_expediente') || null,
+      area_catastro: form.get('area_catastro') || null,
+    }).eq('id', expId).eq('user_id', uid)
   }
 }
 
@@ -26,7 +40,7 @@ const busqueda = Astro.url.searchParams.get('q') ?? ''
 let query = db
   .from('expedientes')
   .select(`
-    id, numero_expediente, tipo_mensura, estado, fecha_inicio,
+    id, numero_expediente, tipo_mensura, estado, fecha_inicio, area_catastro,
     exp_comitentes ( orden, comitentes ( nombre, apellido ) )
   `)
   .eq('user_id', uid)
@@ -64,7 +78,7 @@ function comitentePrincipal(exp: any): string {
         style="max-width:280px"
       />
       <select class="input" name="estado" style="max-width:180px">
-        {['todos','borrador','en_proceso','finalizado'].map(e => (
+        {['todos','borrador','en_proceso','observado','finalizado'].map(e => (
           <option value={e} selected={estado === e}>
             {e === 'todos' ? 'Todos los estados' : e.replace('_', ' ')}
           </option>
@@ -101,10 +115,16 @@ function comitentePrincipal(exp: any): string {
           {(expedientes ?? []).map(exp => (
             <tr>
               <td>
-                {exp.numero_expediente
-                  ? <strong>{exp.numero_expediente}</strong>
-                  : <span style="color:var(--color-text-secondary);font-style:italic">{comitentePrincipal(exp) !== '—' ? comitentePrincipal(exp) : 'Sin número'}</span>
-                }
+                <button type="button" class="btn-editar-dgc-trigger celda-numero-exp"
+                  title="Click para cargar/editar Nº Expediente y Área de Catastro"
+                  data-id={exp.id}
+                  data-numero={exp.numero_expediente ?? ''}
+                  data-area={(exp as any).area_catastro ?? ''}>
+                  {exp.numero_expediente
+                    ? <strong>{exp.numero_expediente}</strong>
+                    : <span style="color:var(--color-text-secondary);font-style:italic">{comitentePrincipal(exp) !== '—' ? comitentePrincipal(exp) : 'Sin número'}</span>
+                  }
+                </button>
               </td>
               <td>{exp.tipo_mensura ?? '—'}</td>
               <td>{comitentePrincipal(exp)}</td>
@@ -116,6 +136,12 @@ function comitentePrincipal(exp: any): string {
               <td>{exp.fecha_inicio ? new Date(exp.fecha_inicio).toLocaleDateString('es-AR') : '—'}</td>
               <td style="display:flex;gap:0.5rem">
                 <a href={`/expedientes/${exp.id}`} class="btn btn-secondary btn-sm">Ver / Editar</a>
+                <button type="button" class="btn btn-secondary btn-sm btn-editar-dgc-trigger"
+                  data-id={exp.id}
+                  data-numero={exp.numero_expediente ?? ''}
+                  data-area={(exp as any).area_catastro ?? ''}>
+                  Nº Exp. / Catastro
+                </button>
                 <form method="POST" class="form-eliminar-expediente" style="display:inline"
                   data-numero={exp.numero_expediente || ''}
                   data-comitente={comitentePrincipal(exp)}
@@ -159,6 +185,34 @@ function comitentePrincipal(exp: any): string {
       </div>
     </div>
   </div>
+
+  <div id="modal-overlay-dgc" class="modal-overlay" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-dgc-title">
+      <h3 id="modal-dgc-title">Nº Expediente / Área de Catastro</h3>
+      <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:0.75rem">
+        Se cargan acá porque al iniciar la mensura todavía no existen ante la Dirección de Catastro.
+      </p>
+      <form method="POST" id="form-editar-dgc">
+        <input type="hidden" name="_action" value="actualizar_datos_dgc" />
+        <input type="hidden" name="expediente_id" id="dgc_expediente_id" />
+        <div class="field">
+          <label>Nº Expediente</label>
+          <input class="input" name="numero_expediente" id="dgc_numero_expediente" />
+        </div>
+        <div class="field">
+          <label>Área de Catastro</label>
+          <select class="input" name="area_catastro" id="dgc_area_catastro">
+            <option value="">Seleccionar...</option>
+            {AREAS_CATASTRO.map(a => <option value={a.value}>{a.label}</option>)}
+          </select>
+        </div>
+        <div class="modal-actions" style="margin-top:1rem">
+          <button type="button" class="btn btn-secondary" id="modal-dgc-cancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
 </AppLayout>
 
 <script>
@@ -197,12 +251,40 @@ function comitentePrincipal(exp: any): string {
   btnConfirm.addEventListener('click', function() {
     if (formPendiente) formPendiente.submit()
   })
+
+  // ── Modal Nº Expediente / Área de Catastro ───────────────────────
+  const overlayDgc = document.getElementById('modal-overlay-dgc')
+  const btnDgcCancel = document.getElementById('modal-dgc-cancel')
+  const inputDgcId = document.getElementById('dgc_expediente_id')
+  const inputDgcNumero = document.getElementById('dgc_numero_expediente')
+  const inputDgcArea = document.getElementById('dgc_area_catastro')
+
+  document.querySelectorAll('.btn-editar-dgc-trigger').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      inputDgcId.value = btn.dataset.id || ''
+      inputDgcNumero.value = btn.dataset.numero || ''
+      inputDgcArea.value = btn.dataset.area || ''
+      overlayDgc.hidden = false
+    })
+  })
+  function cerrarModalDgc() { overlayDgc.hidden = true }
+  if (btnDgcCancel) btnDgcCancel.addEventListener('click', cerrarModalDgc)
+  overlayDgc.addEventListener('click', function(e) { if (e.target === overlayDgc) cerrarModalDgc() })
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !overlayDgc.hidden) cerrarModalDgc() })
 </script>
 
 <style>
 .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
 .page-header h2 { font-size:1.5rem; }
 .filters { display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; }
+/* Nº Expediente ahora también abre el modal de Nº Exp./Catastro con un click directo en la
+   celda (antes solo se podía desde el botón "Nº Exp. / Catastro" en Acciones) — se ve como
+   el texto de siempre, no como un botón, para no cambiar el aspecto de la tabla. */
+.celda-numero-exp {
+  background:none; border:none; padding:0; margin:0; font:inherit; text-align:left;
+  cursor:pointer; color:inherit; display:block; width:100%;
+}
+.celda-numero-exp:hover strong, .celda-numero-exp:hover span { text-decoration:underline; }
 
 .modal-overlay {
   position:fixed; inset:0; background:rgba(15,23,42,0.5);

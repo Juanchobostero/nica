@@ -82,7 +82,7 @@ create table if not exists expedientes (
   user_id             uuid references auth.users(id) on delete cascade not null,
   numero_expediente   text,
   tipo_mensura        text,
-  estado              text default 'borrador' check (estado in ('borrador','en_proceso','finalizado')),
+  estado              text default 'borrador' check (estado in ('borrador','en_proceso','observado','finalizado')),
   fecha_inicio        date,
   hora_mensura        text,
   fecha_cierre        date,
@@ -233,7 +233,10 @@ create table if not exists poligono (
   cantidad_angulos    int default 0,
   -- false (default): superficie_m2 se recalcula solo a partir de lados/ángulos (fórmula de Gauss).
   -- true: el agrimensor forzó un valor manual y no se pisa con el cálculo automático.
-  superficie_manual   boolean default false
+  superficie_manual   boolean default false,
+  -- Nombre custom de la parcela (ej. "Unidad funcional 3" en edificios) — si está vacío se
+  -- sigue mostrando la designación automática ("Parcela N"/"Parcelas N a M").
+  nombre              text
 );
 
 alter table poligono enable row level security;
@@ -261,7 +264,10 @@ create table if not exists lados (
   orden           int not null,
   valor_m         numeric(10,4),
   valor_letras    text,
-  rumbo           text
+  rumbo           text,
+  -- Designación manual del lado (ej. "L1-B", "Lado Norte") — los lados no siempre van en orden
+  -- correlativo (1-2, 2-3...); si está vacía se sigue usando la designación automática por `orden`.
+  etiqueta        text
 );
 
 alter table lados enable row level security;
@@ -292,7 +298,9 @@ create table if not exists angulos (
   grados          int,
   minutos         int,
   segundos        numeric(5,2),
-  valor_letras    text
+  valor_letras    text,
+  -- Designación manual del ángulo — mismo criterio que `lados.etiqueta`.
+  etiqueta        text
 );
 
 alter table angulos enable row level security;
