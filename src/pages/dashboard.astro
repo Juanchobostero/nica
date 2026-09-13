@@ -1,9 +1,9 @@
 ---
 import AppLayout from '../layouts/AppLayout.astro'
-import { supabase, getSupabase } from '../lib/supabase'
+import { getSupabaseAnon, getSupabase } from '../lib/supabase'
 
 const token = Astro.cookies.get('sb-access-token')?.value ?? ''
-const { data: { user } } = await supabase.auth.getUser(token)
+const { data: { user } } = await getSupabaseAnon().auth.getUser(token)
 // Token vencido -> user:null sin error; sin este chequeo la página quedaba "vacía" en vez de
 // mandar a loguearse de nuevo (ver perfil.astro para el detalle del bug).
 if (!user) return Astro.redirect('/login')

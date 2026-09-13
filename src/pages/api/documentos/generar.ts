@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro'
-import { supabase, getSupabase } from '../../../lib/supabase'
+import { getSupabaseAnon, getSupabase } from '../../../lib/supabase'
 import { calcularPoligonal, calcularTolerancia } from '../../../lib/poligonal'
 import { CATEGORIAS_E1, INCISOS_E1, DESTINOS_E1 } from '../../../lib/edificacionE1'
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type PDFImage } from 'pdf-lib'
@@ -530,7 +530,7 @@ function valorLindero(linderos: any, lado: 'norte' | 'sur' | 'este' | 'oeste'): 
 export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const isAjax = request.headers.get('X-Requested-With') === 'fetch'
   const token = cookies.get('sb-access-token')?.value ?? ''
-  const { data: { user } } = await supabase.auth.getUser(token)
+  const { data: { user } } = await getSupabaseAnon().auth.getUser(token)
   // Antes esto redirigía (302) incluso cuando la llamada venía del fetch/AJAX del modal de
   // "generar expediente completo" — el cliente hace fetch(...).then(res => res.json()), pero
   // fetch sigue el redirect a /login y el .json() sobre el HTML de esa página falla, mostrando

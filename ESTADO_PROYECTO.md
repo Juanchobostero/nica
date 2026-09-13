@@ -78,6 +78,7 @@
 
 ---
 
+<<<<<<< HEAD
 ## 📋 Cambios de la sesión — 12 Septiembre 2026 (v0.22) — Roadmap 2
 
 Franco mandó una nueva tanda de pedidos (12 chicos/medianos + un pedido grande: pasar las DDJJ — Formulario U/SOR/E1 — a formularios PDF rellenables reales en vez de calcular coordenadas para centrar cada valor). Se armó un roadmap de 7 fases nuevas (Fase 6 a 12, continuando la numeración del roadmap anterior) — plan completo guardado en el plan de la sesión.
@@ -234,6 +235,21 @@ Pedido: reemplazar el ícono de texto "⊙ NICA" del sidebar (`src/components/si
 
 ### Verificado
 `astro build` sin errores de tipo. Renderizado y capturado con Playwright (import aislado del componente `Sidebar.astro` fuera del flujo de auth, ya que requiere estar logueado) en dos anchos de viewport para confirmar que el subtítulo no queda cortado y que el conjunto se ve prolijo — visto y ajustado (tamaño de fuente del subtítulo) hasta que quedó bien. Pendiente: confirmación visual del usuario en la app real.
+=======
+## 🐛 Bug crítico — 19 Agosto 2026 (v0.22) — Login se quedaba colgado indefinidamente
+
+Juan reportó que `/login` se quedaba cargando para siempre (el request nunca devolvía status code, ni en incógnito). En los logs de Auth de Supabase aparecían llamadas repetidas a `GET /user` devolviendo 403 "Token has invalid claims: token is expired" cada 6-10 segundos. Las keys, la config de expiración de sesión y los timeouts de Supabase ya estaban descartados como causa.
+
+**Causa real:** `src/lib/supabase.ts` exporta un cliente único a nivel de módulo (`export const supabase = createClient(...)`), reusado por `login.astro` (`signInWithPassword`) y por las 9 páginas/endpoints protegidos (`supabase.auth.getUser(token)`). El SDK de `@supabase/supabase-js` trae por defecto `autoRefreshToken: true` y `persistSession: true` — pensado para un cliente de un solo usuario en un browser. Al reusarse ese mismo cliente en el servidor entre requests de usuarios distintos: cada login exitoso dejaba la sesión de ese usuario guardada adentro del cliente compartido y arrancaba un timer de auto-refresh en segundo plano que nunca se apagaba (el cliente nunca se destruye, vive mientras el proceso/función serverless esté caliente). Ese timer terminaba reintentando refrescar un token ya vencido en loop — los 403 repetidos de los logs — y como el SDK serializa las operaciones de auth con un lock interno, un login nuevo podía quedarse esperando ese lock para siempre: el request colgado.
+
+**Primer arreglo (insuficiente):** `auth: { autoRefreshToken: false, persistSession: false }` en los dos clientes de `supabase.ts`. Necesario pero no alcanzaba — Juan confirmó el deploy en Vercel (Ready, Production, commit correcto) y el login seguía mal: no colgado infinito, pero tardaba 30-90 segundos entre el POST exitoso a `/login` (302, confirmado en los logs de Vercel) y que `/dashboard` terminara de cargar, y después de un rato volvía a mandar a `/login` solo.
+
+**Causa real completa:** apagar `autoRefreshToken`/`persistSession` frena que el cliente arranque timers nuevos, pero no cambia que siga siendo **un solo cliente compartido a nivel de módulo**. El SDK sigue serializando con un lock interno las operaciones de auth (`getUser`, `signInWithPassword`) hechas sobre un mismo cliente — con varios requests (usuarios, pestañas, reintentos) pegándole al mismo singleton en el servidor, cada operación se ponía en fila detrás de la anterior en vez de correr en paralelo. Nunca era un deadlock infinito (por eso el POST sí terminaba devolviendo 302), pero la cola podía tardar casi un minuto y medio bajo uso concurrente — y como `dashboard.astro` valida el token en cada carga con ese mismo cliente compartido, una validación lenta/atascada en la cola podía hacer que `getUser()` tardara tanto que el usuario terminaba recargando o navegando de nuevo, cayendo otra vez en `/login`.
+
+**Arreglo de fondo:** se sacó el `export const supabase = createClient(...)` de `supabase.ts` — ya no existe un cliente compartido. En su lugar, `getSupabaseAnon()` crea un cliente nuevo por llamada (mismo criterio que ya usaba `getSupabase(accessToken)` para el cliente autenticado con RLS). Se actualizaron los 12 archivos que importaban el singleton viejo (`login.astro` y las 9 páginas/endpoints protegidos que hacen `getUser(token)`) para llamar a `getSupabaseAnon()` en vez de usar un cliente importado — cada request queda completamente aislado, sin ningún lock ni estado compartido con otros requests.
+
+**Verificado:** `astro build` sin errores. Diagnosticado con los logs de Vercel (`/login` en Runtime Logs mostrando el 302 real vs. cuándo cargaba `/dashboard` — la brecha de tiempo fue la pista clave) además de los logs de Auth de Supabase. **Pendiente de que Juan confirme en producción** que ahora sí es instantáneo y no vuelve a expulsar a `/login`.
+>>>>>>> 67743d33b9a31d5dc42ca47c6ca1448cd4f5b01f
 
 ---
 

@@ -1,10 +1,14 @@
 ---
 import AppLayout from '../../layouts/AppLayout.astro'
+<<<<<<< HEAD
 import { supabase, getSupabase } from '../../lib/supabase'
 import { AREAS_CATASTRO } from '../../lib/areaCatastro'
+=======
+import { getSupabaseAnon, getSupabase } from '../../lib/supabase'
+>>>>>>> 67743d33b9a31d5dc42ca47c6ca1448cd4f5b01f
 
 const token = Astro.cookies.get('sb-access-token')?.value ?? ''
-const { data: { user } } = await supabase.auth.getUser(token)
+const { data: { user } } = await getSupabaseAnon().auth.getUser(token)
 // Token vencido -> user:null sin error; sin este chequeo la página quedaba "vacía" en vez de
 // mandar a loguearse de nuevo (ver perfil.astro para el detalle del bug).
 if (!user) return Astro.redirect('/login')
