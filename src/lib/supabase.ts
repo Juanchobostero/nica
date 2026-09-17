@@ -29,3 +29,14 @@ export function getSupabase(accessToken: string) {
     },
   })
 }
+
+// Cliente con la service role key — SOLO se usa en el módulo de administración (`/admin`), para
+// las operaciones de `auth.admin.*` (crear/listar/banear usuarios) que la anon key no puede hacer.
+// La key vive en `SUPABASE_SERVICE_ROLE_KEY` (sin prefijo PUBLIC_, nunca llega al cliente) — cada
+// llamada crea su propio cliente, mismo criterio que los de arriba, sin nada compartido entre requests.
+export function getSupabaseAdmin() {
+  const SERVICE_ROLE_KEY = import.meta.env.SUPABASE_SERVICE_ROLE_KEY
+  return createClient(URL, SERVICE_ROLE_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  })
+}

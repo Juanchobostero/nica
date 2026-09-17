@@ -1,9 +1,26 @@
 ---
+import { getSupabase } from '../../lib/supabase'
+
+// Solo se muestra el link a quien sea admin — la protección real ya vive en /admin (redirige a
+// quien no tenga `is_admin`), esto es solo para no confundir a un usuario común con un link que
+// lo manda de vuelta al Dashboard apenas lo toca.
+// No hace falta `auth.getUser()` acá: la política RLS de `profiles` ("Usuario ve su propio
+// perfil", `using (auth.uid() = id)`) ya filtra la consulta a la fila del dueño del token —
+// con un token vencido o ausente, `getSupabase('')` simplemente no devuelve fila y queda en
+// `false`, sin necesidad de otra verificación completa de auth acá (ya la hace la página).
+const token = Astro.cookies.get('sb-access-token')?.value ?? ''
+let esAdmin = false
+if (token) {
+  const { data: miPerfil } = await getSupabase(token).from('profiles').select('is_admin').maybeSingle()
+  esAdmin = !!miPerfil?.is_admin
+}
+
 const nav = [
   { href: '/dashboard',   label: 'Dashboard',    icon: '⊞' },
   { href: '/expedientes', label: 'Expedientes',  icon: '📁' },
   { href: '/comitentes',  label: 'Comitentes',   icon: '👥' },
   { href: '/perfil',      label: 'Perfil',       icon: '👤' },
+  ...(esAdmin ? [{ href: '/admin', label: 'Administración', icon: '🛠️' }] : []),
 ]
 const current = Astro.url.pathname
 ---

@@ -14,6 +14,7 @@ create table if not exists profiles (
   telefono            text,
   email               text,
   domicilio           text,
+  is_admin            boolean default false, -- para entrar a /admin (crear/administrar usuarios)
   created_at          timestamptz default now()
 );
 
@@ -214,6 +215,76 @@ create policy "Inmuebles: acceso via expediente propio"
     exists (
       select 1 from expedientes e
       where e.id = inmuebles.expediente_id and e.user_id = auth.uid()
+    )
+  );
+
+
+-- ── inmueble_inscripciones_extra ───────────────────────────
+-- Un inmueble puede abarcar más de una parcela originalmente inscripta por separado (unión de
+-- parcelas) — cada una con su propia inscripción en el Registro de la Propiedad y, de la mano,
+-- su propia inscripción municipal si la tiene. La PRIMERA inscripción sigue viviendo en las
+-- columnas de `inmuebles` (matricula_registro/registro_tomo/.../matricula_municipal, sin
+-- cambios) — esta tabla es solo para las inscripciones ADICIONALES que el usuario agregue.
+create table if not exists inmueble_inscripciones_extra (
+  id                            uuid primary key default gen_random_uuid(),
+  inmueble_id                   uuid references inmuebles(id) on delete cascade not null,
+  orden                         int default 1,
+  tipo_inscripcion_registro     text default 'matricula' check (tipo_inscripcion_registro in ('matricula','tomo')),
+  matricula_registro            text,
+  registro_tomo                 text,
+  registro_folio                text,
+  registro_finca                text,
+  registro_anio                 text,
+  inscripcion_mayor_extension   boolean default false,
+  matricula_municipal           text
+);
+
+alter table inmueble_inscripciones_extra enable row level security;
+
+create policy "Inscripciones extra: acceso via inmueble → expediente propio"
+  on inmueble_inscripciones_extra for all
+  using (
+    exists (
+      select 1 from inmuebles i
+      join expedientes e on e.id = i.expediente_id
+      where i.id = inmueble_inscripciones_extra.inmueble_id and e.user_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from inmuebles i
+      join expedientes e on e.id = i.expediente_id
+      where i.id = inmueble_inscripciones_extra.inmueble_id and e.user_id = auth.uid()
+    )
+  );
+
+
+-- ── inmueble_partidas_extra ─────────────────────────────────
+-- Mismo criterio que `inmueble_inscripciones_extra`: la PRIMERA partida inmobiliaria sigue en
+-- `inmuebles.matricula_catastral` (sin cambios); esta tabla es solo para partidas adicionales.
+create table if not exists inmueble_partidas_extra (
+  id            uuid primary key default gen_random_uuid(),
+  inmueble_id   uuid references inmuebles(id) on delete cascade not null,
+  orden         int default 1,
+  matricula_catastral text not null
+);
+
+alter table inmueble_partidas_extra enable row level security;
+
+create policy "Partidas extra: acceso via inmueble → expediente propio"
+  on inmueble_partidas_extra for all
+  using (
+    exists (
+      select 1 from inmuebles i
+      join expedientes e on e.id = i.expediente_id
+      where i.id = inmueble_partidas_extra.inmueble_id and e.user_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from inmuebles i
+      join expedientes e on e.id = i.expediente_id
+      where i.id = inmueble_partidas_extra.inmueble_id and e.user_id = auth.uid()
     )
   );
 

@@ -2,7 +2,7 @@ import type { APIRoute } from 'astro'
 import { getSupabaseAnon, getSupabase } from '../../../lib/supabase'
 import { calcularPoligonal, calcularTolerancia } from '../../../lib/poligonal'
 import { CATEGORIAS_E1, INCISOS_E1, DESTINOS_E1 } from '../../../lib/edificacionE1'
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type PDFImage } from 'pdf-lib'
+import { PDFDocument, StandardFonts, rgb, degrees, type PDFFont, type PDFPage, type PDFImage } from 'pdf-lib'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -527,6 +527,377 @@ function valorLindero(linderos: any, lado: 'norte' | 'sur' | 'este' | 'oeste'): 
   return citacion ?? mensura ?? '—'
 }
 
+// ── Formulario SOR — página de dorso (Rubros 5/6/7 + declaración jurada) ──────
+// `formulario_sor.pdf` es de una sola página — al frente (Rubros 1-3) le falta esta segunda
+// página que sí tiene el formulario real (confirmado contra la hoja "SoR (D)" del Excel de
+// referencia de Franco). Los Rubros 5/6/7 son "Reservado para la Dirección" — nuestro sistema
+// nunca completa esos valores, así que acá solo se dibuja la GRILLA y las etiquetas impresas
+// del formulario (nunca los datos de ejemplo que Franco cargó en su Excel para mostrar dónde
+// va cada cosa — eso no se replica). La única parte con datos reales es la declaración jurada
+// de abajo, con el mismo criterio que ya corrigió Formulario U: declarante = comitente + rol.
+//
+// Coordenadas: recalculadas desde cero (14/9, segunda pasada) sumando el ANCHO REAL de cada
+// columna de la hoja "SoR (D)" del Excel (librería `xlsx`, script aparte, sin tocar el
+// proyecto: lee `ws['!cols'][i].wpx` columna por columna y acumula, en vez de estimar la
+// posición de cada grupo a ojo como en el primer calibrado) — coordenadas objetivas, no
+// aproximadas. Confirmó además una estructura que el primer calibrado no había capturado: cada
+// sub-columna tiene, además de su etiqueta de texto (fila 7-8), un NÚMERO clave propio (fila 10:
+// 1, 2, 3...) — así es como Catastro marca la grilla en el formulario real (tilda el número, no
+// la palabra) — y la fila "MONTE" (9) no es una franja fusionada como las filas 6-8: son 3
+// segmentos propios BUENO / REGULAR / MALO (merges reales R28:Y28, AA28:AK28, AM28:AT28).
+const SOR_DORSO_ESCALA_X = 532 / 1474
+const sorDorsoX = (excelX: number) => 40 + excelX * SOR_DORSO_ESCALA_X
+const sorDorsoYtop = (excelY: number) => 35 + excelY
+
+type SubRubro5 = { n?: number; label: string; x: number }
+// `titulo` es el texto completo (sin cortes manuales) — en el Excel real, la mayoría de estos
+// títulos están fusionados en 2 filas (AH4:AL4/AH5:AL5, AN4:AU4/AN5:AU5, y también W4:Z5,
+// AB4:AF5 como una sola celda de 2 filas con "ajustar texto") para entrar en columnas angostas;
+// el envoltorio a 1-2 líneas se calcula solo más abajo con `partirEnLineas`, en vez de cortar
+// manualmente solo 2 de los 7 (lo que dejaba a "ESPESOR DE CAPA ARABLE"/"COLOR DE LA TIERRA"
+// intentando entrar en una sola línea y desbordando sobre el título vecino).
+type GrupoRubro5 = { titulo: string; xIni: number; xFin: number; subs: SubRubro5[] }
+const RUBRO5_GRUPOS: GrupoRubro5[] = [
+  { titulo: 'RELIEVE', xIni: 424, xFin: 493, subs: [
+    { n: 1, label: 'LLANO', x: 424 }, { n: 2, label: 'ONDULADO', x: 447 }, { n: 3, label: 'MUY ONDULADO', x: 470 },
+  ] },
+  { titulo: 'ESPESOR DE CAPA ARABLE', xIni: 507, xFin: 599, subs: [
+    { n: 1, label: 'MAS DE 30 CM', x: 507 }, { n: 2, label: 'DE 29 A 20 CM', x: 530 }, { n: 3, label: 'DE 19 A 10 CM', x: 553 }, { n: 4, label: 'MENOS DE 10 CM', x: 576 },
+  ] },
+  { titulo: 'COLOR DE LA TIERRA', xIni: 613, xFin: 728, subs: [
+    { n: 1, label: 'NEGRO', x: 613 }, { n: 2, label: 'ROJIZO OSCURO', x: 636 }, { n: 3, label: 'ROJIZO CLARO', x: 659 }, { n: 4, label: 'PARDO OSCURO', x: 682 }, { n: 5, label: 'PARDO CLARO', x: 705 },
+  ] },
+  { titulo: 'AGUA DEL SUBSUELO', xIni: 742, xFin: 857, subs: [
+    { n: 1, label: 'BUENAS HASTA 15 MTS', x: 742 }, { n: 2, label: 'BUENAS A MAS DE 15 MTS', x: 765 }, { n: 3, label: 'DEBILMENTE SALINA', x: 788 }, { n: 4, label: 'MEDIANAMENTE SALINA', x: 811 }, { n: 5, label: 'FUERTEMENTE SALINA', x: 834 },
+  ] },
+  { titulo: 'CAPACIDAD GANADERA (VACUNOS POR ha)', xIni: 871, xFin: 1055, subs: [
+    { n: 1, label: 'MAS DE 1 3/4', x: 871 }, { n: 2, label: '1 3/4', x: 894 }, { n: 3, label: '1 1/2', x: 917 }, { n: 4, label: '1 1/4', x: 940 }, { n: 5, label: '1', x: 963 }, { n: 6, label: '3/4', x: 986 }, { n: 7, label: '1/2', x: 1009 }, { n: 8, label: '1/4 O MENOS', x: 1032 },
+  ] },
+  { titulo: 'PUNTAJE', xIni: 1087, xFin: 1276, subs: [
+    { n: 1, label: 'SUBTOTAL', x: 1087 }, { n: 2, label: 'EMPLAZAMIENTO', x: 1147 }, { label: 'COEFICIENTE DE AJUSTE', x: 1207 },
+  ] },
+  { titulo: 'VALOR OPTIMO', xIni: 1290, xFin: 1474, subs: [] },
+]
+
+const APTITUDES_LABELS = [
+  'ALTA', 'MED-ALTA', 'BAJA', 'MUY BAJA', 'ANEGADIZA',
+  'AFLORAMIENTOS DE TOSCA Y/O PIEDRA', 'LAGUNAS Y OTROS ESPEJOS DE AGUA', 'CARRISALES',
+]
+// Fila 9 ("MONTE") no es franja fusionada de ancho completo como las filas 6-8: son 3
+// segmentos propios con su etiqueta cada uno.
+const MONTE_SEGMENTOS = [
+  { label: 'BUENO', xIni: 413, xFin: 576 },
+  { label: 'REGULAR', xIni: 599, xFin: 834 },
+  { label: 'MALO', xIni: 857, xFin: 1032 },
+]
+
+// Encoge un título de grupo hasta que entre en maxWidth envolviendo como máximo 2 líneas (mismo
+// límite que la fila 4+5 fusionada del Excel real) — si a un tamaño ninguna palabra suelta entra
+// ni envolviendo, sigue encogiendo; nunca deja una palabra desbordar sobre la columna vecina
+// (el problema que tenía encoger sin envolver: "ESPESOR DE CAPA ARABLE" nunca entraba en una
+// sola línea por más que se achicara, y terminaba pisando "COLOR DE LA TIERRA" al lado).
+function encogerYEnvolver(texto: string, maxWidth: number, sizeMax: number, fuente: PDFFont): { size: number; lineas: string[] } {
+  let size = sizeMax
+  while (size > 3.5) {
+    const lineas = partirEnLineas(texto, maxWidth, size, fuente)
+    const entraAncho = lineas.every(l => fuente.widthOfTextAtSize(l, size) <= maxWidth)
+    if (lineas.length <= 2 && entraAncho) return { size, lineas }
+    size -= 0.25
+  }
+  return { size, lineas: partirEnLineas(texto, maxWidth, size, fuente).slice(0, 2) }
+}
+
+// Encoge una etiqueta hasta que entre en maxWidth (piso 4pt) — mismo criterio que `campoSor` en
+// la página de frente del SOR, para columnas angostas con textos de largo variable.
+function encogerHastaEntrar(texto: string, maxWidth: number, sizeMax: number, fuente: PDFFont): number {
+  let size = sizeMax
+  while (size > 4 && fuente.widthOfTextAtSize(texto, size) > maxWidth) size -= 0.25
+  return size
+}
+
+function dibujarDorsoSor(pdfDoc: PDFDocument, font: PDFFont, bold: PDFFont, negro: any, comitentePrincipal: any, rolComitente: string) {
+  const p = pdfDoc.addPage([612, 1008])
+  const Y = (excelY: number) => 1008 - sorDorsoYtop(excelY)
+  const linea = (x1: number, y1: number, x2: number, y2: number) =>
+    p.drawLine({ start: { x: x1, y: y1 }, end: { x: x2, y: y2 }, thickness: 0.6, color: negro })
+  // Etiqueta de columna angosta, girada 90° (se lee de abajo hacia arriba) — mismo recurso que
+  // usan los formularios de Catastro reales para encabezados de columnas muy angostas: no entra
+  // horizontal sin superponerse con la columna vecina.
+  const textoVertical = (texto: string, xCentro: number, yBase: number, size: number) =>
+    p.drawText(texto, { x: xCentro, y: yBase, size, font, color: negro, rotate: degrees(90) })
+
+  p.drawText('RUBRO 5: CARACTERISTICAS', { x: sorDorsoX(0), y: Y(20), size: 8, font: bold, color: negro })
+  p.drawText('(Reservado para la Dirección)', { x: sorDorsoX(1087), y: Y(35), size: 6.5, font, color: negro })
+
+  // Encabezados de columna: ZONA / SUPERFICIE / ALTIMETRIA (izquierda) + los 7 grupos del Rubro 5.
+  // Los títulos de grupo van horizontales (encogidos a su propio ancho de columna, sin invadir la
+  // columna vecina); las sub-etiquetas (LLANO/ONDULADO/etc., mucho más angostas) van verticales —
+  // confirmado que así es en el Excel real también: esas sub-columnas miden ~8pt de ancho en esta
+  // escala de página, un texto de más de 4-5 caracteres no entra horizontal a ningún tamaño
+  // legible (se probó). Lo que el Excel SÍ resuelve distinto, y que acá faltaba: cada sub-columna
+  // tiene además un número clave (1, 2, 3...) justo debajo de la etiqueta — es lo que Catastro
+  // tilda en la fila de cada aptitud, no la palabra completa. Se agrega esa fila de números.
+  const IZQ_XINI = 0, IZQ_ZONA_INI = 79, IZQ_ZONA_FIN = 114, IZQ_SUP_INI = 128, IZQ_SUP_FIN = 335, IZQ_ALT_INI = 349, IZQ_ALT_FIN = 413
+  const yTituloGrupo = Y(52) // línea base del título dentro de la fila 4 (y=41, alto 15)
+  const yTituloGrupoLinea2 = Y(66) // 2ª línea del título, dentro de la fila 5 (y=56, alto 13.5) — solo grupos con 2 líneas
+  p.drawText('ZONA', { x: sorDorsoX(IZQ_ZONA_INI), y: yTituloGrupo, size: encogerHastaEntrar('ZONA', (IZQ_ZONA_FIN - IZQ_ZONA_INI) * SOR_DORSO_ESCALA_X - 2, 6, bold), font: bold, color: negro })
+  p.drawText('SUPERFICIE (ha-a-ca)', { x: sorDorsoX(IZQ_SUP_INI), y: yTituloGrupo, size: encogerHastaEntrar('SUPERFICIE (ha-a-ca)', (IZQ_SUP_FIN - IZQ_SUP_INI) * SOR_DORSO_ESCALA_X - 4, 6, bold), font: bold, color: negro })
+  const yBaseVerticalHeader = Y(184) // el texto vertical crece hacia arriba desde acá, hasta debajo del título de grupo
+  textoVertical('ALTIMETRIA', sorDorsoX((IZQ_ALT_INI + IZQ_ALT_FIN) / 2), yBaseVerticalHeader, 5.5)
+  // Un solo tamaño para los 7 títulos de grupo (el más chico que hace falta para que TODOS
+  // entren en su propia columna, envolviendo a 1-2 líneas si hace falta) — evita que un grupo
+  // quede visiblemente más chico que sus vecinos, y evita que alguno desborde sobre el vecino
+  // por no poder envolver (lo que pasaba antes con "ESPESOR DE CAPA ARABLE").
+  const sizeTituloGrupo = Math.min(
+    ...RUBRO5_GRUPOS.map(g => encogerYEnvolver(g.titulo, (g.xFin - g.xIni) * SOR_DORSO_ESCALA_X - 3, 6, bold).size),
+  )
+  RUBRO5_GRUPOS.forEach(g => {
+    const anchoCol = (g.xFin - g.xIni) * SOR_DORSO_ESCALA_X - 3
+    const lineasTitulo = partirEnLineas(g.titulo, anchoCol, sizeTituloGrupo, bold).slice(0, 2)
+    lineasTitulo.forEach((linea, li) => {
+      p.drawText(linea, { x: sorDorsoX(g.xIni) + 1, y: li === 0 ? yTituloGrupo : yTituloGrupoLinea2, size: sizeTituloGrupo, font: bold, color: negro })
+    })
+    g.subs.forEach((s, si) => {
+      const xSiguiente = g.subs[si + 1]?.x ?? g.xFin
+      const xCentroSub = sorDorsoX((s.x + xSiguiente) / 2)
+      textoVertical(s.label, xCentroSub, yBaseVerticalHeader, 4.5)
+      // Número clave (fila 10 del Excel real) — centrado bajo su propia sub-columna.
+      if (s.n != null) {
+        const numTexto = String(s.n)
+        const wNum = bold.widthOfTextAtSize(numTexto, 6)
+        p.drawText(numTexto, { x: xCentroSub - wNum / 2, y: Y(198), size: 6, font: bold, color: negro })
+      }
+    })
+  })
+
+  // Filas de aptitudes 1-9 — etiqueta de categoría ("AGRICOLAS GANADERAS" filas 1-5, "OTRAS
+  // APTITUDES" filas 6-9) girada 90° en la columna angosta de la izquierda, como en la
+  // plantilla real. SIN ningún valor/marca cargado — Reservado para la Dirección.
+  const FILA_ALTO = 18
+  const primeraFilaY = 216
+  const yFinFilas = primeraFilaY + (APTITUDES_LABELS.length + 1) * FILA_ALTO // +1: fila "MONTE" (9), aparte del array
+  p.drawText('APTITUDES', { x: sorDorsoX(2), y: Y(primeraFilaY - 4), size: 5.5, font: bold, color: negro })
+  // Cada etiqueta ancla cerca del borde INFERIOR de su propio rango de filas y crece hacia
+  // arriba (texto girado 90°) — así "AGRICOLAS GANADERAS" queda dentro de las filas 1-5 y "OTRAS
+  // APTITUDES" dentro de las filas 6-9, sin pisarse entre sí en el borde que las separa.
+  textoVertical('AGRICOLAS GANADERAS', sorDorsoX(36), Y(primeraFilaY + 5 * FILA_ALTO - 3), 5.5)
+  textoVertical('OTRAS APTITUDES', sorDorsoX(36), Y(yFinFilas - 3), 5.5)
+
+  const xGrillaIni = sorDorsoX(IZQ_XINI)
+  const xGrillaFin = sorDorsoX(1474)
+  linea(xGrillaIni, Y(41), xGrillaFin, Y(41)) // borde superior de la grilla
+  // Filas 6 a 8 ("Afloramientos"/"Lagunas"/"Carrisales"): en la hoja "SoR (D)" del Excel de
+  // referencia, son un renglón descriptivo simple (una sola franja de texto, merge Q:AU), no una
+  // grilla de casilleros columna por columna como las filas 1-5 — por eso van con más ancho
+  // disponible (arrancan en ALTIMETRIA) y sin líneas verticales cruzándolas por encima (más
+  // abajo). La fila 9 ("MONTE") es distinta a su vez: no es una franja única, son 3 segmentos
+  // propios BUENO / REGULAR / MALO (merges R28:Y28, AA28:AK28, AM28:AT28) — se dibuja aparte.
+  APTITUDES_LABELS.forEach((label, i) => {
+    const yFila = primeraFilaY + i * FILA_ALTO
+    const esFilaFusionada = i >= 5
+    p.drawText(String(i + 1), { x: sorDorsoX(IZQ_ZONA_INI) + 2, y: Y(yFila + 11), size: 6.5, font, color: negro })
+    p.drawText(label, { x: sorDorsoX(esFilaFusionada ? IZQ_SUP_FIN : IZQ_ALT_FIN), y: Y(yFila + 11), size: 5.5, font, color: negro })
+    linea(xGrillaIni, Y(yFila + FILA_ALTO), xGrillaFin, Y(yFila + FILA_ALTO))
+  })
+  const yFilaMonte = primeraFilaY + APTITUDES_LABELS.length * FILA_ALTO
+  p.drawText('9', { x: sorDorsoX(IZQ_ZONA_INI) + 2, y: Y(yFilaMonte + 11), size: 6.5, font, color: negro })
+  p.drawText('MONTE', { x: sorDorsoX(IZQ_SUP_FIN), y: Y(yFilaMonte + 11), size: 5.5, font, color: negro })
+  MONTE_SEGMENTOS.forEach(seg => {
+    const wLabel = font.widthOfTextAtSize(seg.label, 5.5)
+    const xCentro = sorDorsoX((seg.xIni + seg.xFin) / 2)
+    p.drawText(seg.label, { x: xCentro - wLabel / 2, y: Y(yFilaMonte + 11), size: 5.5, font, color: negro })
+    if (seg.xIni > IZQ_ALT_FIN) linea(sorDorsoX(seg.xIni), Y(yFilaMonte), sorDorsoX(seg.xIni), Y(yFilaMonte + FILA_ALTO))
+  })
+  linea(xGrillaIni, Y(yFilaMonte + FILA_ALTO), xGrillaFin, Y(yFilaMonte + FILA_ALTO))
+  // Línea divisoria entre la fila 5 y 6 (separa "AGRICOLAS GANADERAS" de "OTRAS APTITUDES")
+  linea(xGrillaIni, Y(primeraFilaY + 5 * FILA_ALTO), sorDorsoX(IZQ_ZONA_FIN), Y(primeraFilaY + 5 * FILA_ALTO))
+  // Líneas verticales: separadores izquierdos (Zona/Superficie/Altimetría) + cada grupo + cada
+  // sub-columna — todas cortan en `yLimiteGrid` (pie de la fila 5), no en el pie de toda la
+  // tabla: de ahí para abajo (filas 6-9) es la franja fusionada / los 3 segmentos de "MONTE".
+  const yTopeGrilla = Y(41), yPieGrilla = Y(yFinFilas)
+  const yLimiteGrid = Y(primeraFilaY + 5 * FILA_ALTO)
+  ;[IZQ_XINI, IZQ_ZONA_INI, IZQ_ZONA_FIN, IZQ_SUP_INI, IZQ_SUP_FIN].forEach(ex => linea(sorDorsoX(ex), yTopeGrilla, sorDorsoX(ex), yPieGrilla))
+  linea(sorDorsoX(IZQ_ALT_FIN), yTopeGrilla, sorDorsoX(IZQ_ALT_FIN), yLimiteGrid)
+  RUBRO5_GRUPOS.forEach(g => {
+    linea(sorDorsoX(g.xIni), yTopeGrilla, sorDorsoX(g.xIni), yLimiteGrid)
+    g.subs.forEach(s => linea(sorDorsoX(s.x), Y(69), sorDorsoX(s.x), yLimiteGrid))
+  })
+  linea(xGrillaFin, yTopeGrilla, xGrillaFin, yPieGrilla) // borde derecho, altura completa
+  // Línea horizontal que separa el encabezado (títulos + sub-etiquetas + números clave) de las
+  // filas de datos
+  linea(xGrillaIni, Y(primeraFilaY), xGrillaFin, Y(primeraFilaY))
+
+  // Rubro 6 y la pregunta de "Plano de Mensura" — campos simples, no una grilla de casilleros
+  // (a diferencia del Rubro 5, la plantilla real los muestra como renglones sueltos).
+  let yTexto = yFinFilas + 35
+  p.drawText('¿Hay Plano de Mensura?  SI ___  NO ___      N° de Plano: ______________', { x: sorDorsoX(0), y: Y(yTexto), size: 7, font, color: negro })
+  yTexto += 20
+  p.drawText('RUBRO 6: DISTANCIAS EN KILOMETROS', { x: sorDorsoX(0), y: Y(yTexto), size: 8, font: bold, color: negro })
+  yTexto += 16
+  ;[
+    'A LUGAR DE EMBARQUE: ______     A CAMINO MAS PROXIMO: ______',
+    'RUTA NACIONAL N°: ______          RUTA PROVINCIAL N°: ______',
+    'A LA POBLACION MAS PROXIMA: ______     NOMBRE DE LA POBLACION: ________________________',
+  ].forEach(linea2 => { p.drawText(linea2, { x: sorDorsoX(0), y: Y(yTexto), size: 7, font, color: negro }); yTexto += 15 })
+
+  // Declaración jurada — mismo criterio que ya corrigió Formulario U: declarante = comitente
+  // (no el agrimensor), con su rol real (POSEEDOR/APODERADO/TITULAR/etc.).
+  yTexto += 15
+  const nombreDeclarante = comitentePrincipal ? `${comitentePrincipal.nombre ?? ''} ${comitentePrincipal.apellido ?? ''}`.toUpperCase() : ''
+  const parrafo = `El que suscribe ${nombreDeclarante} nacionalidad ${comitentePrincipal?.nacionalidad || 'Argentina'} documento de identidad ${comitentePrincipal?.tipo_documento || 'DNI'} Nº ${comitentePrincipal?.dni ?? ''} en su carácter de ${rolComitente.toUpperCase()} declara bajo juramento que es verdad toda información suministrada por el y transcripta en el presente formulario y que tiene conocimiento de las penalidades establecidas por omision, falsedad y toda transgresión a las disposiciones legales.`
+  const lineasParrafo = partirEnLineas(parrafo, 530, 8, font)
+  lineasParrafo.forEach((ln, i) => { p.drawText(ln, { x: sorDorsoX(0), y: Y(yTexto + i * 12), size: 8, font, color: negro }) })
+  yTexto += lineasParrafo.length * 12 + 40
+
+  const hoy = new Date()
+  p.drawText(`Lugar y fecha: ____________________, ${hoy.getDate()} de ${MESES[hoy.getMonth()]} de ${hoy.getFullYear()}`, { x: sorDorsoX(0), y: Y(yTexto), size: 8, font, color: negro })
+  yTexto += 40
+  p.drawText('_____________________________', { x: sorDorsoX(700), y: Y(yTexto), size: 8, font, color: negro })
+  yTexto += 12
+  p.drawText('Firma', { x: sorDorsoX(760), y: Y(yTexto), size: 7, font, color: negro })
+  yTexto += 25
+  const wNombre = bold.widthOfTextAtSize(nombreDeclarante, 8)
+  p.drawText(nombreDeclarante, { x: sorDorsoX(700) + (280 * SOR_DORSO_ESCALA_X - wNombre) / 2, y: Y(yTexto), size: 8, font: bold, color: negro })
+  yTexto += 12
+  p.drawText('Aclaración de Firma', { x: sorDorsoX(700), y: Y(yTexto), size: 7, font, color: negro })
+}
+
+// ── Formulario E1 — página de dorso (Rubros 3 a 7) ────────────────────────────
+// A diferencia de U/SOR, la declaración jurada del E1 ya va en el FRENTE (ya implementado) —
+// este dorso es 100% "Reservado para uso de la Dirección" (determinación del valor unitario,
+// valuación del edificio, obras accesorias, resumen) — nuestro sistema nunca completa nada acá,
+// se agrega solo por consistencia visual con los otros 2 formularios (pedido del usuario).
+// Coordenadas extraídas de la hoja "E1 (D)" del Excel de referencia (mismo método que el dorso
+// del SOR) — estructuralmente más simple que el Rubro 5 del SOR (columnas más anchas, alcanza
+// con texto horizontal partido en líneas, sin necesitar texto girado 90°).
+const E1_DORSO_ESCALA_X = 552 / 1673
+const e1DorsoX = (excelX: number) => 30 + excelX * E1_DORSO_ESCALA_X
+const e1DorsoYtop = (excelY: number) => 30 + excelY
+
+type ColumnaE1 = { label: string; xIni: number; xFin: number }
+type FilaE1 = { label: string; y: number; alto: number }
+
+function dibujarTablaE1(
+  p: PDFPage, font: PDFFont, bold: PDFFont, negro: any, Y: (n: number) => number,
+  columnas: ColumnaE1[], yHeaderIni: number, yHeaderFin: number, filas: FilaE1[],
+) {
+  const xTablaIni = e1DorsoX(columnas[0].xIni)
+  const xTablaFin = e1DorsoX(columnas[columnas.length - 1].xFin)
+  const yFinTabla = filas.length ? filas[filas.length - 1].y + filas[filas.length - 1].alto : yHeaderFin
+  const yTope = Y(yHeaderIni)
+  const yPie = Y(yFinTabla)
+  const linea = (x1: number, y1: number, x2: number, y2: number) =>
+    p.drawLine({ start: { x: x1, y: y1 }, end: { x: x2, y: y2 }, thickness: 0.6, color: negro })
+
+  linea(xTablaIni, yTope, xTablaFin, yTope)
+  linea(xTablaIni, Y(yHeaderFin), xTablaFin, Y(yHeaderFin))
+  filas.forEach(f => {
+    p.drawText(f.label, { x: xTablaIni + 2, y: Y(f.y + f.alto * 0.65), size: 6, font, color: negro })
+    linea(xTablaIni, Y(f.y + f.alto), xTablaFin, Y(f.y + f.alto))
+  })
+  columnas.forEach(c => {
+    linea(e1DorsoX(c.xIni), yTope, e1DorsoX(c.xIni), yPie)
+    if (c.label) {
+      const anchoCol = (c.xFin - c.xIni) * E1_DORSO_ESCALA_X - 4
+      const lineasTitulo = partirEnLineas(c.label, anchoCol, 5.5, bold)
+      lineasTitulo.slice(0, 4).forEach((ln, i) => {
+        p.drawText(ln, { x: e1DorsoX(c.xIni) + 2, y: Y(yHeaderIni + 10 + i * 7), size: 5.5, font: bold, color: negro })
+      })
+    }
+  })
+  linea(xTablaFin, yTope, xTablaFin, yPie)
+}
+
+function dibujarDorsoE1(pdfDoc: PDFDocument, font: PDFFont, bold: PDFFont, negro: any) {
+  const p = pdfDoc.addPage([612, 1008])
+  const Y = (excelY: number) => 1008 - e1DorsoYtop(excelY)
+
+  p.drawText('RESERVADO PARA USO DE LA DIRECCIÓN', { x: e1DorsoX(0), y: Y(15), size: 8, font: bold, color: negro })
+
+  // Rubro 3: Determinación del valor unitario
+  p.drawText('Rubro 3: Determinación del valor unitario (sin incluir obras accesorias)', { x: e1DorsoX(0), y: Y(70), size: 7, font: bold, color: negro })
+  dibujarTablaE1(p, font, bold, negro, Y, [
+    { label: 'Tipo del edificio', xIni: 0, xFin: 94 },
+    { label: 'Cant. de cuadros tachados', xIni: 94, xFin: 255 },
+    { label: 'Valor básico $/m²', xIni: 255, xFin: 423 },
+    { label: 'Cuadros × Valor básico', xIni: 423, xFin: 578 },
+    { label: 'VALOR UNITARIO $/m²', xIni: 578, xFin: 750 },
+  ], 84, 125, [
+    { label: 'A', y: 125, alto: 15 }, { label: 'B', y: 140, alto: 15 }, { label: 'C', y: 155, alto: 14 },
+    { label: 'D', y: 169, alto: 15 }, { label: 'E', y: 184, alto: 15 }, { label: 'TOTALES', y: 199, alto: 15 },
+  ])
+
+  // Rubro 4 y 5: Valuación del edificio (vivienda / negocio-espectáculos) — misma estructura.
+  // OJO: la posición de los títulos "Rubro 4"/"Rubro 7" tomada tal cual de la hoja de Excel
+  // quedaba pegada al borde de la tabla anterior (0pt de separación) — se les suma un margen
+  // (`GAP_R4`/`GAP_R7`) para que no se superpongan visualmente; el resto de las transiciones ya
+  // tenía separación de sobra en el Excel original y no hizo falta tocarlas.
+  const GAP_R4 = 16
+  const GAP_R7 = GAP_R4 + 16
+  const COLUMNAS_R4 = [
+    { label: 'Construcción', xIni: 0, xFin: 94 },
+    { label: 'Tipo edificio', xIni: 94, xFin: 182 },
+    { label: 'Estado conserv.', xIni: 182, xFin: 255 },
+    { label: 'Antigüedad', xIni: 255, xFin: 348 },
+    { label: 'Coef. ajuste', xIni: 348, xFin: 423 },
+    { label: 'Valor unitario', xIni: 423, xFin: 498 },
+    { label: 'Sup. cubierta', xIni: 498, xFin: 578 },
+    { label: 'VALOR EDIFICIO', xIni: 578, xFin: 750 },
+  ]
+  const incisosSuperficie = (tituloTotal: string) => [
+    { label: 'Inc. a) Sup. Cubierta', alto: 15 },
+    { label: 'Inc. b) Sup. Semicubierta', alto: 14 },
+    { label: 'Inc. c) Ampliación (E1A)', alto: 15 },
+    { label: 'Inc. d) Ampliación (E1A)', alto: 14 },
+    { label: 'Inc. e) Total Sup. Cubierta', alto: 15 },
+    { label: tituloTotal, alto: 15 },
+  ]
+  p.drawText('Rubro 4: Valuación del edificio destinado a vivienda o destinos similares', { x: e1DorsoX(0), y: Y(214 + GAP_R4), size: 7, font: bold, color: negro })
+  let yCursor = 274 + GAP_R4
+  const filasR4 = incisosSuperficie('TOTAL RUBRO 4').map(f => { const fila = { label: f.label, y: yCursor, alto: f.alto }; yCursor += f.alto; return fila })
+  dibujarTablaE1(p, font, bold, negro, Y, COLUMNAS_R4, 232 + GAP_R4, 274 + GAP_R4, filasR4)
+
+  p.drawText('Rubro 5: Valuación del edificio destinado a Negocio o Sala de Espectáculos Públicos', { x: e1DorsoX(0), y: Y(381 + GAP_R4), size: 7, font: bold, color: negro })
+  yCursor = 437 + GAP_R4
+  // La hoja de Excel original repite acá el mismo texto "TOTAL DE RUBRO 4" (copiado de la
+  // sección de arriba) — corregido a "TOTAL RUBRO 5", que es lo que corresponde a esta tabla.
+  const filasR5 = incisosSuperficie('TOTAL RUBRO 5').map(f => { const fila = { label: f.label, y: yCursor, alto: f.alto }; yCursor += f.alto; return fila })
+  dibujarTablaE1(p, font, bold, negro, Y, COLUMNAS_R4, 395 + GAP_R4, 437 + GAP_R4, filasR5)
+
+  // Rubro 6: Obras accesorias del edificio
+  p.drawText('Rubro 6: Obras accesorias del edificio', { x: e1DorsoX(0), y: Y(559 + GAP_R4), size: 7, font: bold, color: negro })
+  dibujarTablaE1(p, font, bold, negro, Y, [
+    { label: 'Obras Accesorias', xIni: 0, xFin: 348 },
+    { label: 'Cant. de unidades', xIni: 348, xFin: 423 },
+    { label: 'Coef. ajuste', xIni: 423, xFin: 498 },
+    { label: 'Valor básico/u.', xIni: 498, xFin: 578 },
+    { label: 'VALOR TOTAL', xIni: 578, xFin: 750 },
+  ], 573 + GAP_R4, 614 + GAP_R4, [
+    { label: 'Inc. f) Baños principales', y: 614 + GAP_R4, alto: 15 },
+    { label: 'Inc. g) Toilettes / baños de servicio', y: 629 + GAP_R4, alto: 15 },
+    { label: 'Inc. h) Pileta de natación', y: 644 + GAP_R4, alto: 14 },
+    { label: 'Inc. i) Agua caliente central', y: 658 + GAP_R4, alto: 15 },
+    { label: 'Inc. j) Ascensores +4 personas', y: 673 + GAP_R4, alto: 15 },
+    { label: 'Inc. j) Ascensores hasta 4 personas', y: 688 + GAP_R4, alto: 14 },
+    { label: 'Inc. k) Instalación contra incendios', y: 702 + GAP_R4, alto: 15 },
+    { label: 'Inc. l) Ampliación (E1A)', y: 717 + GAP_R4, alto: 14 },
+    { label: 'Inc. m) Ampliación (E1A)', y: 731 + GAP_R4, alto: 15 },
+    { label: 'TOTAL RUBRO 6', y: 746 + GAP_R4, alto: 15 },
+  ])
+
+  // Rubro 7: Resumen de valuación de los rubros 4, 5 y 6
+  p.drawText('Rubro 7: Resumen de valuación de los rubros 4, 5 y 6', { x: e1DorsoX(0), y: Y(761 + GAP_R7), size: 7, font: bold, color: negro })
+  dibujarTablaE1(p, font, bold, negro, Y, [
+    { label: 'CONCEPTO', xIni: 0, xFin: 578 },
+    { label: 'VALOR TOTAL', xIni: 578, xFin: 750 },
+  ], 779 + GAP_R7, 820 + GAP_R7, [
+    { label: 'Inc. a) Total Rubro 4 — Columna 7', y: 820 + GAP_R7, alto: 15 },
+    { label: 'Inc. b) Total Rubro 5 — Columna 7', y: 835 + GAP_R7, alto: 15 },
+    { label: 'Inc. c) Total Rubro 6 — Columna 4', y: 850 + GAP_R7, alto: 14 },
+    { label: 'TOTAL RUBRO 7', y: 864 + GAP_R7, alto: 15 },
+  ])
+}
+
 export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const isAjax = request.headers.get('X-Requested-With') === 'fetch'
   const token = cookies.get('sb-access-token')?.value ?? ''
@@ -603,9 +974,14 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   // Nota de Elevación, Acta, Capítulo, Formularios U/SOR/E1) todavía usan solo el primero
   // — pendiente de confirmar con Franco cómo deben tratar la superficie con más de uno
   // (ver ESTADO_PROYECTO.md, sección "Ítem 11").
+  // `nombre` (poligono) y `etiqueta` (lados/angulos) faltaban acá — Memoria de Mensura y
+  // Planilla de Cálculos ya los usaban más abajo (pol.nombre, lado.etiqueta, ang.etiqueta) pero
+  // como no venían en el select, siempre llegaban undefined: el título de la planilla y las
+  // designaciones manuales de lado/ángulo salían en blanco aunque estuvieran cargadas en la Tab
+  // Mensura (bug reportado por Franco).
   const { data: poligonosRaw } = await db
     .from('poligono')
-    .select('parcela_desde, parcela_hasta, superficie_m2, superficie_letras, lados(orden, valor_m, valor_letras), angulos(orden, grados, minutos, segundos)')
+    .select('nombre, parcela_desde, parcela_hasta, superficie_m2, superficie_letras, lados(orden, valor_m, valor_letras, etiqueta), angulos(orden, grados, minutos, segundos, etiqueta)')
     .eq('expediente_id', expedienteId)
     .order('parcela_desde', { ascending: true, nullsFirst: true })
 
@@ -758,6 +1134,15 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       // al final del documento principal con copyPages() (misma técnica que ya usa el armado
       // del "expediente completo" más abajo en este archivo). Con un solo polígono (el caso
       // común) el resultado es idéntico al de antes: se llama una sola vez, sin loop extra.
+      //
+      // Si el expediente tiene más de un polígono/parcela cargado, Franco pidió que la
+      // declaración jurada se replique una vez por parcela (con la superficie de cada una) en
+      // vez de generar sólo la del primer polígono. dibujarFormularioU() dibuja UNA copia
+      // completa (2 páginas: datos + declaración) sobre un PDFDocument/página/fuentes ya
+      // cargados de la plantilla — se llama una vez por polígono, y las copias extra se pegan
+      // al final del documento principal con copyPages() (misma técnica que ya usa el armado
+      // del "expediente completo" más abajo en este archivo). Con un solo polígono (el caso
+      // común) el resultado es idéntico al de antes: se llama una sola vez, sin loop extra.
       const dibujarFormularioU = (
         pdfDocActual: PDFDocument, pageActual: PDFPage, fontActual: PDFFont, boldActual: PDFFont, poligonoActual: any,
       ) => {
@@ -784,6 +1169,12 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         pageActual.drawRectangle({ x: 328, y: 545, width: 34, height: 106, color: blanco }) // marca izquierda
         pageActual.drawRectangle({ x: 478, y: 545, width: 32, height: 106, color: blanco }) // marca derecha
         pageActual.drawRectangle({ x: 368, y: 511, width: 14, height: 31, color: blanco })  // trazo suelto debajo
+        // Franco pidió el croquis completamente en blanco, sin ningún cuadrado (lo dibuja él a
+        // mano) — además de las 4 marcas de esquina de arriba, el recuadro cuadrado en sí (borde
+        // fino) también viene impreso en la plantilla. Confirmado renderizando esta zona con
+        // poppler: va de x≈362 a x≈478, y≈542 a y≈659 — se tapa entero con 1pt de margen extra
+        // por lado para cubrir el grosor de la línea.
+        pageActual.drawRectangle({ x: 361, y: 541, width: 118, height: 119, color: blanco })
 
         // La plantilla trae dos renglones en blanco para "Departamento" y "Localidad" — el de
         // Departamento es corto (termina en x≈460) y el de Localidad es más largo, con 3
@@ -892,11 +1283,11 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
           // hacia abajo para cubrir las 4 líneas completas con margen.
           p3.drawRectangle({ x: 61, y: 780, width: 475, height: 63, color: rgb(1, 1, 1) })
 
-          // El declarante de esta página es el profesional (agrimensor), no el comitente —
-          // confirmado contra el ejemplo real de Franco ("El que suscribe FRANCO ARTURO NIGRO
-          // CARRIERE... en su carácter de AGRIMENSOR"). `profiles` no tiene columna de
-          // nacionalidad ni tipo de documento — se asume Argentina/DNI, que en la práctica es
-          // siempre así para un agrimensor matriculado acá (no amerita una columna nueva).
+          // El declarante de esta página (dorso) puede ser el comitente, el dueño, o el propio
+          // Franco — Franco confirmó por WhatsApp (14/9) que por defecto va con SUS datos (el
+          // agrimensor), no los del comitente. `profiles` no tiene columna de nacionalidad ni
+          // tipo de documento — se asume Argentina/DNI, que en la práctica es siempre así para
+          // un agrimensor matriculado acá.
           const declarante = profile as any
           const nombreDeclarante = declarante ? `${declarante.nombre ?? ''} ${declarante.apellido ?? ''}`.toUpperCase() : ''
           const parrafo = `El que suscribe ${nombreDeclarante} nacionalidad Argentina documento de identidad DNI Nº ${declarante?.dni ?? ''} en su carácter de AGRIMENSOR declara bajo juramento que es verdad toda información suministrada por el y transcripta en el presente formulario y que tiene conocimiento de las penalidades establecidas por omision, falsedad y toda transgresión a las disposiciones legales.`
@@ -1034,6 +1425,10 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
       campoSor((inmueble as any)?.receptoria ?? '', 208, 573, 190)
 
+      // Página de dorso (Rubros 5/6/7 + declaración jurada) — antes faltaba: la plantilla
+      // (`formulario_sor.pdf`) tenía una sola página, confirmado con `pdfDoc.getPageCount()`.
+      dibujarDorsoSor(pdfDoc, font, bold, negro, comitentePrincipal, rolComitente)
+
     } else if (tipo === 'formulario_e1') {
       // ── Formulario E1 — Características constructivas (solo si hay edificación) ──
       // Misma lógica que U/SOR: plantilla original de Catastro con sus 7 referencias en rojo
@@ -1151,6 +1546,10 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       if (declaranteE1) {
         campoE1(`${declaranteE1.nombre ?? ''} ${declaranteE1.apellido ?? ''}`.toUpperCase(), 150, 20, 8)
       }
+
+      // Página de dorso (Rubros 3 a 7) — por consistencia con U y SOR, que ya tienen frente +
+      // dorso. Acá no hay ningún dato real que completar (100% reservado para la Dirección).
+      dibujarDorsoE1(pdfDoc, font, bold, negro)
 
     } else if (tipo === 'caratula') {
       // ── Carátula con datos reales del expediente ──────────────────────

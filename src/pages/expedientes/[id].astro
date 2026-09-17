@@ -61,6 +61,16 @@ const [
 const poligonos = poligonosRaw ?? []
 const poligono = poligonos[0] ?? null
 
+// Inscripciones/partidas ADICIONALES del inmueble (la 1ª de cada una sigue en `inmuebles`) — se
+// cargan aparte porque dependen de `inmueble.id`, que recién se conoce tras el Promise.all de
+// arriba (no se puede paralelizar con el resto sin `inmueble.id` ya resuelto).
+const { data: inmuebleInscripcionesExtra } = inmueble
+  ? await db.from('inmueble_inscripciones_extra').select('*').eq('inmueble_id', inmueble.id).order('orden')
+  : { data: [] as any[] }
+const { data: inmueblePartidasExtra } = inmueble
+  ? await db.from('inmueble_partidas_extra').select('*').eq('inmueble_id', inmueble.id).order('orden')
+  : { data: [] as any[] }
+
 const docTotalPages = Math.max(1, Math.ceil((documentosCount ?? 0) / DOCS_POR_PAGINA))
 
 let successMsg = ''
@@ -94,10 +104,14 @@ if (Astro.request.method === 'POST') {
       inscripcion_mayor_extension: form.get('inscripcion_mayor_extension') === 'on',
       matricula_municipal: form.get('matricula_municipal') || null,
       antecedentes_tecnicos: form.get('antecedentes_tecnicos') || null,
+      // "Calle de frente"/"Entre calle"/"Y calle" (usadas antes en la Notificación a Linderos)
+      // se sacaron del formulario a pedido de Franco (17/9) — la sección entera de
+      // "notificación a linderos" ya no se carga. `propietario_anterior` se mantiene: sigue
+      // siendo un dato real (Inc. de Formulario U y el párrafo de Notificación a Linderos), solo
+      // cambió de sección en la UI. Las columnas `calle_frente/calle_entre1/calle_entre2` NO se
+      // tocan en el schema ni en `generar.ts` — Formulario U y Notificación a Linderos las
+      // siguen leyendo tal cual, simplemente van a quedar vacías de acá en adelante.
       propietario_anterior: form.get('propietario_anterior') || null,
-      calle_frente: form.get('calle_frente') || null,
-      calle_entre1: form.get('calle_entre1') || null,
-      calle_entre2: form.get('calle_entre2') || null,
     }
     const { error } = inmueble
       ? await db.from('inmuebles').update(payload).eq('expediente_id', id)
@@ -116,6 +130,42 @@ if (Astro.request.method === 'POST') {
 
     if (error) errorMsg = error.message
     else successMsg = 'Inmueble guardado.'
+  }
+
+  // Inscripciones adicionales (Registro de la Propiedad + inscripción municipal "de la mano") y
+  // partidas inmobiliarias adicionales — mismo patrón que agregar/quitar comitente: cada alta o
+  // baja es un mini-form propio con su propio POST, sin índices de formulario dinámicos. Solo
+  // tienen sentido si ya existe una fila en `inmuebles` (que trae la 1ª inscripción/partida).
+  if (action === 'agregar_inscripcion' && inmueble) {
+    const tipoInscripcionExtra = (form.get('tipo_inscripcion_registro') as string) || 'matricula'
+    await db.from('inmueble_inscripciones_extra').insert({
+      inmueble_id: inmueble.id,
+      orden: (inmuebleInscripcionesExtra?.length ?? 0) + 1,
+      tipo_inscripcion_registro: tipoInscripcionExtra,
+      matricula_registro: tipoInscripcionExtra === 'matricula' ? (form.get('matricula_registro') || null) : null,
+      registro_tomo:  tipoInscripcionExtra === 'tomo' ? (form.get('registro_tomo')  || null) : null,
+      registro_folio: tipoInscripcionExtra === 'tomo' ? (form.get('registro_folio') || null) : null,
+      registro_finca: tipoInscripcionExtra === 'tomo' ? (form.get('registro_finca') || null) : null,
+      registro_anio: form.get('registro_anio') || null,
+      inscripcion_mayor_extension: form.get('inscripcion_mayor_extension') === 'on',
+      matricula_municipal: form.get('matricula_municipal') || null,
+    })
+  }
+  if (action === 'quitar_inscripcion') {
+    await db.from('inmueble_inscripciones_extra').delete().eq('id', form.get('inscripcion_extra_id'))
+  }
+  if (action === 'agregar_partida' && inmueble) {
+    const nuevaPartida = (form.get('matricula_catastral_extra') as string) || ''
+    if (nuevaPartida) {
+      await db.from('inmueble_partidas_extra').insert({
+        inmueble_id: inmueble.id,
+        orden: (inmueblePartidasExtra?.length ?? 0) + 1,
+        matricula_catastral: nuevaPartida,
+      })
+    }
+  }
+  if (action === 'quitar_partida') {
+    await db.from('inmueble_partidas_extra').delete().eq('id', form.get('partida_extra_id'))
   }
 
   const eliminarPolId    = (form.get('eliminar_pol_id') as string) || ''
@@ -754,6 +804,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
 
     <!-- TAB 2: INMUEBLE -->
     {activeTab === 'inmueble' && (
+      <>
       <form method="POST">
         <input type="hidden" name="_action" value="guardar_inmueble" />
         <input type="hidden" name="_tab" value="inmueble" />
@@ -925,25 +976,15 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
           </p>
         </div>
 
-        <!-- Referencias para notificación a linderos -->
-        <div class="section-label" style="margin-top:0.5rem">Referencias para notificación a linderos</div>
-        <div class="form-grid form-grid-2" style="margin-bottom:1rem">
-          <div class="field">
-            <label>Propietario anterior (a nombre de quien figura)</label>
-            <input class="input" name="propietario_anterior" value={(inmueble as any)?.propietario_anterior ?? ''} />
-          </div>
-          <div class="field">
-            <label>Calle de frente</label>
-            <input class="input" name="calle_frente" value={(inmueble as any)?.calle_frente ?? ''} />
-          </div>
-          <div class="field">
-            <label>Entre calle</label>
-            <input class="input" name="calle_entre1" value={(inmueble as any)?.calle_entre1 ?? ''} />
-          </div>
-          <div class="field">
-            <label>Y calle</label>
-            <input class="input" name="calle_entre2" value={(inmueble as any)?.calle_entre2 ?? ''} />
-          </div>
+        <!-- Propietario anterior — antes vivía en "Referencias para notificación a linderos"
+             junto con Calle de frente/Entre calle/Y calle. Franco pidió (17/9) sacar esos 3
+             campos de calle del formulario — quedan sin uso desde acá en adelante (Formulario U
+             y Notificación a Linderos, que los usaban, ahora reciben ese dato vacío; decisión ya
+             tomada). "Propietario anterior" en cambio sigue siendo un dato real y se mantiene,
+             sin la sección de "notificación a linderos" que ya no aplica. -->
+        <div class="field" style="margin-bottom:1.25rem;max-width:400px">
+          <label>Propietario anterior (a nombre de quien figura)</label>
+          <input class="input" name="propietario_anterior" value={(inmueble as any)?.propietario_anterior ?? ''} />
         </div>
 
         <!-- Linderos (citación) -->
@@ -968,6 +1009,117 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
 
         <button type="submit" class="btn btn-primary">Guardar inmueble</button>
       </form>
+
+      {inmueble && (
+        <div style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--color-border)">
+          <h3 style="margin-bottom:0.5rem">Inscripciones adicionales</h3>
+          <p style="color:var(--color-text-secondary);font-size:0.85rem;margin-bottom:1rem">
+            Para inmuebles formados por más de una parcela unida, cada una con su propia inscripción en el Registro de la Propiedad (y, de corresponder, su propia inscripción municipal). La primera inscripción es la que se cargó arriba.
+          </p>
+
+          {(inmuebleInscripcionesExtra ?? []).length > 0 && (
+            <div style="margin-bottom:1.25rem">
+              <table>
+                <thead><tr><th>Tipo</th><th>Nº / Tomo-Folio-Finca</th><th>Año</th><th>Insc. Municipal</th><th></th></tr></thead>
+                <tbody>
+                  {inmuebleInscripcionesExtra!.map((ie: any) => (
+                    <tr>
+                      <td>{ie.tipo_inscripcion_registro === 'tomo' ? 'Tomo/Folio/Finca' : 'Matrícula'}</td>
+                      <td>{ie.tipo_inscripcion_registro === 'tomo'
+                        ? `${ie.registro_tomo ?? '—'} / ${ie.registro_folio ?? '—'} / ${ie.registro_finca ?? '—'}`
+                        : (ie.matricula_registro ?? '—')}</td>
+                      <td>{ie.registro_anio ?? '—'}</td>
+                      <td>{ie.matricula_municipal ?? '—'}</td>
+                      <td>
+                        <form method="POST" style="display:inline">
+                          <input type="hidden" name="_action" value="quitar_inscripcion" />
+                          <input type="hidden" name="_tab" value="inmueble" />
+                          <input type="hidden" name="inscripcion_extra_id" value={ie.id} />
+                          <button type="submit" class="btn btn-danger btn-sm">Quitar</button>
+                        </form>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <details class="form-section">
+            <summary>+ Agregar otra inscripción</summary>
+            <form method="POST" style="margin-top:1rem">
+              <input type="hidden" name="_action" value="agregar_inscripcion" />
+              <input type="hidden" name="_tab" value="inmueble" />
+              <div class="field" style="margin-bottom:0.75rem;max-width:260px">
+                <label>Tipo de inscripción</label>
+                <select class="input" name="tipo_inscripcion_registro">
+                  <option value="matricula">Matrícula</option>
+                  <option value="tomo">Tomo / Folio / Finca</option>
+                </select>
+              </div>
+              <div class="form-grid form-grid-2">
+                <div class="field"><label>Nº Matrícula</label><input class="input" name="matricula_registro" /></div>
+                <div class="field"><label>Año</label><input class="input" name="registro_anio" /></div>
+                <div class="field"><label>Tomo</label><input class="input" name="registro_tomo" /></div>
+                <div class="field"><label>Folio</label><input class="input" name="registro_folio" /></div>
+                <div class="field"><label>Finca</label><input class="input" name="registro_finca" /></div>
+                <div class="field"><label>Nº Inscripción Municipal (opcional)</label><input class="input" name="matricula_municipal" /></div>
+              </div>
+              <p style="font-size:0.78rem;color:var(--color-text-secondary);margin:0.35rem 0 0">
+                Completá "Nº Matrícula" + "Año" si es por matrícula, o "Tomo"/"Folio"/"Finca" + "Año" si es por tomo — según lo que elijas arriba en "Tipo de inscripción".
+              </p>
+              <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;font-size:0.9rem;margin-top:0.6rem">
+                <input type="checkbox" name="inscripcion_mayor_extension" style="width:15px;height:15px;accent-color:var(--color-primary)" />
+                La inscripción anterior es en mayor extensión
+              </label>
+              <button type="submit" class="btn btn-primary" style="margin-top:0.75rem">Agregar inscripción</button>
+            </form>
+          </details>
+        </div>
+      )}
+
+      {inmueble && (
+        <div style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--color-border)">
+          <h3 style="margin-bottom:0.5rem">Partidas inmobiliarias adicionales</h3>
+          <p style="color:var(--color-text-secondary);font-size:0.85rem;margin-bottom:1rem">
+            La primera partida es la que se cargó arriba, en "Identificación Catastral".
+          </p>
+
+          {(inmueblePartidasExtra ?? []).length > 0 && (
+            <div style="margin-bottom:1.25rem">
+              <table>
+                <thead><tr><th>Partida Inmobiliaria</th><th></th></tr></thead>
+                <tbody>
+                  {inmueblePartidasExtra!.map((pe: any) => (
+                    <tr>
+                      <td>{pe.matricula_catastral}</td>
+                      <td>
+                        <form method="POST" style="display:inline">
+                          <input type="hidden" name="_action" value="quitar_partida" />
+                          <input type="hidden" name="_tab" value="inmueble" />
+                          <input type="hidden" name="partida_extra_id" value={pe.id} />
+                          <button type="submit" class="btn btn-danger btn-sm">Quitar</button>
+                        </form>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <form method="POST" style="display:flex;gap:0.75rem;align-items:flex-end;flex-wrap:wrap">
+            <input type="hidden" name="_action" value="agregar_partida" />
+            <input type="hidden" name="_tab" value="inmueble" />
+            <div class="field" style="margin-bottom:0;max-width:260px">
+              <label>Nueva Partida Inmobiliaria</label>
+              <input class="input" name="matricula_catastral_extra" style="text-transform:uppercase" oninput="this.value = this.value.toUpperCase()" />
+            </div>
+            <button type="submit" class="btn btn-primary">Agregar partida</button>
+          </form>
+        </div>
+      )}
+      </>
     )}
 
     <!-- TAB 3: MENSURA -->

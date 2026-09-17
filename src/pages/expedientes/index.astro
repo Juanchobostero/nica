@@ -34,23 +34,60 @@ if (Astro.request.method === 'POST') {
   }
 }
 
-const estado   = Astro.url.searchParams.get('estado') ?? 'todos'
-const busqueda = Astro.url.searchParams.get('q') ?? ''
+const estado      = Astro.url.searchParams.get('estado') ?? 'todos'
+const busqueda    = Astro.url.searchParams.get('q') ?? ''
+const areaFiltro  = Astro.url.searchParams.get('area') ?? ''
+const fechaDesde  = Astro.url.searchParams.get('desde') ?? ''
+const fechaHasta  = Astro.url.searchParams.get('hasta') ?? ''
+// Único par columna/dirección soportado hoy (no hace falta más): "última modificación" — el
+// resto de la lista sigue con el orden de siempre (más nuevo primero) si no se tocó el header.
+const sortCol = Astro.url.searchParams.get('sort') === 'updated_at' ? 'updated_at' : 'created_at'
+const sortDir = Astro.url.searchParams.get('dir') === 'asc' ? 'asc' : 'desc'
+
+// Paginado — mismo patrón ya usado en comitentes/index.astro (POR_PAGINA/.range()/count:'exact').
+const POR_PAGINA = 10
+const pagina = Math.max(1, parseInt(Astro.url.searchParams.get('pag') ?? '1') || 1)
+const desdeIdx = (pagina - 1) * POR_PAGINA
+const hastaIdx = desdeIdx + POR_PAGINA - 1
 
 let query = db
   .from('expedientes')
   .select(`
-    id, numero_expediente, tipo_mensura, estado, fecha_inicio, area_catastro,
+    id, numero_expediente, tipo_mensura, estado, fecha_inicio, area_catastro, updated_at,
     exp_comitentes ( orden, comitentes ( nombre, apellido ) )
-  `)
+  `, { count: 'exact' })
   .eq('user_id', uid)
   .is('eliminado_at', null)
-  .order('created_at', { ascending: false })
+  .order(sortCol, { ascending: sortDir === 'asc' })
+  .range(desdeIdx, hastaIdx)
 
 if (estado !== 'todos') query = query.eq('estado', estado)
-if (busqueda)           query = query.ilike('numero_expediente', `%${busqueda}%`)
+if (areaFiltro)         query = query.eq('area_catastro', areaFiltro)
+if (fechaDesde)          query = query.gte('fecha_inicio', fechaDesde)
+if (fechaHasta)          query = query.lte('fecha_inicio', fechaHasta)
+// Amplía la búsqueda existente (antes solo Nº Expediente) para que también matchee por Tipo de
+// mensura — sin tocar el campo `q` ni su placeholder de golpe, solo lo que compara.
+if (busqueda)            query = query.or(`numero_expediente.ilike.%${busqueda}%,tipo_mensura.ilike.%${busqueda}%`)
 
-const { data: expedientes } = await query
+const { data: expedientes, count: totalCount } = await query
+const totalPaginas = Math.max(1, Math.ceil((totalCount ?? 0) / POR_PAGINA))
+
+// Arma el query string de un link (paginado, toggle de orden) preservando el resto de filtros
+// activos — evita ir repitiendo a mano la misma reconstrucción en cada lugar que arma un link.
+function armarQuery(overrides: Record<string, string>): string {
+  const base: Record<string, string> = {
+    q: busqueda, estado, area: areaFiltro, desde: fechaDesde, hasta: fechaHasta,
+    sort: sortCol, dir: sortDir, pag: String(pagina),
+  }
+  const combinado = { ...base, ...overrides }
+  const params = new URLSearchParams()
+  const defaults: Record<string, string> = { estado: 'todos', sort: 'created_at', dir: 'desc', pag: '1' }
+  for (const [clave, valor] of Object.entries(combinado)) {
+    if (valor && valor !== defaults[clave]) params.set(clave, valor)
+  }
+  const qs = params.toString()
+  return qs ? `?${qs}` : '?'
+}
 
 // Función helper para obtener el comitente principal (menor orden)
 function comitentePrincipal(exp: any): string {
@@ -68,24 +105,39 @@ function comitentePrincipal(exp: any): string {
   </div>
 
   <div class="card" style="margin-bottom:1rem">
-    <form class="filters" method="GET">
+    <form class="filters" method="GET" id="form-filtros">
       <input
         class="input"
         name="q"
         type="search"
-        placeholder="Buscar por nº expediente..."
+        placeholder="Buscar por nº expediente o tipo de mensura..."
         value={busqueda}
-        style="max-width:280px"
+        style="max-width:260px"
+        id="filtro-busqueda"
       />
-      <select class="input" name="estado" style="max-width:180px">
+      <select class="input" name="estado" style="max-width:170px">
         {['todos','borrador','en_proceso','observado','finalizado'].map(e => (
           <option value={e} selected={estado === e}>
             {e === 'todos' ? 'Todos los estados' : e.replace('_', ' ')}
           </option>
         ))}
       </select>
-      <button type="submit" class="btn btn-secondary">Filtrar</button>
-      {(estado !== 'todos' || busqueda) && (
+      <select class="input" name="area" style="max-width:200px">
+        <option value="">Todas las áreas</option>
+        {AREAS_CATASTRO.map(a => <option value={a.value} selected={areaFiltro === a.value}>{a.label}</option>)}
+      </select>
+      <div class="filters-fecha">
+        <label>Fecha inicio:</label>
+        <input class="input" type="date" name="desde" value={fechaDesde} title="Desde" />
+        <span>—</span>
+        <input class="input" type="date" name="hasta" value={fechaHasta} title="Hasta" />
+      </div>
+      {/* El orden/columna elegidos no se pierden al filtrar — van como hidden, no se muestran en el form. */}
+      {sortCol !== 'created_at' && <input type="hidden" name="sort" value={sortCol} />}
+      {sortDir !== 'desc' && <input type="hidden" name="dir" value={sortDir} />}
+      {/* Sin botón "Filtrar": el form se envía solo (ver script más abajo) — selects/fechas al
+          tocarlos, la búsqueda de texto con una pausa breve después de dejar de tipear. */}
+      {(estado !== 'todos' || busqueda || areaFiltro || fechaDesde || fechaHasta) && (
         <a href="/expedientes" class="btn btn-secondary">Limpiar</a>
       )}
     </form>
@@ -93,28 +145,33 @@ function comitentePrincipal(exp: any): string {
 
   <div class="card">
     <div class="table-wrap">
-      <table>
+      <table class="expedientes-table">
         <thead>
           <tr>
-            <th>Nº Expediente</th>
-            <th>Tipo mensura</th>
-            <th>Comitente principal</th>
-            <th>Estado</th>
-            <th>Fecha inicio</th>
-            <th>Acciones</th>
+            <th data-col="numero" draggable="true">Nº Expediente</th>
+            <th data-col="tipo" draggable="true">Tipo mensura</th>
+            <th data-col="comitente" draggable="true">Comitente principal</th>
+            <th data-col="estado" draggable="true">Estado</th>
+            <th data-col="fecha" draggable="true">Fecha inicio</th>
+            <th data-col="modificacion" draggable="true">
+              <a href={armarQuery({ sort: 'updated_at', dir: sortCol === 'updated_at' && sortDir === 'desc' ? 'asc' : 'desc', pag: '1' })} class="th-sort-link">
+                Última modif. {sortCol === 'updated_at' ? (sortDir === 'asc' ? '↑' : '↓') : ''}
+              </a>
+            </th>
+            <th data-col="acciones">Acciones</th>
           </tr>
         </thead>
         <tbody>
           {(expedientes ?? []).length === 0 && (
             <tr>
-              <td colspan="6" style="text-align:center;color:var(--color-text-secondary);padding:2rem">
-                {busqueda || estado !== 'todos' ? 'Sin resultados para el filtro aplicado.' : 'No hay expedientes creados aún.'}
+              <td colspan="7" style="text-align:center;color:var(--color-text-secondary);padding:2rem">
+                {busqueda || estado !== 'todos' || areaFiltro || fechaDesde || fechaHasta ? 'Sin resultados para el filtro aplicado.' : 'No hay expedientes creados aún.'}
               </td>
             </tr>
           )}
           {(expedientes ?? []).map(exp => (
             <tr>
-              <td>
+              <td data-col="numero">
                 <button type="button" class="btn-editar-dgc-trigger celda-numero-exp"
                   title="Click para cargar/editar Nº Expediente y Área de Catastro"
                   data-id={exp.id}
@@ -126,15 +183,16 @@ function comitentePrincipal(exp: any): string {
                   }
                 </button>
               </td>
-              <td>{exp.tipo_mensura ?? '—'}</td>
-              <td>{comitentePrincipal(exp)}</td>
-              <td>
+              <td data-col="tipo">{exp.tipo_mensura ?? '—'}</td>
+              <td data-col="comitente">{comitentePrincipal(exp)}</td>
+              <td data-col="estado">
                 <span class={`badge badge-${exp.estado ?? 'borrador'}`}>
                   {(exp.estado ?? 'borrador').replace('_', ' ')}
                 </span>
               </td>
-              <td>{exp.fecha_inicio ? new Date(exp.fecha_inicio).toLocaleDateString('es-AR') : '—'}</td>
-              <td style="display:flex;gap:0.5rem">
+              <td data-col="fecha">{exp.fecha_inicio ? new Date(exp.fecha_inicio).toLocaleDateString('es-AR') : '—'}</td>
+              <td data-col="modificacion">{(exp as any).updated_at ? new Date((exp as any).updated_at).toLocaleDateString('es-AR') : '—'}</td>
+              <td data-col="acciones" style="display:flex;gap:0.5rem">
                 <a href={`/expedientes/${exp.id}`} class="btn btn-secondary btn-sm">Ver / Editar</a>
                 <button type="button" class="btn btn-secondary btn-sm btn-editar-dgc-trigger"
                   data-id={exp.id}
@@ -157,6 +215,18 @@ function comitentePrincipal(exp: any): string {
         </tbody>
       </table>
     </div>
+
+    {totalPaginas > 1 && (
+      <div style="display:flex;gap:0.5rem;align-items:center;justify-content:center;margin-top:1rem">
+        <a href={armarQuery({ pag: String(Math.max(1, pagina - 1)) })}
+          class={`btn btn-secondary btn-sm ${pagina <= 1 ? 'btn-disabled' : ''}`}
+          aria-disabled={pagina <= 1}>← Anterior</a>
+        <span style="font-size:0.875rem;color:var(--color-text-secondary)">Página {pagina} de {totalPaginas}</span>
+        <a href={armarQuery({ pag: String(Math.min(totalPaginas, pagina + 1)) })}
+          class={`btn btn-secondary btn-sm ${pagina >= totalPaginas ? 'btn-disabled' : ''}`}
+          aria-disabled={pagina >= totalPaginas}>Siguiente →</a>
+      </div>
+    )}
   </div>
 
   <div id="modal-overlay" class="modal-overlay" hidden>
@@ -271,12 +341,116 @@ function comitentePrincipal(exp: any): string {
   if (btnDgcCancel) btnDgcCancel.addEventListener('click', cerrarModalDgc)
   overlayDgc.addEventListener('click', function(e) { if (e.target === overlayDgc) cerrarModalDgc() })
   document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !overlayDgc.hidden) cerrarModalDgc() })
+
+  // ── Columnas reordenables (arrastrar y soltar el header) ─────────────
+  // Orden guardado por navegador (localStorage), no por usuario — no hace falta tocar el
+  // servidor ni la consulta para esto, es puramente visual. "Acciones" queda siempre al final,
+  // sin `draggable`, para no perder el lugar fijo de los botones.
+  ;(function() {
+    var STORAGE_KEY = 'nica_expedientes_col_order'
+    var tabla = document.querySelector('.expedientes-table')
+    if (!tabla) return
+    var filaHeader = tabla.querySelector('thead tr')
+    var thsArrastrables = Array.prototype.slice.call(filaHeader.querySelectorAll('th[draggable="true"]'))
+    var colKeys = thsArrastrables.map(function(th) { return th.dataset.col })
+
+    function aplicarOrden(orden) {
+      var filas = tabla.querySelectorAll('tr')
+      filas.forEach(function(fila) {
+        var celdas = {}
+        fila.querySelectorAll('[data-col]').forEach(function(celda) { celdas[celda.dataset.col] = celda })
+        orden.forEach(function(key) {
+          if (celdas[key]) fila.appendChild(celdas[key])
+        })
+        // Cualquier celda no incluida en `orden` (hoy solo "acciones") se re-agrega al final,
+        // recién después de las reordenables — así queda siempre última pase lo que pase.
+        Array.prototype.slice.call(fila.querySelectorAll('[data-col]')).forEach(function(celda) {
+          if (orden.indexOf(celda.dataset.col) === -1) fila.appendChild(celda)
+        })
+      })
+    }
+
+    // Restaura el orden guardado (si hay uno válido, con exactamente las mismas columnas de hoy
+    // — si en algún momento se agrega/saca una columna, un orden viejo guardado se ignora en vez
+    // de aplicarse a medias).
+    try {
+      var guardado = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
+      if (Array.isArray(guardado) && guardado.length === colKeys.length &&
+          guardado.every(function(k) { return colKeys.indexOf(k) !== -1 })) {
+        aplicarOrden(guardado)
+      }
+    } catch (e) {}
+
+    var arrastrando = null
+    thsArrastrables.forEach(function(th) {
+      th.addEventListener('dragstart', function(e) {
+        arrastrando = th
+        th.classList.add('th-dragging')
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+      })
+      th.addEventListener('dragend', function() {
+        th.classList.remove('th-dragging')
+        arrastrando = null
+      })
+      th.addEventListener('dragover', function(e) {
+        e.preventDefault()
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+      })
+      th.addEventListener('drop', function(e) {
+        e.preventDefault()
+        if (!arrastrando || arrastrando === th) return
+        var actuales = Array.prototype.slice.call(filaHeader.querySelectorAll('th[draggable="true"]')).map(function(t) { return t.dataset.col })
+        var origenIdx = actuales.indexOf(arrastrando.dataset.col)
+        var destinoIdx = actuales.indexOf(th.dataset.col)
+        actuales.splice(origenIdx, 1)
+        actuales.splice(destinoIdx, 0, arrastrando.dataset.col)
+        aplicarOrden(actuales)
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(actuales)) } catch (e2) {}
+      })
+    })
+  })()
+
+  // ── Filtros dinámicos: el form se envía solo, sin botón "Filtrar" ────
+  ;(function() {
+    var formFiltros = document.getElementById('form-filtros')
+    var inputBusqueda = document.getElementById('filtro-busqueda')
+    if (!formFiltros) return
+
+    // Selects y fechas: al tocarlos ya cambia el resultado (evento discreto, no hace falta
+    // esperar nada).
+    formFiltros.querySelectorAll('select, input[type="date"]').forEach(function(campo) {
+      campo.addEventListener('change', function() { formFiltros.submit() })
+    })
+
+    // Búsqueda de texto: enviar en cada letra recargaría la página constantemente — se espera
+    // una pausa breve (400ms) después de que el usuario deja de tipear antes de enviar.
+    if (inputBusqueda) {
+      var timeoutBusqueda = null
+      inputBusqueda.addEventListener('input', function() {
+        if (timeoutBusqueda) clearTimeout(timeoutBusqueda)
+        timeoutBusqueda = setTimeout(function() { formFiltros.submit() }, 400)
+      })
+      // Cada envío recarga la página entera (no hay forma de evitarlo sin reescribir esto a
+      // AJAX) — sin esto, el usuario perdía el foco/cursor del campo de búsqueda después de
+      // cada pausa y tenía que volver a hacer click para seguir tipeando. Si ya hay texto
+      // cargado (vino de un ?q=...), se re-enfoca solo y el cursor queda al final.
+      if (inputBusqueda.value) {
+        inputBusqueda.focus()
+        var v = inputBusqueda.value
+        inputBusqueda.value = ''
+        inputBusqueda.value = v
+      }
+    }
+  })()
 </script>
 
 <style>
 .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
 .page-header h2 { font-size:1.5rem; }
 .filters { display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; }
+.filters-fecha { display:flex; gap:0.4rem; align-items:center; font-size:0.8125rem; color:var(--color-text-secondary); }
+.filters-fecha input[type="date"] { max-width:150px; }
+.btn-disabled { opacity:0.4; pointer-events:none; }
 /* Nº Expediente ahora también abre el modal de Nº Exp./Catastro con un click directo en la
    celda (antes solo se podía desde el botón "Nº Exp. / Catastro" en Acciones) — se ve como
    el texto de siempre, no como un botón, para no cambiar el aspecto de la tabla. */
@@ -285,6 +459,14 @@ function comitentePrincipal(exp: any): string {
   cursor:pointer; color:inherit; display:block; width:100%;
 }
 .celda-numero-exp:hover strong, .celda-numero-exp:hover span { text-decoration:underline; }
+
+/* Columnas reordenables (arrastrar el header) — cursor de "se puede agarrar" en las que se
+   pueden mover; "Acciones" no tiene `draggable`, así que no recibe este estilo. */
+.expedientes-table th[draggable="true"] { cursor:grab; user-select:none; }
+.expedientes-table th[draggable="true"]:hover { background:var(--color-bg); }
+.expedientes-table th.th-dragging { opacity:0.4; }
+.th-sort-link { color:inherit; text-decoration:none; display:block; }
+.th-sort-link:hover { text-decoration:underline; }
 
 .modal-overlay {
   position:fixed; inset:0; background:rgba(15,23,42,0.5);

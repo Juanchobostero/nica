@@ -1,0 +1,140 @@
+---
+import AppLayout from '../layouts/AppLayout.astro'
+import { getSupabaseAnon, getSupabase, getSupabaseAdmin } from '../lib/supabase'
+
+const token = Astro.cookies.get('sb-access-token')?.value ?? ''
+const { data: { user } } = await getSupabaseAnon().auth.getUser(token)
+if (!user) return Astro.redirect('/login')
+const uid = user.id
+const db = getSupabase(token)
+
+const { data: miPerfil } = await db.from('profiles').select('is_admin').eq('id', uid).maybeSingle()
+// Primer corte de permisos (sin nada granular todavía, según lo que pidió Franco): solo entra
+// quien tenga `is_admin` en su propio perfil — cualquier otro usuario se manda de vuelta al
+// Dashboard, aunque haya llegado directo por URL.
+if (!miPerfil?.is_admin) return Astro.redirect('/dashboard')
+
+const admin = getSupabaseAdmin()
+let successMsg = ''
+let errorMsg = ''
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData()
+  const action = form.get('_action')
+
+  if (action === 'crear_usuario') {
+    const email = String(form.get('email') || '').trim()
+    const password = String(form.get('password') || '')
+    if (!email || password.length < 6) {
+      errorMsg = 'Ingresá un email válido y una contraseña de al menos 6 caracteres.'
+    } else {
+      const { data: nuevo, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true })
+      if (error) {
+        errorMsg = error.message
+      } else if (nuevo.user) {
+        // Cuenta aislada (no comparte datos con Franco) — perfil propio desde el primer login,
+        // en vez de esperar al upsert perezoso de /perfil.
+        await admin.from('profiles').insert({ id: nuevo.user.id, is_admin: false })
+        successMsg = `Usuario ${email} creado correctamente.`
+      }
+    }
+  } else if (action === 'desactivar_usuario' || action === 'reactivar_usuario') {
+    const targetId = String(form.get('user_id') || '')
+    const { error } = await admin.auth.admin.updateUserById(targetId, {
+      ban_duration: action === 'desactivar_usuario' ? '876000h' : 'none',
+    })
+    if (error) errorMsg = error.message
+    else successMsg = action === 'desactivar_usuario' ? 'Usuario desactivado.' : 'Usuario reactivado.'
+  }
+}
+
+const { data: listado } = await admin.auth.admin.listUsers()
+const usuarios = listado?.users ?? []
+const { data: perfiles } = await admin.from('profiles').select('id, nombre, apellido, is_admin')
+const perfilPorId = new Map((perfiles ?? []).map((p: any) => [p.id, p]))
+
+function formatearFecha(iso: string | null | undefined) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleDateString('es-AR')
+}
+---
+<AppLayout title="Administración">
+  <div class="page-header">
+    <h2>Administración de usuarios</h2>
+  </div>
+
+  {errorMsg && <div class="alert alert-error" style="margin-bottom:1rem">{errorMsg}</div>}
+  {successMsg && <div class="alert alert-success" style="margin-bottom:1rem">{successMsg}</div>}
+
+  <div class="card" style="margin-bottom:1.5rem">
+    <h3 style="margin-bottom:1rem">Crear usuario</h3>
+    <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:1rem">
+      Cada usuario nuevo tiene su propia cuenta aislada — no comparte expedientes ni datos con los demás.
+    </p>
+    <form method="POST" class="form-grid form-grid-2">
+      <input type="hidden" name="_action" value="crear_usuario" />
+      <div class="field">
+        <label>Email</label>
+        <input class="input" type="email" name="email" required />
+      </div>
+      <div class="field">
+        <label>Contraseña temporal</label>
+        <input class="input" type="text" name="password" minlength="6" required />
+      </div>
+      <div style="grid-column:1/-1">
+        <button type="submit" class="btn btn-primary">+ Crear usuario</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-bottom:1rem">Usuarios ({usuarios.length})</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Email</th>
+            <th>Nombre</th>
+            <th>Alta</th>
+            <th>Estado</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {usuarios.map(u => {
+            const perfil = perfilPorId.get(u.id) as any
+            const estaBaneado = !!(u.banned_until && new Date(u.banned_until).getTime() > Date.now())
+            const nombreCompleto = perfil?.nombre || perfil?.apellido ? `${perfil?.nombre ?? ''} ${perfil?.apellido ?? ''}`.trim() : '—'
+            return (
+              <tr>
+                <td><strong>{u.email}</strong>{perfil?.is_admin && <span class="badge badge-finalizado" style="margin-left:0.5rem">admin</span>}</td>
+                <td>{nombreCompleto}</td>
+                <td>{formatearFecha(u.created_at)}</td>
+                <td>{estaBaneado ? <span class="badge badge-borrador">Desactivado</span> : <span class="badge badge-finalizado">Activo</span>}</td>
+                <td>
+                  {u.id !== uid && (
+                    <form method="POST" style="display:inline">
+                      <input type="hidden" name="_action" value={estaBaneado ? 'reactivar_usuario' : 'desactivar_usuario'} />
+                      <input type="hidden" name="user_id" value={u.id} />
+                      <button type="submit" class={`btn btn-sm ${estaBaneado ? 'btn-secondary' : 'btn-danger'}`}>
+                        {estaBaneado ? 'Reactivar' : 'Desactivar'}
+                      </button>
+                    </form>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</AppLayout>
+
+<style>
+.page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
+.page-header h2 { font-size:1.5rem; }
+.form-grid { display:grid; gap:1rem; }
+.form-grid-2 { grid-template-columns:1fr 1fr; }
+@media (max-width:600px) { .form-grid-2 { grid-template-columns:1fr; } }
+</style>

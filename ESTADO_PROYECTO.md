@@ -78,7 +78,196 @@
 
 ---
 
-<<<<<<< HEAD
+## 📋 Cambios de la sesión — 17 Septiembre 2026 (v0.26) — Tab Inmueble: inscripciones/partidas adicionales, se saca "notificación a linderos", fix Planilla de Cálculos
+
+Pedidos de Franco (por audio, relayados por Juan) sobre la Tab "Inmueble" del wizard de expediente y la Planilla de Cálculos. **Requiere correr una migración SQL antes de probar** (al final de esta entrada).
+
+### 1. Inscripciones en Registro de la Propiedad — ahora se pueden agregar más de una
+Un inmueble armado por unión de varias parcelas puede tener más de una inscripción registral (y, de la mano, más de una inscripción municipal) — antes solo había lugar para una. La primera inscripción sigue cargándose exactamente igual que antes (mismos campos, misma tabla `inmuebles`, sin ningún cambio ahí); las adicionales van a una tabla nueva `inmueble_inscripciones_extra`, con su propia lista + botón "Quitar" + formulario "+ Agregar otra inscripción" (mismo patrón ya usado para comitentes/testigos: cada alta/baja es un mini-form propio, sin tocar el form grande de "Guardar inmueble"). Aparece debajo del botón "Guardar inmueble", dentro de la misma Tab.
+
+### 2. Partida Inmobiliaria — mismo criterio
+Mismo patrón, tabla nueva `inmueble_partidas_extra`: la primera partida sigue en `inmuebles.matricula_catastral` (Identificación Catastral, sin cambios), las adicionales en la tabla nueva con su propia lista + agregar/quitar.
+
+### 3. Se saca "Referencias para notificación a linderos" del formulario
+Franco pidió sacar "Calle de frente" / "Entre calle" / "Y calle" del formulario — cambio ya definitivo, general para todos los casos. **Ojo, conflicto real que se le señaló a Juan y confirmó seguir adelante igual**: `calle_frente` también completaba el Inc. a) "UBICACIÓN: Calle" del **Formulario U** (Designación según título) — al sacar el input, ese campo de Formulario U y el párrafo de "Notificación a Linderos y Autoridades" (`citacion_linderos`) que arma la frase "...frente a la calle X, entre las calles Y y Z" quedan sin ese dato de acá en más (ambos documentos ya manejaban el caso vacío con gracia, sin texto roto — no hay excepción/crash, solo sale una oración más corta). No se tocó `generar.ts` ni el schema — las columnas siguen existiendo, simplemente no hay más forma de cargarlas desde la UI. "Propietario anterior" se mantiene (sigue siendo un dato real, usado en Formulario U y en la Notificación a Linderos) — solo se le sacó el título de sección "notificación a linderos" que ya no aplica, queda como campo suelto.
+
+### 4. Fix: Planilla de Cálculos no mostraba nombre de parcela ni etiquetas de lado/ángulo
+Franco reportó (audio) que los datos de la Planilla de Cálculos no coincidían con lo cargado en la Tab Mensura. Causa: el `select` de `generar.ts` (rama `planilla_calculos`/Memoria de Mensura, línea ~977) no traía las columnas `nombre` (de `poligono`) ni `etiqueta` (de `lados`/`angulos`) — aunque el código más abajo ya las usaba (`pol.nombre` para el título de la planilla, `lado.etiqueta`/`ang.etiqueta` para las designaciones manuales de lado/ángulo tipo "L1-B"), así que siempre llegaban `undefined` y esos datos salían en blanco/con la designación automática aunque Franco los hubiera cargado a mano en Mensura. Se agregaron ambas columnas al `select`.
+
+### Migración SQL a correr en Supabase (antes de probar)
+```sql
+create table if not exists inmueble_inscripciones_extra (
+  id                            uuid primary key default gen_random_uuid(),
+  inmueble_id                   uuid references inmuebles(id) on delete cascade not null,
+  orden                         int default 1,
+  tipo_inscripcion_registro     text default 'matricula' check (tipo_inscripcion_registro in ('matricula','tomo')),
+  matricula_registro            text,
+  registro_tomo                 text,
+  registro_folio                text,
+  registro_finca                text,
+  registro_anio                 text,
+  inscripcion_mayor_extension   boolean default false,
+  matricula_municipal           text
+);
+alter table inmueble_inscripciones_extra enable row level security;
+create policy "Inscripciones extra: acceso via inmueble → expediente propio"
+  on inmueble_inscripciones_extra for all
+  using (exists (select 1 from inmuebles i join expedientes e on e.id = i.expediente_id where i.id = inmueble_inscripciones_extra.inmueble_id and e.user_id = auth.uid()))
+  with check (exists (select 1 from inmuebles i join expedientes e on e.id = i.expediente_id where i.id = inmueble_inscripciones_extra.inmueble_id and e.user_id = auth.uid()));
+
+create table if not exists inmueble_partidas_extra (
+  id            uuid primary key default gen_random_uuid(),
+  inmueble_id   uuid references inmuebles(id) on delete cascade not null,
+  orden         int default 1,
+  matricula_catastral text not null
+);
+alter table inmueble_partidas_extra enable row level security;
+create policy "Partidas extra: acceso via inmueble → expediente propio"
+  on inmueble_partidas_extra for all
+  using (exists (select 1 from inmuebles i join expedientes e on e.id = i.expediente_id where i.id = inmueble_partidas_extra.inmueble_id and e.user_id = auth.uid()))
+  with check (exists (select 1 from inmuebles i join expedientes e on e.id = i.expediente_id where i.id = inmueble_partidas_extra.inmueble_id and e.user_id = auth.uid()));
+```
+
+**Verificación**: `astro build` limpio. `astro dev` levanta sin error de arranque (ruta protegida redirige a `/login` como siempre, sin 500). El Fragment nuevo (`<>...</>`) que envuelve la Tab Inmueble para poder agregar las 2 secciones nuevas como hermanas del `<form>` principal (HTML no permite forms anidados) se validó vía `astro build`, que compila/analiza el archivo completo. **Pendiente de probar en el navegador con datos reales** — Juan lo va a probar después de correr la migración.
+
+---
+
+## 📋 Cambios de la sesión — 15 Septiembre 2026 (v0.25) — Rubro 5 del dorso de SOR: reconstrucción completa desde geometría exacta del Excel
+
+El primer ajuste (14/9, entrada anterior) mejoró el tamaño de los títulos y fusionó las filas 6-9, pero el usuario marcó que seguía sin parecerse al Excel de referencia. Se rehizo por completo, esta vez extrayendo la geometría con precisión real en vez de a ojo: un script aparte (`xlsx`, ya usado en sesiones anteriores para este mismo Excel — reutiliza el archivo `C:\Users\juanc\Downloads\DDJJ - UNIVERSALES (SOR - E1 - U).xlsx` ya analizado, no hizo falta pedirle nada nuevo al usuario) suma el ancho real (`wpx`) de cada columna de la hoja "SoR (D)" desde la columna A, dando la posición x exacta de cada grupo y sub-columna — antes esas posiciones eran una estimación.
+
+Esa segunda pasada reveló 3 cosas de la estructura real que la primera no había capturado:
+- **Cada sub-columna tiene un número clave (1, 2, 3...) impreso justo debajo de su etiqueta** (fila 10 del Excel) — así es como Catastro marca la grilla en el formulario real (tilda el número, no la palabra). Se agregó esa fila de números, ausente hasta ahora.
+- **La fila "MONTE" (9) no es una franja fusionada de ancho completo** como las filas 6-8 ("Afloramientos"/"Lagunas"/"Carrisales") — son 3 segmentos propios BUENO / REGULAR / MALO (merges reales del Excel: R28:Y28, AA28:AK28, AM28:AT28). Se corrigió de "MONTE (BUENO / REGULAR / MALO)" en un solo texto a 3 columnas reales con su propio divisor.
+- **Algunos títulos de grupo están fusionados en 2 filas propias** en el Excel (no solo "AGUA DEL SUBSUELO"/"CAPACIDAD GANADERA", que ya se habían partido a mano en el primer intento) — "ESPESOR DE CAPA ARABLE" y "COLOR DE LA TIERRA" también necesitan 2 líneas para entrar en su columna, y el primer intento los dejaba en una sola línea que nunca entraba (ni al tamaño mínimo), desbordando sobre el título vecino. Se resolvió con un helper nuevo (`encogerYEnvolver`) que reduce el tamaño Y envuelve el texto a 1-2 líneas a la vez (en vez de solo reducir tamaño sin envolver), aplicado parejo a los 7 títulos.
+
+Se probó también, y se descartó, una alternativa: dar vuelta el texto de las sub-columnas angostas (LLANO/ONDULADO/etc.) a horizontal en vez de vertical, para que se pareciera más al renglón de texto horizontal que se ve en Excel. No es viable: esas sub-columnas miden ~8pt de ancho en esta escala de página — ningún tamaño de letra legible entra ahí horizontal, ni envolviendo (algunas etiquetas como "BUENAS A MAS DE 15 MTS" tendrían que partirse en 6-7 líneas de 3-4 letras cada una, ilegible). El texto rotado 90°, que ya estaba, es la solución correcta para columnas de este ancho — igual que usan formularios oficiales reales con muchas columnas angostas.
+
+**Verificación**: `astro build` limpio. Script aislado con `pdf-lib` + render con poppler, comparado directamente contra la captura del Excel de referencia — confirmado que los 7 títulos de grupo ya no se superponen, los números clave aparecen bajo cada sub-columna, y la fila "MONTE" muestra sus 3 segmentos con divisor. El resto de la página (Rubro 6, declaración jurada, firma) no se tocó — solo se ajustó el punto de arranque (`yTexto`) para que siga inmediatamente después de la grilla, que ahora es un poco más alta que antes.
+
+---
+
+## 📋 Cambios de la sesión — 14 Septiembre 2026 (v0.25) — Ajuste visual: Rubro 5 del dorso de Formulario SOR
+
+El usuario marcó que la tabla "RUBRO 5: CARACTERISTICAS" del dorso de SOR (`dibujarDorsoSor`, Fase B) se veía desprolija, comparándola contra la hoja "SoR (D)" del Excel de referencia de Franco. Dos correcciones, ninguna copia colores de Franco (siguen sin colores, solo la grilla — regla ya establecida), son ajustes de estructura/tipografía:
+
+- **Títulos de columna a un tamaño parejo**: antes cada título ("RELIEVE", "ESP. CAPA ARABLE", "COLOR DE TIERRA", etc.) encogía su letra por separado hasta entrar en su propia columna — con columnas angostas como "COLOR DE TIERRA", terminaba mucho más chico que sus vecinos "RELIEVE"/"AGUA SUBSUELO", una fila de encabezado con tamaños dispares. Ahora se calcula un solo tamaño (el más chico que entra en la columna más angosta) y se usa parejo en los 7 títulos.
+- **Filas 6 a 9 ("Afloramientos de tosca", "Lagunas...", "Carrisales", "Monte") fusionadas en una sola franja, sin grilla interna**: revisando la hoja de Excel de Franco de nuevo, esas 4 filas son estructuralmente un renglón descriptivo simple, no una grilla de casilleros como las filas 1-5 (se ve claro en el Excel: esas filas son una franja fusionada sin columnas internas). El código las dibujaba igual que las filas 1-5, con las líneas verticales de las 7 columnas cruzando por encima del texto largo (ej. "LAGUNAS Y OTROS ESPEJOS DE AGUA" atravesado por 5-8 líneas de grilla que no aplican ahí) — de ahí lo "feo". Se cortan los divisores verticales al pie de la fila 5 (`yLimiteGrid`) en vez de seguir hasta el final de la tabla, y el texto de esas 4 filas arranca un poco más a la izquierda (en la columna ALTIMETRIA, no después de ella) para aprovechar el ancho fusionado.
+
+**Verificación**: `astro build` limpio. Script aislado con `pdf-lib` + render con poppler, comparado antes/después — confirmado visualmente que las filas 6-9 quedan como una franja limpia sin líneas cruzando el texto, y los 7 títulos de columna se leen parejos.
+
+---
+
+## 📋 Cambios de la sesión — 14 Septiembre 2026 (v0.25) — Fase D (DDJJ interactivas / AcroForm): implementada y luego revertida por decisión del usuario
+
+Se implementó y verificó de punta a punta la conversión completa de los 3 formularios de DDJJ (U, SOR, E1) a PDF interactivo (AcroForm) — campos de texto y grupos de opciones reales, editables desde el visor nativo de PDF, sin aplanar el documento. Las 3 sub-fases (D.1 Formulario U, D.2 Formulario SOR, D.3 Formulario E1) se completaron y se verificaron con scripts aislados + render con poppler, sin errores de build.
+
+**Al probarlo en un expediente real, el usuario decidió revertir todo el enfoque**: no le gustó el resultado visual en el navegador (el resaltado celeste/gris que Chrome dibuja sobre cada campo interactivo para señalar dónde se puede hacer click, visible en la vista previa). Pidió deshacer los documentos interactivos por completo y buscar otro enfoque para que cargar las DDJJ sea menos engorroso, sin tocar nada más de lo agregado en la sesión.
+
+**Reversión realizada** (manual, no había ningún commit hecho desde que arrancó la Fase D — se reconstruyó cada rama a partir de lo ya leído en la propia conversación, en vez de descartar todo el archivo): en `generar.ts` se sacaron los 4 helpers de AcroForm (`crearCampoTexto`, `crearCampoTextoMultilinea`, `crearSiNo`, `crearCheckbox`), el import de `type PDFForm`, y las 3 ramas (`formulario_u`, `formulario_sor`, `formulario_e1`) volvieron a su versión de texto fijo/`drawText` con `campo`/`marcar`/`campoSor`/`marcarSor`/`campoE1`/`marcarE1` — **incluidos los 8 campos nuevos que se habían agregado en espacios antes vacíos de Formulario U** (Nomenclatura Catastral, ADREMA, "Cantidad de formularios que se acompañan", Nº de Mensura inscripto, Superficie según Título/Estimado): esos datos vuelven a quedar sin completar, como estaban antes de esta fase. Confirmado con `grep` que no queda ninguna referencia a AcroForm en el archivo, y `astro build` limpio.
+
+**Se mantuvo sin tocar** todo lo demás de la sesión: el fix del declarante de Formulario U (Fase A, comitente con datos de Franco por defecto — decisión de Franco), el dorso de Formulario SOR (Fase B, `dibujarDorsoSor`), el dorso de Formulario E1 (`dibujarDorsoE1`), el módulo de administración, y el listado de expedientes con filtros/orden/columnas reordenables/paginado.
+
+**Hallazgo del Rubro 2 de Formulario E1** (columna "Coeficiente" pisando los valores en x=540, detectado durante la verificación de D.3 y confirmado como preexistente al código de antes de esta fase) sigue sin corregir — no se tocó al revertir, porque no formaba parte de la Fase D en sí. Sigue pendiente de revisar con Franco.
+
+**Pendiente**: definir un enfoque distinto para agilizar la carga de datos de DDJJ que hoy faltan (Nomenclatura Catastral, ADREMA, etc.) sin usar campos interactivos de PDF — a discutir con el usuario en la próxima sesión.
+
+---
+
+## 📋 Cambios de la sesión — 14 Septiembre 2026 (v0.24) — Listado de Expedientes: filtros, orden, columnas reordenables y paginado
+
+`expedientes/index.astro` no tenía paginado (la lista ya se estaba haciendo larga), los filtros eran solo estado + búsqueda por Nº, y no había forma de ordenar por última modificación. Se agregaron las 4 mejoras pedidas, todas dentro de lo que ya existía (mismo patrón de filtros vía `GET`, sin tocar el modelo de datos):
+
+- **Filtros nuevos**: Área de Catastro (dropdown, reusa `AREAS_CATASTRO` ya existente) y rango de fechas (`desde`/`hasta` sobre `fecha_inicio`, `.gte()`/`.lte()`). La búsqueda por texto (`q`) ahora también matchea contra "Tipo de mensura" además de "Nº Expediente" (antes solo esto último) — vía `.or(...)`, mismo mecanismo ya usado en `comitentes/index.astro`.
+- **Ordenar por última modificación**: nueva columna "Última modif." (la tabla `expedientes` ya tenía `updated_at` con un trigger de auto-update — no hizo falta migración) con un link en el header que alterna asc/desc (`?sort=updated_at&dir=asc|desc`); sin tocar el header, el orden por defecto sigue siendo el de siempre (más nuevo por `created_at`).
+- **Paginado**: mismo patrón exacto ya usado en `comitentes/index.astro` (`POR_PAGINA=10`, `.range()` + `count:'exact'`, controles Anterior/Siguiente).
+- **Columnas reordenables**: arrastrar y soltar cualquier header (excepto "Acciones", que queda siempre al final) para reordenar la tabla — el orden se guarda en `localStorage` del navegador (no es una preferencia de usuario en la base, es puramente visual/local) y se restaura solo al volver a cargar la página.
+- Se agregó una función `armarQuery(overrides)` en el frontmatter para no repetir a mano la reconstrucción del query string (filtros + orden + página) en cada link de paginado/orden — arma la URL completa preservando todos los filtros activos salvo los que se pisan explícitamente.
+
+### Verificado
+`astro build` sin errores de tipo. El reordenamiento de columnas (la parte más delicada, todo en el cliente) se verificó de punta a punta con un arnés de Playwright que sirve el script real extraído tal cual del archivo (mismo método ya usado en sesiones anteriores para JS de cliente) a través del compilador de Astro: se simulan los eventos nativos de `dragstart`/`dragover`/`drop` (Playwright no tiene una API de alto nivel para drag & drop HTML5) arrastrando una columna del medio hasta la primera posición, y se confirma que (1) el header y las celdas de cada fila quedan reordenados exactamente igual entre sí, (2) "Acciones" se mantiene siempre al final, (3) el nuevo orden se guarda en `localStorage`, y (4) recargando la página el orden se restaura igual. Confirmado por el usuario en la app real ("quedo bien").
+
+### Ajuste (v0.24) — Filtros dinámicos, sin botón "Filtrar"
+
+A pedido del usuario: se sacó el botón "Filtrar" — el form (`#form-filtros`) ahora se envía solo. Selects (estado, área) y las fechas envían al tocarlos (evento `change`, discreto, no hace falta esperar nada); el campo de búsqueda de texto espera una pausa de 400ms después de que el usuario deja de tipear antes de enviar (si mandara uno por letra, recargaría la página constantemente). Como cada envío sigue siendo una recarga completa de página (no se reescribió a AJAX — mismo patrón 100% SSR que el resto del proyecto), se agregó también que el campo de búsqueda recupere el foco y el cursor al final después de recargar (si ya tenía texto) — sin eso, cada pausa al tipear le hacía perder el foco y había que volver a clickear el campo para seguir. El botón "Limpiar" queda igual que antes (solo aparece si hay algún filtro activo).
+
+### Verificado
+`astro build` sin errores de tipo. Falta confirmar con el usuario en la app real.
+
+---
+
+## 📋 Cambios de la sesión — 14 Septiembre 2026 (v0.24) — Dorso del Formulario E1
+
+El usuario confirmó las Fases A/B/C del Roadmap 3 (declarante del Formulario U, dorso del SOR, módulo de administración) — todas probadas en su entorno real. Antes de pasar a la conversión a AcroForm (Fase D), pidió terminar de dejar los 3 documentos parejos: **Formulario E1 también con página de dorso**, igual que U y SOR.
+
+**Diferencia clave con U/SOR**: el E1 ya tiene su declaración jurada en el **frente** (implementado en una sesión anterior) — el dorso real (Rubros 3 a 7) es **100% "Reservado para uso de la Dirección"**: determinación del valor unitario, valuación del edificio (vivienda y negocio/espectáculos), obras accesorias, y resumen de valuación. Nuestro sistema nunca completa nada ahí — se agregó solo por consistencia visual con los otros 2 formularios (decisión del usuario).
+
+- **Nueva función `dibujarDorsoE1`** en `generar.ts` (misma zona que `dibujarDorsoSor`), con un helper genérico `dibujarTablaE1` reutilizado en las 5 sub-tablas (Rubros 3, 4, 5, 6, 7) — más simple que la grilla del SOR (columnas más anchas, alcanza con texto horizontal partido en líneas vía `partirEnLineas`, sin necesitar texto girado 90°).
+- Coordenadas extraídas de la hoja "E1 (D)" del Excel de Franco (mismo método `xlsx` ya usado para el SOR).
+- **Dos ajustes hechos al renderizar y revisar visualmente** (no eran evidentes solo mirando los números): los títulos de "Rubro 4" y "Rubro 7" quedaban pegados al borde de la tabla anterior en las coordenadas tal cual las daba el Excel (0pt de separación) — se les agregó un margen (`GAP_R4`/`GAP_R7`) para que no se superpongan. Además, la hoja de Excel original repite el texto "TOTAL DE RUBRO 4" en la tabla del Rubro 5 (un error de copiado del formulario/Excel original) — se corrigió a "TOTAL RUBRO 5" en la versión que genera el sistema.
+- Se llama a `dibujarDorsoE1(pdfDoc, font, bold, negro)` al final de la rama `formulario_e1`, después de la declaración jurada del frente.
+
+**Verificación de que no se rompe nada en preview/descarga** (pedido explícito del usuario, con los 3 documentos ahora en 2 páginas cada uno): revisado el código de la vista previa (`[id].astro`, modal — carga la URL firmada en un `<iframe>`, el visor nativo del navegador ya muestra/scrollea todas las páginas sin ningún código nuestro de por medio) y de la descarga (`descargar.ts` — sirve el archivo tal cual está en Storage, sin ninguna suposición de cantidad de páginas). También los dos PDFs combinados ("Declaraciones juradas" y "Expediente completo") usan `copyPages(doc, doc.getPageIndices())` — ya copian **todas** las páginas de cada documento, no solo la primera. Conclusión: nada de esto necesitaba cambios, ya era agnóstico a la cantidad de páginas por documento.
+
+### Verificado
+`astro build` sin errores de tipo. Renderizado con `pdf-lib` + poppler en un script aislado, iterando una vez para corregir los dos problemas de superposición encontrados visualmente — el resultado final muestra las 5 sub-tablas del dorso completas, legibles, sin superposiciones, y toda la página entra sin desbordar (termina a ~940pt de una página de 1008pt). Falta confirmar con el usuario en la app real.
+
+---
+
+## 📋 Cambios de la sesión — 13 Septiembre 2026 (v0.23) — Roadmap 3: correcciones de DDJJ contra Excel de Franco
+
+Franco pasó un Excel de referencia (`DDJJ - UNIVERSALES (SOR - E1 - U).xlsx`, 6 hojas: frente/dorso de SoR, E1 y U, cada uno con un caso real completado) para terminar de darle forma a la tarea de DDJJ. Se analizó completo (extraído con la librería `xlsx` en un proyecto Node aparte, sin tocar el proyecto) y se cruzó campo por campo contra `generar.ts` — el mapeo ya calibrado coincide casi exactamente, buena señal para la conversión a AcroForm (Fase D, pendiente). Aparecieron 2 correcciones concretas en Formulario U (Fase A, esta entrada) y una plantilla incompleta en el SOR (Fase B, sesión en curso). Plan completo de las 4 fases (A a D) guardado en el plan de la sesión.
+
+### Fase A (v0.23) — Formulario U: declarante correcto + croquis en blanco
+
+**A.1 — Declarante**: el párrafo de declaración jurada (`dibujarFormularioU`, rama `formulario_u`) usaba al **agrimensor** (`profile`) como declarante con carácter fijo "AGRIMENSOR" — decisión tomada en el Roadmap 1 contra un ejemplo distinto. Los dos ejemplos reales de este Excel nuevo muestran como declarante al **comitente**, con su rol real ("...en su carácter de POSEEDOR" / "...en su carácter de AUTORIZADO"). Cambiado a `comitentePrincipal`/`rolComitente` (ya calculados en el archivo, reusados también por Acta de Mensura y Nota de Elevación) — de paso, nacionalidad y tipo de documento ahora salen de columnas reales de `comitentes` en vez de asumir "Argentina"/"DNI" fijo (que era necesario cuando el declarante era `profile`, sin esas columnas).
+
+**A.2 — Croquis en blanco**: Franco pidió que el recuadro de "Croquis de la Parcela" (Rubro 2) quede completamente en blanco, sin ningún cuadrado (lo dibuja él a mano). Renderizando la plantilla actual con poppler se confirmó que, además de las 4 marcas de esquina que el código ya blanqueaba, **el recuadro cuadrado en sí también viene impreso en la plantilla** (`public/pdf-templates/formulario_u.pdf`) — se agregó un quinto `drawRectangle` blanco cubriendo el cuadrado completo (`x=361,y=541,w=118,h=119`).
+
+### Verificado
+`astro build` sin errores de tipo. Verificado con un script aislado de `pdf-lib` (mismo método ya usado en sesiones anteriores para PDFs): se generó un Formulario U de prueba con un comitente de rol `poseedor` y se renderizó con poppler — el párrafo sale "El que suscribe LUIS HECTOR MARTINEZ nacionalidad Argentina documento de identidad DNI Nº 17.016.868 en su carácter de POSEEDOR declara..." (comitente real, no Franco) y el recuadro del croquis sale completamente en blanco, sin bordes ni marcas. Falta confirmar con Franco en la app real.
+
+### Ajuste (v0.23) — Declarante del dorso de Formulario U: vuelve a ser Franco por defecto
+
+Franco confirmó por WhatsApp (14/9): "En el dorso, puede ir el comitente, el dueño o puedo firmar yo. Dejale con mis datos nomas, por defecto, en el dorso". Es decir, la A.1 de arriba se revierte **solo para la página de declaración del Formulario U** — vuelve a usar `profile` (Franco, carácter "AGRIMENSOR", Argentina/DNI fijo) como antes del Roadmap 1. La declaración jurada del **dorso del SOR** (Fase B, más abajo) queda **sin cambios**, con comitente + rol — Franco no pidió tocar esa.
+
+### Verificado
+`astro build` sin errores de tipo. Se verificó que solo quedó una ocurrencia de `const declarante = profile` en todo el archivo (la de `dibujarFormularioU`) y que `dibujarDorsoSor` sigue intacto usando `comitentePrincipal`/`rolComitente`.
+
+### Fase B (v0.23) — Página de dorso del Formulario SOR
+
+`public/pdf-templates/formulario_sor.pdf` tenía **una sola página** (confirmado con `pdfDoc.getPageCount()`) — le faltaba la segunda página que sí tiene el formulario real: Rubros 5 (grilla de características del terreno: relieve, capa arable, color de tierra, agua de subsuelo, capacidad ganadera, aptitudes agrícola-ganaderas 1-9), 6 (distancias en km) y 7 (valor del inmueble) — todo "Reservado para la Dirección", nuestro sistema nunca completa esos valores — más la declaración jurada + fecha + DNI + firma, que sí lleva datos reales.
+
+Se construyó con `pdf-lib` directamente (nueva función `dibujarDorsoSor` en `generar.ts`, agregada al final de la rama `formulario_sor`) — **sin instalar ninguna herramienta nueva** (se descartó exportar la hoja de Excel vía LibreOffice). Las coordenadas de cada etiqueta/columna se extrajeron con la librería `xlsx` (script aparte en el scratchpad, sin tocar el proyecto) leyendo el ancho de columna/alto de fila de la hoja "SoR (D)" del Excel de Franco, escaladas a los 612pt de ancho de página. **Solo se replicó la grilla y las etiquetas impresas del formulario — nunca los datos de ejemplo que Franco cargó en su Excel** (números de superficie, marcas "x", nombre de ruta/población, etc.) para mostrar dónde va cada cosa, tal como pidió el usuario.
+
+Con las columnas reales del formulario (hasta 8 sub-columnas dentro de un mismo grupo, en un ancho de página de 612pt) el texto horizontal se superponía entre columnas vecinas — se resolvió con el mismo recurso que usan los formularios de Catastro reales para columnas muy angostas: las sub-etiquetas de cada grupo (LLANO/ONDULADO/etc.) y las etiquetas de categoría de fila (AGRICOLAS GANADERAS/OTRAS APTITUDES) van con texto girado 90° (`rotate: degrees(90)` de `pdf-lib`, se lee de abajo hacia arriba); los títulos de grupo (RELIEVE, ESPESOR, etc.) quedan horizontales pero encogidos a su propio ancho de columna (`encogerHastaEntrar`, mismo criterio que ya usaba `campoSor` en la página de frente). La declaración jurada usa el mismo fix de la Fase A: declarante = comitente + rol (no el agrimensor).
+
+### Verificado
+`astro build` sin errores de tipo. Verificado con un script aislado de `pdf-lib` + render con poppler, iterando 2 veces hasta que quedó legible: la primera pasada mostraba texto superpuesto e ilegible en la grilla (columnas demasiado angostas para texto horizontal); con el texto girado 90° y los títulos de grupo encogidos, la grilla quedó clara y reconocible, sin superposiciones, con las 9 filas de aptitudes, los 7 grupos de columnas, y la declaración jurada abajo con el comitente/rol correcto. Se confirmó también que la página 1 (frente del SOR) no se vio afectada. Falta confirmar con Franco en la app real.
+
+### Fase C (v0.23) — Módulo de administración de usuarios
+
+Arquitectura resuelta con el usuario: **cuentas aisladas** (cada usuario nuevo es independiente, ve solo sus propios expedientes — el modelo actual de RLS por `user_id` ya lo soporta sin cambios, no hizo falta tocar ninguna política).
+
+- **`src/lib/supabase.ts`**: nueva función `getSupabaseAdmin()` — cliente con la **service role key** (env var `SUPABASE_SERVICE_ROLE_KEY`, sin prefijo `PUBLIC_`, nunca llega al cliente), necesaria porque crear/listar/banear usuarios de Supabase Auth requiere la Admin API (`auth.admin.*`), que la anon key no puede usar.
+- **`schema.sql`**: columna `is_admin boolean default false` en `profiles`.
+- **Nueva página `/admin`**: protegida (redirige a `/dashboard` si `!profile.is_admin`, aunque se entre directo por URL). Listado de usuarios (`auth.admin.listUsers()`, cruzado con `profiles` para nombre/apellido/admin), formulario para crear uno nuevo (`auth.admin.createUser({email, password, email_confirm:true})` + un insert inmediato en `profiles` con `is_admin:false`, para que tenga perfil desde el primer login), y un botón Desactivar/Reactivar por usuario (`auth.admin.updateUserById(id, {ban_duration:'876000h'})`/`{ban_duration:'none'}`) — oculto para la propia fila del admin logueado, para no poder autobanearse por error. Nada de permisos granulares todavía (Franco ya avisó que eso se refina después).
+- **`Sidebar.astro`**: nuevo ítem "Administración" en la navegación.
+
+### Verificado
+`astro build` sin errores de tipo. Se verificó cada llamada a la Admin API (`createUser`/`listUsers`/`updateUserById`, formas de `data`/`error` devueltas, campo `ban_duration`) contra los `.d.ts` de `@supabase/auth-js` instalado (2.105.4) — coinciden exactamente con lo escrito.
+
+**Confirmado por el usuario en local, de punta a punta**: corrió la migración + se marcó admin a las 2 cuentas existentes (con un ajuste: `profiles.nombre` tiene un `not null` en la base real que no estaba reflejado en `schema.sql` — resuelto al toque con datos reales en el insert), cargó la `SUPABASE_SERVICE_ROLE_KEY`, creó un usuario de prueba desde `/admin`, y confirmó que al loguearse con esa cuenta ve un Dashboard completamente vacío (0 expedientes) — cuentas aisladas funcionando como se esperaba.
+
+### Ajuste (v0.23) — Ocultar "Administración" del sidebar para quien no sea admin
+
+El usuario probó con la cuenta de prueba (no-admin) y el link "Administración" seguía apareciéndole en el menú (aunque `/admin` ya lo redirigía al tocarlo) — confuso para un futuro empleado sin `is_admin`. En vez de duplicar una verificación completa de auth (`auth.getUser()`) en `Sidebar.astro` (se renderiza en TODAS las páginas — duplicar esa llamada de red en cada una hubiera reintroducido justo el tipo de latencia que costó tanto sacar en el fix del login colgado), se aprovechó que la política RLS de `profiles` ("Usuario ve su propio perfil", `using (auth.uid() = id)`) ya filtra automáticamente cualquier consulta a esa tabla a la fila del dueño del token — alcanza con `getSupabase(token).from('profiles').select('is_admin').maybeSingle()` (sin `.eq('id', ...)`, RLS ya lo hace) para saber si el usuario actual es admin, sin necesitar una verificación de auth aparte. Con token vencido/ausente, la consulta no devuelve fila y el link simplemente no se muestra (comportamiento seguro por default).
+
+### Verificado
+`astro build` sin errores de tipo. Pendiente: confirmación visual del usuario (loguearse con la cuenta de prueba no-admin y ver que el link ya no aparece).
+
+---
+
 ## 📋 Cambios de la sesión — 12 Septiembre 2026 (v0.22) — Roadmap 2
 
 Franco mandó una nueva tanda de pedidos (12 chicos/medianos + un pedido grande: pasar las DDJJ — Formulario U/SOR/E1 — a formularios PDF rellenables reales en vez de calcular coordenadas para centrar cada valor). Se armó un roadmap de 7 fases nuevas (Fase 6 a 12, continuando la numeración del roadmap anterior) — plan completo guardado en el plan de la sesión.
@@ -235,7 +424,9 @@ Pedido: reemplazar el ícono de texto "⊙ NICA" del sidebar (`src/components/si
 
 ### Verificado
 `astro build` sin errores de tipo. Renderizado y capturado con Playwright (import aislado del componente `Sidebar.astro` fuera del flujo de auth, ya que requiere estar logueado) en dos anchos de viewport para confirmar que el subtítulo no queda cortado y que el conjunto se ve prolijo — visto y ajustado (tamaño de fuente del subtítulo) hasta que quedó bien. Pendiente: confirmación visual del usuario en la app real.
-=======
+
+---
+
 ## 🐛 Bug crítico — 19 Agosto 2026 (v0.22) — Login se quedaba colgado indefinidamente
 
 Juan reportó que `/login` se quedaba cargando para siempre (el request nunca devolvía status code, ni en incógnito). En los logs de Auth de Supabase aparecían llamadas repetidas a `GET /user` devolviendo 403 "Token has invalid claims: token is expired" cada 6-10 segundos. Las keys, la config de expiración de sesión y los timeouts de Supabase ya estaban descartados como causa.
@@ -249,7 +440,6 @@ Juan reportó que `/login` se quedaba cargando para siempre (el request nunca de
 **Arreglo de fondo:** se sacó el `export const supabase = createClient(...)` de `supabase.ts` — ya no existe un cliente compartido. En su lugar, `getSupabaseAnon()` crea un cliente nuevo por llamada (mismo criterio que ya usaba `getSupabase(accessToken)` para el cliente autenticado con RLS). Se actualizaron los 12 archivos que importaban el singleton viejo (`login.astro` y las 9 páginas/endpoints protegidos que hacen `getUser(token)`) para llamar a `getSupabaseAnon()` en vez de usar un cliente importado — cada request queda completamente aislado, sin ningún lock ni estado compartido con otros requests.
 
 **Verificado:** `astro build` sin errores. Diagnosticado con los logs de Vercel (`/login` en Runtime Logs mostrando el 302 real vs. cuándo cargaba `/dashboard` — la brecha de tiempo fue la pista clave) además de los logs de Auth de Supabase. **Pendiente de que Juan confirme en producción** que ahora sí es instantáneo y no vuelve a expulsar a `/login`.
->>>>>>> 67743d33b9a31d5dc42ca47c6ca1448cd4f5b01f
 
 ---
 
