@@ -78,6 +78,18 @@
 
 ---
 
+## 📋 Cambios de la sesión — 18 Septiembre 2026 (v0.27) — Admin: cambiar contraseña de otro usuario
+
+Franco todavía no probó los cambios subidos (v0.26). Mientras tanto pidió: poder cambiar la contraseña de un usuario (la suya propia, por ejemplo) directo desde `/admin`, sin depender del flujo de "olvidé mi contraseña" por email — solo un admin puede hacerlo.
+
+- Nueva acción `cambiar_password` en `src/pages/admin.astro` — usa el mismo método admin de Supabase Auth (`admin.auth.admin.updateUserById(id, { password })`) que ya usaban desactivar/reactivar, confirmado contra los tipos oficiales de `@supabase/auth-js` (`GoTrueAdminApi.d.ts`, "Updates a user's password"). Valida mínimo 6 caracteres (mismo criterio que "Crear usuario"), da feedback claro por `successMsg`/`errorMsg` (el mismo mecanismo de alertas ya usado en toda la página).
+- UI: un `<details>` "Cambiar contraseña" por fila de usuario (al lado de Desactivar/Reactivar), que despliega un campito de texto + botón "Guardar" — no hace falta la contraseña actual del usuario objetivo, es un reset directo por admin. Disponible también en la propia fila del admin logueado (a diferencia de Desactivar, que no aplica a uno mismo).
+- No se tocó nada de `crear_usuario`/`desactivar_usuario`/`reactivar_usuario` ni del resto de la sesión.
+
+**Verificación**: `astro build` limpio.
+
+---
+
 ## 📋 Cambios de la sesión — 17 Septiembre 2026 (v0.26) — Tab Inmueble: inscripciones/partidas adicionales, se saca "notificación a linderos", fix Planilla de Cálculos
 
 Pedidos de Franco (por audio, relayados por Juan) sobre la Tab "Inmueble" del wizard de expediente y la Planilla de Cálculos. **Requiere correr una migración SQL antes de probar** (al final de esta entrada).

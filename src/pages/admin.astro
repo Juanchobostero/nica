@@ -45,6 +45,22 @@ if (Astro.request.method === 'POST') {
     })
     if (error) errorMsg = error.message
     else successMsg = action === 'desactivar_usuario' ? 'Usuario desactivado.' : 'Usuario reactivado.'
+  } else if (action === 'cambiar_password') {
+    // Solo llega acá quien ya pasó el gate de `is_admin` de arriba — Franco pidió poder
+    // resetear la contraseña de otro usuario (él mismo, por ejemplo) sin depender del flujo de
+    // "olvidé mi contraseña" por email. Mismo método admin (`updateUserById`) que ya se usa para
+    // banear/desbanear — no hace falta la contraseña actual del usuario objetivo.
+    const targetId = String(form.get('user_id') || '')
+    const nuevaPassword = String(form.get('nueva_password') || '')
+    if (!targetId) {
+      errorMsg = 'No se encontró el usuario a modificar.'
+    } else if (nuevaPassword.length < 6) {
+      errorMsg = 'La nueva contraseña debe tener al menos 6 caracteres.'
+    } else {
+      const { error } = await admin.auth.admin.updateUserById(targetId, { password: nuevaPassword })
+      if (error) errorMsg = error.message
+      else successMsg = 'Contraseña actualizada correctamente.'
+    }
   }
 }
 
@@ -112,15 +128,27 @@ function formatearFecha(iso: string | null | undefined) {
                 <td>{formatearFecha(u.created_at)}</td>
                 <td>{estaBaneado ? <span class="badge badge-borrador">Desactivado</span> : <span class="badge badge-finalizado">Activo</span>}</td>
                 <td>
-                  {u.id !== uid && (
-                    <form method="POST" style="display:inline">
-                      <input type="hidden" name="_action" value={estaBaneado ? 'reactivar_usuario' : 'desactivar_usuario'} />
-                      <input type="hidden" name="user_id" value={u.id} />
-                      <button type="submit" class={`btn btn-sm ${estaBaneado ? 'btn-secondary' : 'btn-danger'}`}>
-                        {estaBaneado ? 'Reactivar' : 'Desactivar'}
-                      </button>
-                    </form>
-                  )}
+                  <div style="display:flex;gap:0.5rem;align-items:flex-start;flex-wrap:wrap">
+                    {u.id !== uid && (
+                      <form method="POST" style="display:inline">
+                        <input type="hidden" name="_action" value={estaBaneado ? 'reactivar_usuario' : 'desactivar_usuario'} />
+                        <input type="hidden" name="user_id" value={u.id} />
+                        <button type="submit" class={`btn btn-sm ${estaBaneado ? 'btn-secondary' : 'btn-danger'}`}>
+                          {estaBaneado ? 'Reactivar' : 'Desactivar'}
+                        </button>
+                      </form>
+                    )}
+                    <details class="password-toggle">
+                      <summary class="btn btn-sm btn-secondary">Cambiar contraseña</summary>
+                      <form method="POST" style="margin-top:0.5rem;display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap">
+                        <input type="hidden" name="_action" value="cambiar_password" />
+                        <input type="hidden" name="user_id" value={u.id} />
+                        <input class="input" type="text" name="nueva_password" minlength="6" required
+                          placeholder="Nueva contraseña (mín. 6)" style="width:180px" />
+                        <button type="submit" class="btn btn-primary btn-sm">Guardar</button>
+                      </form>
+                    </details>
+                  </div>
                 </td>
               </tr>
             )
@@ -137,4 +165,9 @@ function formatearFecha(iso: string | null | undefined) {
 .form-grid { display:grid; gap:1rem; }
 .form-grid-2 { grid-template-columns:1fr 1fr; }
 @media (max-width:600px) { .form-grid-2 { grid-template-columns:1fr; } }
+/* El <summary> de "Cambiar contraseña" toma las clases btn/btn-sm/btn-secondary como si fuera un
+   botón normal — hace falta sacarle el triángulo de flecha y el bullet por defecto que el
+   navegador le agrega a todo <summary>, si no. */
+.password-toggle summary { list-style:none; cursor:pointer; }
+.password-toggle summary::-webkit-details-marker { display:none; }
 </style>
