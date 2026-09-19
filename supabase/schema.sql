@@ -56,8 +56,21 @@ create table if not exists comitentes (
 
 alter table comitentes enable row level security;
 
-create policy "Comitentes: CRUD propio"
-  on comitentes for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+-- Acceso compartido (19/9): cualquier usuario logueado ve y edita cualquier comitente — hace
+-- falta para que un expediente compartido muestre/permita corregir los datos de sus comitentes
+-- aunque no sean del usuario que los cargó originalmente. Crear/eliminar quedan propios (cada
+-- usuario sigue siendo dueño de su alta/baja, igual que antes).
+create policy "Comitentes: ver todos"
+  on comitentes for select using (auth.uid() is not null);
+
+create policy "Comitentes: crear propio"
+  on comitentes for insert with check (auth.uid() = user_id);
+
+create policy "Comitentes: editar todos"
+  on comitentes for update using (auth.uid() is not null) with check (auth.uid() is not null);
+
+create policy "Comitentes: eliminar propio"
+  on comitentes for delete using (auth.uid() = user_id);
 
 
 -- ── testigos ──────────────────────────────────────────────
@@ -73,8 +86,18 @@ create table if not exists testigos (
 
 alter table testigos enable row level security;
 
-create policy "Testigos: CRUD propio"
-  on testigos for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+-- Acceso compartido (19/9): mismo criterio que "Comitentes" de arriba.
+create policy "Testigos: ver todos"
+  on testigos for select using (auth.uid() is not null);
+
+create policy "Testigos: crear propio"
+  on testigos for insert with check (auth.uid() = user_id);
+
+create policy "Testigos: editar todos"
+  on testigos for update using (auth.uid() is not null) with check (auth.uid() is not null);
+
+create policy "Testigos: eliminar propio"
+  on testigos for delete using (auth.uid() = user_id);
 
 
 -- ── expedientes ───────────────────────────────────────────
@@ -91,13 +114,33 @@ create table if not exists expedientes (
   area_catastro       text,
   eliminado_at        timestamptz,
   created_at          timestamptz default now(),
-  updated_at          timestamptz default now()
+  updated_at          timestamptz default now(),
+  -- Quién hizo la última modificación (19/9, acceso compartido) — `user_id` sigue siendo el
+  -- creador original ("Creado por" en el listado), esto es aparte y se pisa en cada guardado.
+  updated_by          uuid references auth.users(id)
 );
 
 alter table expedientes enable row level security;
 
-create policy "Expedientes: CRUD propio"
-  on expedientes for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+-- Acceso compartido (19/9): cualquier usuario logueado del sistema ve y edita CUALQUIER
+-- expediente (pedido de Franco: "que los usuarios no admin puedan ver y editar todos los exp
+-- del sistema"). Crear queda igual que antes (el creador se registra a sí mismo en `user_id`).
+-- El "eliminar" real (DELETE SQL) queda restringido al dueño acá, pero OJO: el borrado que usa
+-- la app es un soft-delete (`update eliminado_at`, no un DELETE), así que cae bajo la policy de
+-- UPDATE de arriba (abierta a todos) — la restricción real de "solo el dueño puede eliminar" la
+-- sigue dando el propio código de `expedientes/index.astro` (filtro `.eq('user_id', uid)` en la
+-- acción `eliminar_expediente`), no esta policy.
+create policy "Expedientes: ver todos"
+  on expedientes for select using (auth.uid() is not null);
+
+create policy "Expedientes: crear propio"
+  on expedientes for insert with check (auth.uid() = user_id);
+
+create policy "Expedientes: editar todos"
+  on expedientes for update using (auth.uid() is not null) with check (auth.uid() is not null);
+
+create policy "Expedientes: eliminar propio"
+  on expedientes for delete using (auth.uid() = user_id);
 
 -- auto-update updated_at
 create or replace function update_updated_at()
@@ -125,19 +168,18 @@ create table if not exists exp_comitentes (
 
 alter table exp_comitentes enable row level security;
 
-create policy "exp_comitentes: acceso via expediente propio"
+-- Acceso compartido (19/9): ya no exige e.user_id = auth.uid() — cualquier usuario logueado que
+-- pueda ver el expediente (ahora todos, ver policy de "expedientes" arriba) puede ver/editar sus
+-- comitentes asociados.
+create policy "exp_comitentes: acceso via expediente existente"
   on exp_comitentes for all
   using (
-    exists (
-      select 1 from expedientes e
-      where e.id = exp_comitentes.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = exp_comitentes.expediente_id)
   )
   with check (
-    exists (
-      select 1 from expedientes e
-      where e.id = exp_comitentes.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = exp_comitentes.expediente_id)
   );
 
 
@@ -150,19 +192,15 @@ create table if not exists exp_testigos (
 
 alter table exp_testigos enable row level security;
 
-create policy "exp_testigos: acceso via expediente propio"
+create policy "exp_testigos: acceso via expediente existente"
   on exp_testigos for all
   using (
-    exists (
-      select 1 from expedientes e
-      where e.id = exp_testigos.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = exp_testigos.expediente_id)
   )
   with check (
-    exists (
-      select 1 from expedientes e
-      where e.id = exp_testigos.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = exp_testigos.expediente_id)
   );
 
 
@@ -203,19 +241,15 @@ create table if not exists inmuebles (
 
 alter table inmuebles enable row level security;
 
-create policy "Inmuebles: acceso via expediente propio"
+create policy "Inmuebles: acceso via expediente existente"
   on inmuebles for all
   using (
-    exists (
-      select 1 from expedientes e
-      where e.id = inmuebles.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = inmuebles.expediente_id)
   )
   with check (
-    exists (
-      select 1 from expedientes e
-      where e.id = inmuebles.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = inmuebles.expediente_id)
   );
 
 
@@ -241,21 +275,15 @@ create table if not exists inmueble_inscripciones_extra (
 
 alter table inmueble_inscripciones_extra enable row level security;
 
-create policy "Inscripciones extra: acceso via inmueble → expediente propio"
+create policy "Inscripciones extra: acceso via inmueble existente"
   on inmueble_inscripciones_extra for all
   using (
-    exists (
-      select 1 from inmuebles i
-      join expedientes e on e.id = i.expediente_id
-      where i.id = inmueble_inscripciones_extra.inmueble_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from inmuebles i where i.id = inmueble_inscripciones_extra.inmueble_id)
   )
   with check (
-    exists (
-      select 1 from inmuebles i
-      join expedientes e on e.id = i.expediente_id
-      where i.id = inmueble_inscripciones_extra.inmueble_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from inmuebles i where i.id = inmueble_inscripciones_extra.inmueble_id)
   );
 
 
@@ -271,21 +299,15 @@ create table if not exists inmueble_partidas_extra (
 
 alter table inmueble_partidas_extra enable row level security;
 
-create policy "Partidas extra: acceso via inmueble → expediente propio"
+create policy "Partidas extra: acceso via inmueble existente"
   on inmueble_partidas_extra for all
   using (
-    exists (
-      select 1 from inmuebles i
-      join expedientes e on e.id = i.expediente_id
-      where i.id = inmueble_partidas_extra.inmueble_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from inmuebles i where i.id = inmueble_partidas_extra.inmueble_id)
   )
   with check (
-    exists (
-      select 1 from inmuebles i
-      join expedientes e on e.id = i.expediente_id
-      where i.id = inmueble_partidas_extra.inmueble_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from inmuebles i where i.id = inmueble_partidas_extra.inmueble_id)
   );
 
 
@@ -312,19 +334,15 @@ create table if not exists poligono (
 
 alter table poligono enable row level security;
 
-create policy "Poligono: acceso via expediente propio"
+create policy "Poligono: acceso via expediente existente"
   on poligono for all
   using (
-    exists (
-      select 1 from expedientes e
-      where e.id = poligono.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = poligono.expediente_id)
   )
   with check (
-    exists (
-      select 1 from expedientes e
-      where e.id = poligono.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = poligono.expediente_id)
   );
 
 
@@ -343,21 +361,15 @@ create table if not exists lados (
 
 alter table lados enable row level security;
 
-create policy "Lados: acceso via poligono → expediente propio"
+create policy "Lados: acceso via poligono existente"
   on lados for all
   using (
-    exists (
-      select 1 from poligono p
-      join expedientes e on e.id = p.expediente_id
-      where p.id = lados.poligono_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from poligono p where p.id = lados.poligono_id)
   )
   with check (
-    exists (
-      select 1 from poligono p
-      join expedientes e on e.id = p.expediente_id
-      where p.id = lados.poligono_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from poligono p where p.id = lados.poligono_id)
   );
 
 
@@ -376,21 +388,15 @@ create table if not exists angulos (
 
 alter table angulos enable row level security;
 
-create policy "Angulos: acceso via poligono → expediente propio"
+create policy "Angulos: acceso via poligono existente"
   on angulos for all
   using (
-    exists (
-      select 1 from poligono p
-      join expedientes e on e.id = p.expediente_id
-      where p.id = angulos.poligono_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from poligono p where p.id = angulos.poligono_id)
   )
   with check (
-    exists (
-      select 1 from poligono p
-      join expedientes e on e.id = p.expediente_id
-      where p.id = angulos.poligono_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from poligono p where p.id = angulos.poligono_id)
   );
 
 
@@ -411,19 +417,15 @@ create table if not exists linderos (
 
 alter table linderos enable row level security;
 
-create policy "Linderos: acceso via expediente propio"
+create policy "Linderos: acceso via expediente existente"
   on linderos for all
   using (
-    exists (
-      select 1 from expedientes e
-      where e.id = linderos.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = linderos.expediente_id)
   )
   with check (
-    exists (
-      select 1 from expedientes e
-      where e.id = linderos.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = linderos.expediente_id)
   );
 
 
@@ -456,19 +458,15 @@ create table if not exists edificacion (
 
 alter table edificacion enable row level security;
 
-create policy "Edificacion: acceso via expediente propio"
+create policy "Edificacion: acceso via expediente existente"
   on edificacion for all
   using (
-    exists (
-      select 1 from expedientes e
-      where e.id = edificacion.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = edificacion.expediente_id)
   )
   with check (
-    exists (
-      select 1 from expedientes e
-      where e.id = edificacion.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = edificacion.expediente_id)
   );
 
 
@@ -484,19 +482,15 @@ create table if not exists documentos_generados (
 
 alter table documentos_generados enable row level security;
 
-create policy "Documentos: acceso via expediente propio"
+create policy "Documentos: acceso via expediente existente"
   on documentos_generados for all
   using (
-    exists (
-      select 1 from expedientes e
-      where e.id = documentos_generados.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = documentos_generados.expediente_id)
   )
   with check (
-    exists (
-      select 1 from expedientes e
-      where e.id = documentos_generados.expediente_id and e.user_id = auth.uid()
-    )
+    auth.uid() is not null and
+    exists (select 1 from expedientes e where e.id = documentos_generados.expediente_id)
   );
 
 

@@ -10,11 +10,15 @@ if (!user) return Astro.redirect('/login')
 const uid = user.id
 const db = getSupabase(token)
 
+// Acceso compartido (19/9): las métricas ahora son del sistema entero, no solo del usuario
+// logueado — coherente con que /expedientes ya lista TODOS los expedientes, no solo los
+// propios ("Docs generados" ya contaba global desde antes, sin `user_id`, esto solo lo empareja
+// con el resto).
 const [{ count: total }, { count: enProceso }, { count: observado }, { count: finalizado }, { count: docs }] = await Promise.all([
-  db.from('expedientes').select('*', { count: 'exact', head: true }).eq('user_id', uid),
-  db.from('expedientes').select('*', { count: 'exact', head: true }).eq('user_id', uid).eq('estado', 'en_proceso'),
-  db.from('expedientes').select('*', { count: 'exact', head: true }).eq('user_id', uid).eq('estado', 'observado'),
-  db.from('expedientes').select('*', { count: 'exact', head: true }).eq('user_id', uid).eq('estado', 'finalizado'),
+  db.from('expedientes').select('*', { count: 'exact', head: true }),
+  db.from('expedientes').select('*', { count: 'exact', head: true }).eq('estado', 'en_proceso'),
+  db.from('expedientes').select('*', { count: 'exact', head: true }).eq('estado', 'observado'),
+  db.from('expedientes').select('*', { count: 'exact', head: true }).eq('estado', 'finalizado'),
   db.from('documentos_generados').select('*', { count: 'exact', head: true }),
 ])
 ---

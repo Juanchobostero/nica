@@ -16,11 +16,14 @@ const uid = user.id
 const db = getSupabase(token)
 const { id } = Astro.params
 
-// Cargar expediente
+// Cargar expediente — acceso compartido (19/9): ya no filtra por `user_id`, cualquier usuario
+// logueado del sistema puede ver/editar cualquier expediente (pedido de Franco). La policy RLS
+// de `expedientes` también se abrió en el mismo sentido (ver schema.sql) — este `.eq('id', id)`
+// solo, sin dueño, es la consulta real y coherente con eso.
 const { data: exp } = await db
   .from('expedientes')
   .select('*')
-  .eq('id', id).eq('user_id', uid)
+  .eq('id', id)
   .single()
 
 if (!exp) return Astro.redirect('/expedientes')
@@ -50,8 +53,11 @@ const [
   db.from('linderos').select('*').eq('expediente_id', id).maybeSingle(),
   db.from('edificacion').select('*').eq('expediente_id', id).maybeSingle(),
   db.from('documentos_generados').select('*', { count: 'exact' }).eq('expediente_id', id).order('generado_at', { ascending: false }).range(docFrom, docTo),
-  db.from('comitentes').select('id,nombre,apellido,dni').eq('user_id', uid).order('apellido'),
-  db.from('testigos').select('id,nombre,apellido,dni').eq('user_id', uid).order('apellido'),
+  // Acceso compartido (19/9): ya no filtra por `user_id` — el picker de "agregar comitente/
+  // testigo existente" tiene que poder ofrecer también los cargados por otros usuarios, si no
+  // un editor que no sea el dueño original del expediente no podría reutilizar sus comitentes.
+  db.from('comitentes').select('id,nombre,apellido,dni').order('apellido'),
+  db.from('testigos').select('id,nombre,apellido,dni').order('apellido'),
   db.from('profiles').select('*').eq('id', uid).maybeSingle(),
 ])
 
@@ -215,6 +221,7 @@ if (Astro.request.method === 'POST') {
       await db.from('expedientes').update({
         fecha_inicio: form.get('fecha_mensura') || null,
         hora_mensura: form.get('hora_mensura') || null,
+        updated_by: uid,
       }).eq('id', id)
 
       let maxParcelaHasta = 0
@@ -523,14 +530,14 @@ if (Astro.request.method === 'POST') {
 
   if (action === 'cambiar_estado') {
     const nuevoEstado = form.get('nuevo_estado') as string
-    await db.from('expedientes').update({ estado: nuevoEstado }).eq('id', id)
+    await db.from('expedientes').update({ estado: nuevoEstado, updated_by: uid }).eq('id', id)
     successMsg = 'Estado actualizado.'
   }
 
   if (action === 'guardar_observaciones') {
     // Se muestran en el Formulario U (sección "OBSERVACIONES :" ya impresa en la plantilla,
     // ver generar.ts rama formulario_u) — decisión de Franco, no un campo genérico.
-    await db.from('expedientes').update({ observaciones: form.get('observaciones') || null }).eq('id', id)
+    await db.from('expedientes').update({ observaciones: form.get('observaciones') || null, updated_by: uid }).eq('id', id)
     successMsg = 'Observaciones guardadas.'
   }
 
@@ -581,6 +588,11 @@ const datosValidacion = {
   comitenteDomicilio: !!((primerComitente as any)?.domicilio_calle && (primerComitente as any)?.domicilio_localidad),
   edificacionCargada: !!edificacion,
   edificacionCaracteristicas: Object.keys((edificacion as any)?.caracteristicas ?? {}).length > 0,
+  // Solo los objetos que contienen la palabra "mensura" llevan Notificación a Linderos y Acta
+  // de Ausencia de Linderos y Autoridades como documentos generables (pedido de Franco, 19/9) —
+  // ej. "División para Someter al Régimen de Conjuntos Inmobiliarios" no la lleva, pero
+  // "Unificación en Base a Mensura Registrada" sí (contiene la palabra).
+  llevaCitacionYAusencia: (exp.tipo_mensura ?? '').toLowerCase().includes('mensura'),
 }
 
 // Tab 3 Mensura: un expediente puede tener varios polígonos (división en parcelas).
@@ -750,7 +762,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
               <div class="field">
                 <label>Rol</label>
                 <select class="input" name="rol">
-                  <option value="titular">Titular</option>
+                  <option value="titular">Propietario</option>
                   <option value="apoderado">Apoderado</option>
                   <option value="heredero">Heredero</option>
                   <option value="poseedor">Poseedor</option>
@@ -776,7 +788,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
               <div class="field">
                 <label>Rol</label>
                 <select class="input" name="c_rol">
-                  <option value="titular">Titular</option>
+                  <option value="titular">Propietario</option>
                   <option value="apoderado">Apoderado</option>
                   <option value="heredero">Heredero</option>
                   <option value="poseedor">Poseedor</option>
@@ -1431,7 +1443,10 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
               { value: 'acta_ausencia_linderos',  label: 'Acta de Ausencia de Linderos y Autoridades' },
               { value: 'memoria_mensura',         label: 'Memoria de Mensura' },
               { value: 'planilla_calculos',       label: 'Planilla de Cálculos' },
-            ].map(doc => (
+            // Solo objetos que contengan "mensura" llevan estos 2 documentos (pedido de Franco,
+            // 19/9) — se filtran directamente de la lista en vez de mostrarlos deshabilitados.
+            ].filter(doc => datosValidacion.llevaCitacionYAusencia || !['citacion_linderos', 'acta_ausencia_linderos'].includes(doc.value))
+            .map(doc => (
               <label style="display:flex;align-items:center;gap:10px;font-weight:400;cursor:pointer">
                 <input type="checkbox" name="tipos[]" value={doc.value} />
                 {doc.label}
@@ -2955,10 +2970,13 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
   }
 
   // Expediente completo: los 8 documentos base (ya no incluye las DDJJ, que ahora se generan
-  // aparte con su propio botón).
+  // aparte con su propio botón). "acta_ausencia_linderos" solo se valida/pide si el objeto
+  // contiene "mensura" (pedido de Franco, 19/9) — mismo flag que ya filtra el checklist.
+  const tiposExpCompletoValidar = ['caratula', 'nota_elevacion', 'documento_identidad', 'capitulo_ubicacion', 'acta_mensura', 'memoria_mensura', 'planilla_calculos']
+  if (window.datosValidacion.llevaCitacionYAusencia) tiposExpCompletoValidar.push('acta_ausencia_linderos')
   armarHandlerBundle(
     'form_expediente_completo',
-    ['caratula', 'nota_elevacion', 'documento_identidad', 'capitulo_ubicacion', 'acta_mensura', 'acta_ausencia_linderos', 'memoria_mensura', 'planilla_calculos'],
+    tiposExpCompletoValidar,
     'No se pudo generar el expediente completo.'
   )
 

@@ -1,6 +1,6 @@
 ---
 import AppLayout from '../../layouts/AppLayout.astro'
-import { getSupabaseAnon, getSupabase } from '../../lib/supabase'
+import { getSupabaseAnon, getSupabase, getSupabaseAdmin } from '../../lib/supabase'
 import { AREAS_CATASTRO } from '../../lib/areaCatastro'
 
 const token = Astro.cookies.get('sb-access-token')?.value ?? ''
@@ -16,9 +16,12 @@ if (Astro.request.method === 'POST') {
   const action = form.get('_action')
 
   if (action === 'eliminar_expediente') {
+    // A diferencia del resto de las acciones de esta página (ver "acceso compartido" más abajo),
+    // eliminar (soft-delete) sigue restringido al dueño original — decisión explícita al abrir
+    // el acceso compartido a expedientes (19/9): "ver y editar" se comparte, "eliminar" no.
     const expId = form.get('expediente_id') as string
     await db.from('expedientes')
-      .update({ eliminado_at: new Date().toISOString() })
+      .update({ eliminado_at: new Date().toISOString(), updated_by: uid })
       .eq('id', expId).eq('user_id', uid)
   }
 
@@ -26,11 +29,14 @@ if (Astro.request.method === 'POST') {
     // Mismo caso que en dashboard.astro (donde se agregó primero) — acá porque el Dashboard
     // solo lista los últimos 5 expedientes, y un expediente más viejo que recién ahora consigue
     // número de la Dirección de Catastro no tenía forma de cargarlo.
+    // Acceso compartido (19/9): ya no filtra por `user_id` — cualquier usuario puede corregir el
+    // Nº Expediente/Área de Catastro de cualquier expediente, igual que el resto de la edición.
     const expId = form.get('expediente_id') as string
     await db.from('expedientes').update({
       numero_expediente: form.get('numero_expediente') || null,
       area_catastro: form.get('area_catastro') || null,
-    }).eq('id', expId).eq('user_id', uid)
+      updated_by: uid,
+    }).eq('id', expId)
   }
 }
 
@@ -50,13 +56,16 @@ const pagina = Math.max(1, parseInt(Astro.url.searchParams.get('pag') ?? '1') ||
 const desdeIdx = (pagina - 1) * POR_PAGINA
 const hastaIdx = desdeIdx + POR_PAGINA - 1
 
+// Acceso compartido (19/9): ya no filtra por `user_id` — lista TODOS los expedientes del
+// sistema, de cualquier usuario (pedido de Franco). Se agregan `user_id`/`updated_by` al select
+// para poder resolver "Creado por"/"Última modif. por" más abajo.
 let query = db
   .from('expedientes')
   .select(`
     id, numero_expediente, tipo_mensura, estado, fecha_inicio, area_catastro, updated_at,
+    user_id, updated_by,
     exp_comitentes ( orden, comitentes ( nombre, apellido ) )
   `, { count: 'exact' })
-  .eq('user_id', uid)
   .is('eliminado_at', null)
   .order(sortCol, { ascending: sortDir === 'asc' })
   .range(desdeIdx, hastaIdx)
@@ -71,6 +80,54 @@ if (busqueda)            query = query.or(`numero_expediente.ilike.%${busqueda}%
 
 const { data: expedientes, count: totalCount } = await query
 const totalPaginas = Math.max(1, Math.ceil((totalCount ?? 0) / POR_PAGINA))
+
+// Resuelve "Creado por" / "Última modif. por" (4.1, acceso compartido) — mismo patrón ya
+// probado en admin.astro: cliente con service role (bypassa RLS de `profiles`) para cruzar los
+// `user_id`/`updated_by` de esta página con nombre+apellido, y `listUsers()` como fallback de
+// display cuando el usuario todavía no cargó su perfil (ej. recién creado desde /admin, sin
+// nombre/apellido todavía) — ahí se muestra el email en su lugar.
+const idsAutores = Array.from(new Set(
+  (expedientes ?? []).flatMap((e: any) => [e.user_id, e.updated_by]).filter(Boolean)
+)) as string[]
+const nombrePorId = new Map<string, string>()
+if (idsAutores.length) {
+  const admin = getSupabaseAdmin()
+  const [{ data: perfiles }, { data: listado }] = await Promise.all([
+    admin.from('profiles').select('id, nombre, apellido').in('id', idsAutores),
+    admin.auth.admin.listUsers(),
+  ])
+  const emailPorId = new Map((listado?.users ?? []).map((u: any) => [u.id, u.email as string]))
+  idsAutores.forEach(id => {
+    const perfil = (perfiles ?? []).find((p: any) => p.id === id)
+    const nombreCompleto = perfil ? [perfil.apellido, perfil.nombre].filter(Boolean).join(', ') : ''
+    nombrePorId.set(id, nombreCompleto || emailPorId.get(id) || '—')
+  })
+}
+function nombreAutor(id: string | null | undefined): string {
+  return id ? (nombrePorId.get(id) ?? '—') : '—'
+}
+
+// Chip de autor con avatar de inicial — el color se deriva de un hash del `id` (no del nombre),
+// así el mismo usuario siempre tiene el mismo color en toda la tabla aunque todavía no haya
+// cargado su perfil y se esté mostrando su email.
+const PALETA_AUTOR = [
+  { bg: '#DBEAFE', fg: '#1E40AF' },
+  { bg: '#FCE7F3', fg: '#9D174D' },
+  { bg: '#D1FAE5', fg: '#065F46' },
+  { bg: '#FEF3C7', fg: '#92400E' },
+  { bg: '#EDE9FE', fg: '#5B21B6' },
+  { bg: '#CFFAFE', fg: '#155E75' },
+  { bg: '#FFE4E6', fg: '#9F1239' },
+  { bg: '#E0E7FF', fg: '#3730A3' },
+]
+function chipAutor(id: string | null | undefined): { label: string; bg: string; fg: string; inicial: string } {
+  const label = nombreAutor(id)
+  if (!id || label === '—') return { label: '—', bg: '', fg: '', inicial: '' }
+  let hash = 0
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0
+  const { bg, fg } = PALETA_AUTOR[hash % PALETA_AUTOR.length]
+  return { label, bg, fg, inicial: label.trim().charAt(0).toUpperCase() }
+}
 
 // Arma el query string de un link (paginado, toggle de orden) preservando el resto de filtros
 // activos — evita ir repitiendo a mano la misma reconstrucción en cada lugar que arma un link.
@@ -151,6 +208,7 @@ function comitentePrincipal(exp: any): string {
             <th data-col="numero" draggable="true">Nº Expediente</th>
             <th data-col="tipo" draggable="true">Tipo mensura</th>
             <th data-col="comitente" draggable="true">Comitente principal</th>
+            <th data-col="creador" draggable="true">Creado por</th>
             <th data-col="estado" draggable="true">Estado</th>
             <th data-col="fecha" draggable="true">Fecha inicio</th>
             <th data-col="modificacion" draggable="true">
@@ -158,18 +216,23 @@ function comitentePrincipal(exp: any): string {
                 Última modif. {sortCol === 'updated_at' ? (sortDir === 'asc' ? '↑' : '↓') : ''}
               </a>
             </th>
+            <th data-col="modificador" draggable="true">Modificado por</th>
             <th data-col="acciones">Acciones</th>
           </tr>
         </thead>
         <tbody>
           {(expedientes ?? []).length === 0 && (
             <tr>
-              <td colspan="7" style="text-align:center;color:var(--color-text-secondary);padding:2rem">
+              <td colspan="9" style="text-align:center;color:var(--color-text-secondary);padding:2rem">
                 {busqueda || estado !== 'todos' || areaFiltro || fechaDesde || fechaHasta ? 'Sin resultados para el filtro aplicado.' : 'No hay expedientes creados aún.'}
               </td>
             </tr>
           )}
-          {(expedientes ?? []).map(exp => (
+          {(expedientes ?? []).map(exp => {
+            const creador = chipAutor((exp as any).user_id)
+            const modificadorId = (exp as any).updated_by ?? (exp as any).user_id
+            const modificador = chipAutor(modificadorId)
+            return (
             <tr>
               <td data-col="numero">
                 <button type="button" class="btn-editar-dgc-trigger celda-numero-exp"
@@ -185,14 +248,31 @@ function comitentePrincipal(exp: any): string {
               </td>
               <td data-col="tipo">{exp.tipo_mensura ?? '—'}</td>
               <td data-col="comitente">{comitentePrincipal(exp)}</td>
+              <td data-col="creador">
+                {creador.label === '—' ? <span class="autor-vacio">—</span> : (
+                  <span class="autor-chip" style={`background:${creador.bg};color:${creador.fg}`} title={creador.label}>
+                    <span class="autor-avatar" style={`background:${creador.fg};color:${creador.bg}`}>{creador.inicial}</span>
+                    <span class="autor-chip-label">{creador.label}</span>
+                  </span>
+                )}
+              </td>
               <td data-col="estado">
                 <span class={`badge badge-${exp.estado ?? 'borrador'}`}>
+                  <span class="badge-dot"></span>
                   {(exp.estado ?? 'borrador').replace('_', ' ')}
                 </span>
               </td>
               <td data-col="fecha">{exp.fecha_inicio ? new Date(exp.fecha_inicio).toLocaleDateString('es-AR') : '—'}</td>
               <td data-col="modificacion">{(exp as any).updated_at ? new Date((exp as any).updated_at).toLocaleDateString('es-AR') : '—'}</td>
-              <td data-col="acciones" style="display:flex;gap:0.5rem">
+              <td data-col="modificador">
+                {modificador.label === '—' ? <span class="autor-vacio">—</span> : (
+                  <span class="autor-chip" style={`background:${modificador.bg};color:${modificador.fg}`} title={modificador.label}>
+                    <span class="autor-avatar" style={`background:${modificador.fg};color:${modificador.bg}`}>{modificador.inicial}</span>
+                    <span class="autor-chip-label">{modificador.label}</span>
+                  </span>
+                )}
+              </td>
+              <td data-col="acciones" class="celda-acciones">
                 <a href={`/expedientes/${exp.id}`} class="btn btn-secondary btn-sm">Ver / Editar</a>
                 <button type="button" class="btn btn-secondary btn-sm btn-editar-dgc-trigger"
                   data-id={exp.id}
@@ -211,7 +291,8 @@ function comitentePrincipal(exp: any): string {
                 </form>
               </td>
             </tr>
-          ))}
+            )
+          })}
         </tbody>
       </table>
     </div>
@@ -446,11 +527,35 @@ function comitentePrincipal(exp: any): string {
 
 <style>
 .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
-.page-header h2 { font-size:1.5rem; }
-.filters { display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; }
+.page-header h2 { font-size:1.5rem; font-weight:700; letter-spacing:-0.01em; }
+
+/* ── Barra de filtros: look más "buscador moderno" (input con ícono, campos redondeados) ── */
+.filters { display:flex; gap:0.6rem; align-items:center; flex-wrap:wrap; }
+.filters .input { border-radius:999px; background:var(--color-bg); border-color:transparent; transition:border-color 0.15s, background 0.15s; }
+.filters .input:focus { background:var(--color-surface); border-color:var(--color-accent); }
+.filters select.input { padding-right:2rem; }
+#filtro-busqueda {
+  padding-left:2.25rem;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236B7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.3-4.3'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:0.75rem center;
+}
 .filters-fecha { display:flex; gap:0.4rem; align-items:center; font-size:0.8125rem; color:var(--color-text-secondary); }
-.filters-fecha input[type="date"] { max-width:150px; }
+.filters-fecha input[type="date"] { max-width:150px; border-radius:var(--radius-sm); background:var(--color-bg); border-color:transparent; }
+.filters-fecha input[type="date"]:focus { background:var(--color-surface); border-color:var(--color-accent); }
 .btn-disabled { opacity:0.4; pointer-events:none; }
+
+/* ── Tabla: encabezado con banda de fondo + fila con hover celeste suave, look más moderno ── */
+.expedientes-table thead tr { background:var(--color-bg); border-bottom:1px solid var(--color-border); }
+.expedientes-table th { font-size:0.72rem; letter-spacing:0.06em; color:#475569; }
+.expedientes-table th:first-child { border-top-left-radius:var(--radius-md); }
+.expedientes-table th:last-child { border-top-right-radius:var(--radius-md); }
+.expedientes-table tbody tr { transition:background 0.12s; }
+.expedientes-table tbody tr:hover { background:#EFF6FF; }
+.expedientes-table td { font-variant-numeric:tabular-nums; }
+
+.celda-acciones { display:flex; gap:0.5rem; flex-wrap:wrap; }
+
 /* Nº Expediente ahora también abre el modal de Nº Exp./Catastro con un click directo en la
    celda (antes solo se podía desde el botón "Nº Exp. / Catastro" en Acciones) — se ve como
    el texto de siempre, no como un botón, para no cambiar el aspecto de la tabla. */
@@ -463,10 +568,30 @@ function comitentePrincipal(exp: any): string {
 /* Columnas reordenables (arrastrar el header) — cursor de "se puede agarrar" en las que se
    pueden mover; "Acciones" no tiene `draggable`, así que no recibe este estilo. */
 .expedientes-table th[draggable="true"] { cursor:grab; user-select:none; }
-.expedientes-table th[draggable="true"]:hover { background:var(--color-bg); }
+.expedientes-table th[draggable="true"]:hover { background:#E2E8F0; }
 .expedientes-table th.th-dragging { opacity:0.4; }
 .th-sort-link { color:inherit; text-decoration:none; display:block; }
 .th-sort-link:hover { text-decoration:underline; }
+
+/* ── Estado: punto de color antes del texto, además del fondo del badge (pedido: "más moderno") ── */
+.badge { display:inline-flex; align-items:center; gap:5px; }
+.badge-dot { width:6px; height:6px; border-radius:50%; background:currentColor; flex-shrink:0; }
+
+/* ── Chip de autor (Creado por / Modificado por): avatar circular con inicial + nombre,
+   color estable por usuario (ver `chipAutor` en el frontmatter) — mismo lenguaje visual que
+   los badges de Estado, pero con foto/inicial para identificar a la persona de un vistazo. */
+.autor-chip {
+  display:inline-flex; align-items:center; gap:6px;
+  padding:3px 10px 3px 3px; border-radius:999px;
+  font-size:0.8rem; font-weight:600; max-width:180px;
+}
+.autor-chip .autor-avatar {
+  width:20px; height:20px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:0.65rem; font-weight:700; flex-shrink:0;
+}
+.autor-chip-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.autor-vacio { color:var(--color-muted); }
 
 .modal-overlay {
   position:fixed; inset:0; background:rgba(15,23,42,0.5);

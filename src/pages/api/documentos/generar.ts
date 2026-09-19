@@ -29,6 +29,15 @@ function dibujarCentrado(page: PDFPage, texto: string, y: number, size: number, 
   page.drawText(texto, { x: (pageWidth - w) / 2, y, size, font, color })
 }
 
+// "titular" y "propietario" son sinónimos, pero Catastro es exigente con la terminología y pide
+// literalmente "propietario" en los documentos (pedido de Franco, 19/9). El valor interno
+// guardado en `exp_comitentes.rol` sigue siendo 'titular' (no se toca el default/check de la
+// columna ni los <option value="titular"> del formulario — solo cambia el texto impreso). Los
+// demás roles (apoderado/heredero/poseedor/intendente) se imprimen tal cual.
+function rolLabel(rol: string): string {
+  return rol === 'titular' ? 'propietario' : rol
+}
+
 // Parte un texto largo en líneas que entren dentro de maxWidth
 function partirEnLineas(texto: string, maxWidth: number, size: number, font: PDFFont): string[] {
   const palabras = texto.replace(/\r?\n/g, ' ').split(' ').filter(Boolean)
@@ -73,7 +82,7 @@ async function cargarLogoBytes(nombreArchivo: string, request: Request): Promise
 function dibujarEncabezado(
   page: PDFPage, width: number, height: number,
   fonts: { font: PDFFont; bold: PDFFont },
-  datos: { objeto: string; comitente: string; ubicacion: string; profesional: string; email?: string; telefono?: string },
+  datos: { objeto: string; comitente: string; comitentePrimero?: string; ubicacion: string; profesional: string; email?: string; telefono?: string },
   logo?: PDFImage | null,
 ) {
   const { font, bold } = fonts
@@ -99,15 +108,25 @@ function dibujarEncabezado(
   const logoGap = 14
   const textoX = cajaX + padX + logoReservado + logoGap
 
+  const anchoDisponible = cajaX + cajaW - padX - textoX
+
+  // COMITENTE es distinto a los otros 3 campos: Objeto/Ubicación/Profesional pueden ocupar
+  // varias líneas libremente (la caja crece), pero con varios comitentes cargados Franco pidió
+  // que el rótulo se mantenga en una sola línea — si el listado completo ("A, B y C") no entra,
+  // se acorta al primero + "Y OTROS" en vez de pasar a una 2ª línea.
+  const comitenteCompleto = `COMITENTE: ${datos.comitente}`.toUpperCase()
+  const comitenteTexto = bold.widthOfTextAtSize(comitenteCompleto, sizeFila) <= anchoDisponible
+    ? comitenteCompleto
+    : `COMITENTE: ${(datos.comitentePrimero ?? datos.comitente).toUpperCase()} Y OTROS`
+
   const etiquetas = ['OBJETO', 'COMITENTE', 'UBICACIÓN', 'PROFESIONAL']
   const filasTexto = [
     `OBJETO: ${datos.objeto}`,
-    `COMITENTE: ${datos.comitente}`,
+    comitenteTexto,
     `UBICACIÓN: ${datos.ubicacion}`,
     `PROFESIONAL: ${datos.profesional}`,
-  ].map(t => t.toUpperCase())
+  ].map((t, i) => i === 1 ? t : t.toUpperCase())
 
-  const anchoDisponible = cajaX + cajaW - padX - textoX
   const filasWrapped = filasTexto.map(t => partirEnLineas(t, anchoDisponible, sizeFila, bold))
   const totalLineas = filasWrapped.reduce((acc, l) => acc + l.length, 0)
   const barH = Math.max(52, totalLineas * lhFila + 14)
@@ -160,7 +179,7 @@ function dibujarEncabezado(
 function crearPaginaConEncabezado(
   pdfDoc: PDFDocument,
   fonts: { font: PDFFont; bold: PDFFont },
-  datosEncabezado: { objeto: string; comitente: string; ubicacion: string; profesional: string; email?: string; telefono?: string },
+  datosEncabezado: { objeto: string; comitente: string; comitentePrimero?: string; ubicacion: string; profesional: string; email?: string; telefono?: string },
   logo?: PDFImage | null,
 ) {
   const page = pdfDoc.addPage([595.28, 841.89])
@@ -176,7 +195,7 @@ function crearPaginaConEncabezado(
 async function crearPaginaDivisoria(
   pdfDoc: PDFDocument,
   fonts: { font: PDFFont; bold: PDFFont; boldItalic: PDFFont },
-  datosEncabezado: { objeto: string; comitente: string; ubicacion: string; profesional: string; email?: string; telefono?: string },
+  datosEncabezado: { objeto: string; comitente: string; comitentePrimero?: string; ubicacion: string; profesional: string; email?: string; telefono?: string },
   logoMembrete: PDFImage | null,
   logoCaratulaBytes: Uint8Array | null,
   titulo: string,
@@ -744,7 +763,7 @@ function dibujarDorsoSor(pdfDoc: PDFDocument, font: PDFFont, bold: PDFFont, negr
   // (no el agrimensor), con su rol real (POSEEDOR/APODERADO/TITULAR/etc.).
   yTexto += 15
   const nombreDeclarante = comitentePrincipal ? `${comitentePrincipal.nombre ?? ''} ${comitentePrincipal.apellido ?? ''}`.toUpperCase() : ''
-  const parrafo = `El que suscribe ${nombreDeclarante} nacionalidad ${comitentePrincipal?.nacionalidad || 'Argentina'} documento de identidad ${comitentePrincipal?.tipo_documento || 'DNI'} Nº ${comitentePrincipal?.dni ?? ''} en su carácter de ${rolComitente.toUpperCase()} declara bajo juramento que es verdad toda información suministrada por el y transcripta en el presente formulario y que tiene conocimiento de las penalidades establecidas por omision, falsedad y toda transgresión a las disposiciones legales.`
+  const parrafo = `El que suscribe ${nombreDeclarante} nacionalidad ${comitentePrincipal?.nacionalidad || 'Argentina'} documento de identidad ${comitentePrincipal?.tipo_documento || 'DNI'} Nº ${comitentePrincipal?.dni ?? ''} en su carácter de ${rolLabel(rolComitente).toUpperCase()} declara bajo juramento que es verdad toda información suministrada por el y transcripta en el presente formulario y que tiene conocimiento de las penalidades establecidas por omision, falsedad y toda transgresión a las disposiciones legales.`
   const lineasParrafo = partirEnLineas(parrafo, 530, 8, font)
   lineasParrafo.forEach((ln, i) => { p.drawText(ln, { x: sorDorsoX(0), y: Y(yTexto + i * 12), size: 8, font, color: negro }) })
   yTexto += lineasParrafo.length * 12 + 40
@@ -1002,6 +1021,16 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const { data: edificacion } = await db
     .from('edificacion').select('*').eq('expediente_id', expedienteId).maybeSingle()
 
+  // Inscripciones/partidas ADICIONALES (la 1ª de cada una sigue en `inmueble` mismo, ver más
+  // abajo) — usadas para pluralizar los párrafos de "Antecedentes de Dominio" del Capítulo de
+  // Extensión, Límites e Inscripciones (pedido de Franco, 19/9). Antes no se leían acá.
+  const { data: inscripcionesExtra } = inmueble
+    ? await db.from('inmueble_inscripciones_extra').select('*').eq('inmueble_id', (inmueble as any).id).order('orden')
+    : { data: [] as any[] }
+  const { data: partidasExtra } = inmueble
+    ? await db.from('inmueble_partidas_extra').select('*').eq('inmueble_id', (inmueble as any).id).order('orden')
+    : { data: [] as any[] }
+
   const { data: expComitentes } = await db
     .from('exp_comitentes').select('orden, rol, porcentaje_condominio, ausente_pais, comitentes(nombre, apellido, dni, telefono, email, domicilio, dni_scan_path, dni_scan_path_dorso, nacionalidad, tipo_documento, domicilio_calle, domicilio_numero, domicilio_localidad, domicilio_provincia)')
     .eq('expediente_id', expedienteId).order('orden')
@@ -1022,6 +1051,19 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const nombreComitenteDirecto = comitentePrincipal
     ? `${comitentePrincipal.nombre} ${comitentePrincipal.apellido}`
     : '—'
+  // Todos los comitentes (no solo el principal) — para las partes del documento donde Franco
+  // pidió (19/9) que se transcriban todos: Carátula, 2º párrafo de Nota de Elevación, rótulo de
+  // cada hoja, y Notificación a Linderos. El resto del código (DDJJ, cuerpo del Acta de Mensura,
+  // firma de Nota de Elevación) sigue usando `nombreComitente`/`comitentePrincipal` (el primero),
+  // sin cambios — no estaba pedido para esas partes.
+  const listaComitentesConDatos = ((expComitentes ?? []) as any[]).filter(ec => ec.comitentes)
+  function listarConY(items: string[]): string {
+    const limpios = items.filter(Boolean)
+    if (limpios.length === 0) return '—'
+    if (limpios.length === 1) return limpios[0]
+    return `${limpios.slice(0, -1).join(', ')} y ${limpios[limpios.length - 1]}`
+  }
+  const nombresComitentesTodos = listarConY(listaComitentesConDatos.map(ec => `${ec.comitentes.apellido}, ${ec.comitentes.nombre}`))
   const nombreProfesional = profile ? `${profile.nombre ?? ''} ${profile.apellido ?? ''}`.trim() : '—'
   const tipoMensuraTexto = (exp?.tipo_mensura ?? '—').toUpperCase()
   const ubicacionCompleta = `${construirUbicacion(inmueble)}${inmueble?.departamento ? ', ' + inmueble.departamento : ''}`
@@ -1041,22 +1083,31 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   // parcela, ver más abajo en las ramas formulario_u/formulario_sor).
   const tipoDDJJPrincipal = (inmueble as any)?.tipo_inmueble === 'rural' ? 'formulario_sor' : 'formulario_u'
   const incluirE1 = !!edificacion
-  const DIVISORIAS_BUNDLE: Record<string, string> = {
-    capitulo_ubicacion: 'DESCRIPCIÓN Y DOMINIO\nDEL INMUEBLE',
-    citacion_linderos: 'ACTAS',
-    memoria_mensura: 'MEMORIA DE OPERACIONES',
-    planilla_calculos: 'PLANILLAS DE CÁLCULO',
-  }
+  // "Notificación a Linderos" y "Acta de Ausencia de Linderos y Autoridades" solo van si el
+  // objeto contiene la palabra "mensura" (pedido de Franco, 19/9) — mismo flag que ya filtra el
+  // checklist y la validación del lado del cliente en [id].astro (datosValidacion.llevaCitacionYAusencia).
+  const llevaCitacionYAusencia = (exp?.tipo_mensura ?? '').toLowerCase().includes('mensura')
   if (esBundle) {
     tipos = [
       'caratula', 'nota_elevacion', 'documento_identidad',
       'capitulo_ubicacion',
-      'citacion_linderos', 'acta_mensura', 'acta_ausencia_linderos',
+      ...(llevaCitacionYAusencia ? ['citacion_linderos'] : []),
+      'acta_mensura',
+      ...(llevaCitacionYAusencia ? ['acta_ausencia_linderos'] : []),
       'memoria_mensura',
       'planilla_calculos',
     ]
   } else if (esBundleDDJJ) {
     tipos = [tipoDDJJPrincipal, ...(incluirE1 ? ['formulario_e1'] : [])]
+  }
+  // La divisoria "ACTAS" se dibuja antes del primer documento de ese grupo que efectivamente
+  // vaya a generarse — si no lleva "citacion_linderos" (objeto sin "mensura"), el grupo arranca
+  // directo en "acta_mensura", que siempre está.
+  const DIVISORIAS_BUNDLE: Record<string, string> = {
+    capitulo_ubicacion: 'DESCRIPCIÓN Y DOMINIO\nDEL INMUEBLE',
+    [tipos.includes('citacion_linderos') ? 'citacion_linderos' : 'acta_mensura']: 'ACTAS',
+    memoria_mensura: 'MEMORIA DE OPERACIONES',
+    planilla_calculos: 'PLANILLAS DE CÁLCULO',
   }
 
   const documentosParaSubir: { tipo: string; pdfBytes: Uint8Array }[] = []
@@ -1099,7 +1150,8 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       logoMembrete = logoMembreteBytes ? await pdfDoc.embedPng(logoMembreteBytes) : null
       yEncabezadoFin = dibujarEncabezado(page, width, height, { font, bold }, {
         objeto: tipoMensuraTexto,
-        comitente: nombreComitente,
+        comitente: nombresComitentesTodos,
+        comitentePrimero: nombreComitente,
         ubicacion: ubicacionCompleta,
         profesional: `Agrimensor ${nombreProfesional}`,
         email: profile?.email,
@@ -1571,7 +1623,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         ['Departamento: ',         inmueble?.departamento ?? '—'],
         ['Ubicación/Sección: ',    construirUbicacion(inmueble)],
         ['Partida Inmobiliaria: ', inmueble?.matricula_catastral ?? '—'],
-        ['Comitente: ',            nombreComitente],
+        ['Comitente: ',            nombresComitentesTodos],
       ]
       let yCampos = yTitulo - 50
       camposCaratula.forEach(([clave, valor]) => {
@@ -1637,10 +1689,18 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       y -= 14
 
       const comitenteDni = comitentePrincipal?.dni
+      // Con más de un comitente, se listan todos con su propio DNI y rol (pedido de Franco,
+      // 19/9) — el teléfono/correo/domicilio de contacto sigue siendo solo del principal (no
+      // tiene sentido repetir 3 vías de contacto por cada comitente en el mismo párrafo).
+      const itemsComitentesNota = listaComitentesConDatos.map((ec: any) => {
+        const c = ec.comitentes
+        const nombreC = `${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase()
+        const dniC = c?.dni ? ` (DNI: ${c.dni})` : ''
+        return `${nombreC}${dniC} EN CALIDAD DE ${rolLabel(ec.rol ?? 'titular').toUpperCase()}`
+      })
+      const etiquetaComitente = itemsComitentesNota.length > 1 ? 'COMITENTES' : 'COMITENTE'
       const datosComitentePartes = [
-        `COMITENTE: ${nombreComitente.toUpperCase()}`,
-        comitenteDni ? `(DNI: ${comitenteDni})` : '',
-        `EN CALIDAD DE ${rolComitente.toUpperCase()}`,
+        `${etiquetaComitente}: ${listarConY(itemsComitentesNota) || '—'}`,
         comitentePrincipal?.telefono ? `- TELEFONO CELULAR PARA COMUNICACIONES: ${comitentePrincipal.telefono}` : '',
         comitentePrincipal?.email ? `CORREO ELECTRONICO: ${comitentePrincipal.email}` : '',
         comitentePrincipal?.domicilio ? `CON DOMICILIO EN ${comitentePrincipal.domicilio.toUpperCase()}` : '',
@@ -1658,17 +1718,55 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
 
       dibujarParrafo(page, 'Sin otro particular, nos despedimos de Ud. Atentamente.', margenX, y, anchoTexto, 11, font, negro, undefined, 0)
 
-      // Firma del comitente al pie
-      const yFirmaComitente = 140
-      dibujarCentrado(page, nombreComitenteDirecto, yFirmaComitente, 11, bold, negro, width)
-      dibujarCentrado(page, 'Comitente', yFirmaComitente - 14, 10, font, negro, width)
-      if (comitenteDni) dibujarCentrado(page, `DNI: ${comitenteDni}`, yFirmaComitente - 28, 10, font, negro, width)
+      // Firma de TODOS los comitentes al pie (no solo el principal — pedido de Franco, 19/9),
+      // en columnas — mismo criterio y umbral que Acta de Mensura: si no entran en una fila sin
+      // angostarse de más, se pasan a una hoja nueva dedicada.
+      const firmantesNota = listaComitentesConDatos.length > 0
+        ? listaComitentesConDatos.map((ec: any) => ({
+            nombre: `${ec.comitentes?.nombre ?? ''} ${ec.comitentes?.apellido ?? ''}`.trim() || '—',
+            dni: ec.comitentes?.dni,
+          }))
+        : [{ nombre: nombreComitenteDirecto, dni: comitenteDni }]
+      const minColFirmaNota = 110
+      const porFilaNota = Math.max(1, Math.floor(anchoTexto / minColFirmaNota))
+      const filasNota = Math.ceil(firmantesNota.length / porFilaNota)
+
+      let paginaFirmaNota = page
+      let anchoFirmaNota = width
+      let yFirmaCursorNota = 140
+      if (filasNota > 1) {
+        const nueva = crearPaginaConEncabezado(pdfDoc, { font, bold }, {
+          objeto: tipoMensuraTexto, comitente: nombresComitentesTodos, comitentePrimero: nombreComitente,
+          ubicacion: ubicacionCompleta, profesional: `Agrimensor ${nombreProfesional}`,
+          email: profile?.email, telefono: profile?.telefono,
+        }, logoMembrete)
+        paginaFirmaNota = nueva.page
+        anchoFirmaNota = nueva.width
+        dibujarCentrado(nueva.page, 'FIRMAS', nueva.yEncabezadoFin - 20, 12, bold, azul, nueva.width)
+        yFirmaCursorNota = nueva.yEncabezadoFin - 70
+      }
+      for (let fila = 0; fila < filasNota; fila++) {
+        const enEstaFila = firmantesNota.slice(fila * porFilaNota, (fila + 1) * porFilaNota)
+        const colWNota = anchoFirmaNota / enEstaFila.length
+        const yFila = yFirmaCursorNota - fila * 42
+        enEstaFila.forEach((f, i) => {
+          const colX = colWNota * i
+          const centrarEnCol = (texto: string, yPos: number, size: number, fnt: PDFFont) => {
+            const w = fnt.widthOfTextAtSize(texto, size)
+            paginaFirmaNota.drawText(texto, { x: colX + (colWNota - w) / 2, y: yPos, size, font: fnt, color: negro })
+          }
+          centrarEnCol(f.nombre, yFila, 11, bold)
+          centrarEnCol('Comitente', yFila - 14, 10, font)
+          if (f.dni) centrarEnCol(`DNI: ${f.dni}`, yFila - 28, 10, font)
+        })
+      }
 
     } else if (tipo === 'documento_identidad') {
       // ── Fotocopia DNI: una página por cada comitente, frente y dorso ──
       const datosEncabezado = {
         objeto: tipoMensuraTexto,
-        comitente: nombreComitente,
+        comitente: nombresComitentesTodos,
+        comitentePrimero: nombreComitente,
         ubicacion: ubicacionCompleta,
         profesional: `Agrimensor ${nombreProfesional}`,
         email: profile?.email,
@@ -1749,32 +1847,51 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       page.drawText('ANTECEDENTES DE DOMINIO:', { x: margenX, y, size: 11, font: bold, color: negro })
       y -= 20
 
-      const tipoInscripcion = (inmueble as any)?.tipo_inscripcion_registro ?? 'matricula'
-      const mayorExtension  = (inmueble as any)?.inscripcion_mayor_extension ? ' en mayor extensión' : ''
-      let inscripcionTexto: string
-      if (tipoInscripcion === 'tomo') {
-        const tomo  = (inmueble as any)?.registro_tomo  ?? '—'
-        const folio = (inmueble as any)?.registro_folio ?? '—'
-        const finca = (inmueble as any)?.registro_finca ?? '—'
-        const anio  = (inmueble as any)?.registro_anio  ?? '—'
-        inscripcionTexto = `inscripto${mayorExtension} al Tomo ${tomo}, Folio ${folio}, Finca ${finca}, Año ${anio} del Departamento de ${inmueble?.departamento ?? '—'}`
-      } else {
-        const matricula = inmueble?.matricula_registro
-        inscripcionTexto = matricula
-          ? `inscripto${mayorExtension} bajo Matrícula ${matricula}`
-          : 'sin antecedentes de inscripción registrados'
+      // Antecedentes de Dominio — pluraliza automáticamente si hay más de una inscripción
+      // provincial/partida inmobiliaria/inscripción municipal cargada (la 1ª de cada una vive
+      // en `inmueble`, las adicionales en `inmueble_inscripciones_extra`/`_partidas_extra` —
+      // pedido de Franco, 19/9, con la fórmula "la/las siguientes inscripciones: X, Y y Z").
+      // También agrega "el Folio Real" antes de "Matrícula" (pedido explícito de Franco) — solo
+      // para el modo matrícula; el modo tomo/folio/finca no lo necesita, ya es autodescriptivo.
+      function describirInscripcion(insc: any, depFallback: string): string | null {
+        const tipo = insc?.tipo_inscripcion_registro ?? 'matricula'
+        const mayorExt = insc?.inscripcion_mayor_extension ? ' (en mayor extensión)' : ''
+        if (tipo === 'tomo') {
+          const { registro_tomo: tomo, registro_folio: folio, registro_finca: finca, registro_anio: anio } = insc ?? {}
+          if (!tomo && !folio && !finca && !anio) return null
+          return `el Tomo ${tomo ?? '—'}, Folio ${folio ?? '—'}, Finca ${finca ?? '—'}, Año ${anio ?? '—'} del Departamento de ${depFallback}${mayorExt}`
+        }
+        const matricula = insc?.matricula_registro
+        return matricula ? `el Folio Real Matrícula ${matricula}${mayorExt}` : null
       }
-      const parrafoDominio = `Las presentes operaciones afectan un inmueble identificado según catastro como ${construirUbicacion(inmueble)}, del Departamento de ${inmueble?.departamento ?? '—'}. En el Registro de la Propiedad Inmueble de la Provincia está ${inscripcionTexto}.`
+      const depDominio = inmueble?.departamento ?? '—'
+      const inscripcionesTodas = [
+        describirInscripcion(inmueble, depDominio),
+        ...((inscripcionesExtra ?? []) as any[]).map(i => describirInscripcion(i, depDominio)),
+      ].filter(Boolean) as string[]
+      const fraseInscripcion = inscripcionesTodas.length === 0
+        ? 'sin antecedentes de inscripción registrados'
+        : inscripcionesTodas.length === 1
+          ? `inscripto bajo ${inscripcionesTodas[0]}`
+          : `inscripto bajo la/las siguientes inscripciones: ${listarConY(inscripcionesTodas)}`
+      const parrafoDominio = `Las presentes operaciones afectan un inmueble identificado según catastro como ${construirUbicacion(inmueble)}, del Departamento de ${depDominio}. En el Registro de la Propiedad Inmueble de la Provincia está ${fraseInscripcion}.`
       y = dibujarParrafo(page, parrafoDominio, margenX, y, anchoTexto, 11, font, negro)
       y -= 18
 
-      const parrafoRentas = `En la Dirección General de Rentas, se identifica con la/las Partidas Inmobiliarias ${inmueble?.matricula_catastral ?? '—'}.`
+      const partidasTodas = [
+        inmueble?.matricula_catastral,
+        ...((partidasExtra ?? []) as any[]).map(p => p.matricula_catastral),
+      ].filter(Boolean) as string[]
+      const parrafoRentas = `En la Dirección General de Rentas, se identifica con la/las Partidas Inmobiliarias ${listarConY(partidasTodas) || '—'}.`
       y = dibujarParrafo(page, parrafoRentas, margenX, y, anchoTexto, 11, font, negro)
       y -= 18
 
-      const matriculaMunicipal = (inmueble as any)?.matricula_municipal
-      const parrafoMunicipal = matriculaMunicipal
-        ? `En el Registro de la Propiedad Municipal se identifica con la Matrícula Municipal ${matriculaMunicipal}.`
+      const municipalesTodas = [
+        (inmueble as any)?.matricula_municipal,
+        ...((inscripcionesExtra ?? []) as any[]).map(i => i.matricula_municipal),
+      ].filter(Boolean) as string[]
+      const parrafoMunicipal = municipalesTodas.length > 0
+        ? `En el Registro de la Propiedad Municipal se identifica con la/las Matrículas Municipales ${listarConY(municipalesTodas)}.`
         : 'En el Registro de la Propiedad Municipal no se encontraron inscripciones.'
       y = dibujarParrafo(page, parrafoMunicipal, margenX, y, anchoTexto, 11, font, negro)
       y -= 22
@@ -1814,9 +1931,19 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       const calleEntre1 = (inmueble as any)?.calle_entre1
       const calleEntre2 = (inmueble as any)?.calle_entre2
 
+      // Con más de un comitente, se listan todos con su propio DNI y rol (pedido de Franco,
+      // 19/9) — mismo criterio que el 2º párrafo de la Nota de Elevación.
+      const itemsComitentesCitacion = listaComitentesConDatos.length > 0
+        ? listaComitentesConDatos.map((ec: any) => {
+            const c = ec.comitentes
+            const nombreC = `${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase()
+            const dniC = c?.dni ? ` (DNI: ${c.dni})` : ''
+            return `${nombreC}${dniC} en carácter de ${rolLabel(ec.rol ?? 'titular')}`
+          })
+        : [`${nombreComitente.toUpperCase()} (DNI: ${comitentePrincipal?.dni ?? '—'}) en carácter de ${rolLabel(rolComitente)}`]
       const parrafoComision =
-        `El Ing. Agrimensor que suscribe, habiendo recibido comisión de ${nombreComitente.toUpperCase()} ` +
-        `(DNI: ${comitentePrincipal?.dni ?? '—'}); en carácter de ${rolComitente} - para realizar las operaciones de ` +
+        `El Ing. Agrimensor que suscribe, habiendo recibido comisión de ${listarConY(itemsComitentesCitacion)} ` +
+        `- para realizar las operaciones de ` +
         `${tipoMensuraMinuscula} en un inmueble ubicado en la localidad de ${inmueble?.localidad ?? '—'}, ` +
         `Partida Inmobiliaria de Referencia ${inmueble?.matricula_catastral ?? '—'}` +
         `${propietarioAnterior ? ` a nombre de ${propietarioAnterior}` : ''} – ${construirUbicacion(inmueble)}` +
@@ -1899,7 +2026,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         // "poseedor"); para el resto de los roles (titular, apoderado, heredero) va "la
         // propiedad del" — corrección de Franco sobre el Acta de Mensura.
         `se deja constancia mediante la presente, que se han medido los límites de ${rolComitente === 'poseedor' ? 'la posesión ejercida por el' : 'la propiedad del'} ` +
-        `Sr. ${nombreComitente.toUpperCase()} (DNI: ${comitentePrincipal?.dni ?? '—'}). Habiendo materializado todos ` +
+        `Sr. ${nombreComitente.toUpperCase()} (DNI: ${comitentePrincipal?.dni ?? '—'})${listaComitentesConDatos.length > 1 ? ' y otros' : ''}. Habiendo materializado todos ` +
         `los vértices con mojones de madera dura, determinando una superficie TOTAL de ${poligono?.superficie_m2 != null ? Number(poligono.superficie_m2).toFixed(2) : '—'} ` +
         `metros cuadrados${poligono?.superficie_letras ? ` (${poligono.superficie_letras.toUpperCase()})` : ''}.`
       y = dibujarParrafo(page, parrafoActa, margenX, y, anchoTexto, 11, font, negro)
@@ -1928,27 +2055,63 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         margenX, y, anchoTexto, 11, font, negro,
       )
 
-      // Firmas: testigos + comitente, en columnas iguales
+      // Firmas: testigos + TODOS los comitentes (no solo el principal — pedido de Franco,
+      // 19/9), en columnas. Si no entran todos en una sola fila sin aplastarse, se pasa a una
+      // hoja nueva (con el mismo membrete) dedicada solo a las firmas — así entra la firma y el
+      // sello de cada uno, en vez de ir angostando columnas hasta volverse ilegible.
+      const firmantesComitentes = listaComitentesConDatos.length > 0
+        ? listaComitentesConDatos.map((ec: any) => ({
+            nombre: `${ec.comitentes?.nombre ?? ''} ${ec.comitentes?.apellido ?? ''}`.trim() || '—',
+            rol: 'Comitente',
+            dni: ec.comitentes?.dni,
+          }))
+        : [{ nombre: nombreComitenteDirecto, rol: 'Comitente', dni: comitentePrincipal?.dni }]
       const firmantes = [
         ...((expTestigos ?? []) as any[]).map((et, idx) => ({
           nombre: `${et.testigos?.nombre ?? ''} ${et.testigos?.apellido ?? ''}`.trim() || '—',
           rol: `Testigo ${idx + 1}`,
           dni: et.testigos?.dni,
         })),
-        { nombre: nombreComitenteDirecto, rol: 'Comitente', dni: comitentePrincipal?.dni },
+        ...firmantesComitentes,
       ]
-      const yFirmas = 145
-      const colW = (width - margenX * 2) / firmantes.length
-      firmantes.forEach((f, i) => {
-        const colX = margenX + colW * i
-        const centrarEnCol = (texto: string, yPos: number, size: number, fnt: PDFFont) => {
-          const w = fnt.widthOfTextAtSize(texto, size)
-          page.drawText(texto, { x: colX + (colW - w) / 2, y: yPos, size, font: fnt, color: negro })
-        }
-        centrarEnCol(f.nombre, yFirmas, 10, bold)
-        centrarEnCol(f.rol, yFirmas - 14, 9, font)
-        if (f.dni) centrarEnCol(`DNI: ${f.dni}`, yFirmas - 28, 9, font)
-      })
+
+      const minColFirma = 110
+      const porFilaFirma = Math.max(1, Math.floor(anchoTexto / minColFirma))
+      const altoFilaFirma = 55
+      const filasNecesarias = Math.ceil(firmantes.length / porFilaFirma)
+
+      let paginaFirma = page
+      let anchoFirma = anchoTexto
+      let yFirmaCursor = 145
+      if (filasNecesarias > 1) {
+        // No entran todos en una fila sin angostarse de más — se pasan TODOS (no solo el
+        // sobrante) a una hoja nueva dedicada, con espacio de sobra para varias filas.
+        const nueva = crearPaginaConEncabezado(pdfDoc, { font, bold }, {
+          objeto: tipoMensuraTexto, comitente: nombresComitentesTodos, comitentePrimero: nombreComitente,
+          ubicacion: ubicacionCompleta, profesional: `Agrimensor ${nombreProfesional}`,
+          email: profile?.email, telefono: profile?.telefono,
+        }, logoMembrete)
+        paginaFirma = nueva.page
+        anchoFirma = nueva.width - margenX * 2
+        dibujarCentrado(nueva.page, 'FIRMAS', nueva.yEncabezadoFin - 20, 12, bold, azul, nueva.width)
+        yFirmaCursor = nueva.yEncabezadoFin - 70
+      }
+
+      for (let fila = 0; fila < filasNecesarias; fila++) {
+        const enEstaFila = firmantes.slice(fila * porFilaFirma, (fila + 1) * porFilaFirma)
+        const colWFirma = anchoFirma / enEstaFila.length
+        const yFila = yFirmaCursor - fila * altoFilaFirma
+        enEstaFila.forEach((f, i) => {
+          const colX = margenX + colWFirma * i
+          const centrarEnCol = (texto: string, yPos: number, size: number, fnt: PDFFont) => {
+            const w = fnt.widthOfTextAtSize(texto, size)
+            paginaFirma.drawText(texto, { x: colX + (colWFirma - w) / 2, y: yPos, size, font: fnt, color: negro })
+          }
+          centrarEnCol(f.nombre, yFila, 10, bold)
+          centrarEnCol(f.rol, yFila - 14, 9, font)
+          if (f.dni) centrarEnCol(`DNI: ${f.dni}`, yFila - 28, 9, font)
+        })
+      }
 
     } else if (tipo === 'acta_ausencia_linderos') {
       // ── Acta de Ausencia de Linderos y Autoridades ──────────────────────
@@ -2023,7 +2186,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       const anchoTexto = width - margenX * 2
       const listaPoligonos = poligonos.length > 0 ? poligonos : [null as any]
       const datosEncabezadoComun = {
-        objeto: tipoMensuraTexto, comitente: nombreComitente, ubicacion: ubicacionCompleta,
+        objeto: tipoMensuraTexto, comitente: nombresComitentesTodos, comitentePrimero: nombreComitente, ubicacion: ubicacionCompleta,
         profesional: `Agrimensor ${nombreProfesional}`, email: profile?.email, telefono: profile?.telefono,
       }
 
@@ -2130,7 +2293,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       const margenX = 25
       const listaPoligonos = poligonos.length > 0 ? poligonos : [null as any]
       const datosEncabezadoComun = {
-        objeto: tipoMensuraTexto, comitente: nombreComitente, ubicacion: ubicacionCompleta,
+        objeto: tipoMensuraTexto, comitente: nombresComitentesTodos, comitentePrimero: nombreComitente, ubicacion: ubicacionCompleta,
         profesional: `Agrimensor ${nombreProfesional}`, email: profile?.email, telefono: profile?.telefono,
       }
 
@@ -2315,7 +2478,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       boldItalic: await bundleDoc.embedFont(StandardFonts.HelveticaBoldOblique),
     }
     const datosEncabezadoBundle = {
-      objeto: tipoMensuraTexto, comitente: nombreComitente, ubicacion: ubicacionCompleta,
+      objeto: tipoMensuraTexto, comitente: nombresComitentesTodos, comitentePrimero: nombreComitente, ubicacion: ubicacionCompleta,
       profesional: `Agrimensor ${nombreProfesional}`, email: profile?.email, telefono: profile?.telefono,
     }
     // Se embebe una sola vez por documento combinado y se reusa en cada divisoria — embedPng

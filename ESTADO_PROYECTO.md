@@ -78,6 +78,191 @@
 
 ---
 
+## 📋 Cambios de la sesión — 19 Septiembre 2026 (v0.28) — Tanda grande de pedidos de Franco (en curso)
+
+Lista completa de lo pedido por Franco (vía Juan, 19/9), para ir tildando a medida que se completa cada uno. Ninguno tocado todavía salvo lo marcado ✅.
+
+1. **Múltiples comitentes en documentos**. **✅ Hecho** (ver entrada detallada de abajo, "Comitentes múltiples...").
+   - 1.a. Que TODOS los comitentes (no solo el primero) se transcriban en: Carátula, Nota de Elevación (2º párrafo + sector firmas), sector de firmas del Acta de Mensura, rótulo/membrete de todas las hojas (sector "COMITENTE"), y Notificación a Linderos.
+   - Si la lista de nombres no entra en una sola línea del rótulo, mostrar solo el primero + "Y OTROS".
+   - En el sector de firmas del Acta de Mensura (y donde corresponda firma+sello), deben entrar TODOS los comitentes — saltar a otra hoja si hace falta.
+   - Reemplazar la palabra "Titular" por "Propietario" en todo lo que se imprime/muestra (Catastro es exigente con la terminología) — sin tocar el valor interno `'titular'` guardado en DB.
+
+2. **Capítulo de Extensión, Límites e Inscripciones — "Antecedentes de Dominio"**. **✅ Hecho** (ver entrada de abajo).
+   - 1er párrafo (Registro de la Propiedad Provincial): decir "...está inscripto bajo el Folio Real Matrícula ...", y si hay más de una inscripción provincial cargada (tabla `inmueble_inscripciones_extra`, ya existe pero `generar.ts` todavía no la lee), pluralizar: "está inscripto bajo la/las siguientes inscripciones: inscripción 1, inscripción 2 y inscripción 3".
+   - Mismo criterio de pluralización para el párrafo de inscripción municipal (3er párrafo) si hay más de una.
+   - Mismo criterio para Partida Inmobiliaria (2º párrafo, tabla `inmueble_partidas_extra`, tampoco leída todavía) si hay más de una cargada.
+   - Franco (WhatsApp, cita textual): *"Las presentes operaciones afectan un inmueble identificado como … En el registro de la Propiedad Inmueble de la Provincia esta/n inscripto al .. / Y ahí que se carguen todas las inscripciones provinciales que el usuario genera / Para un expte"*.
+
+3. **Objetos que no llevan citación/acta de ausencia**. **✅ Hecho** (ver entrada de abajo). "Notificación a Linderos" y "Acta de Ausencia de Linderos y Autoridades" solo deberían ofrecerse como documentos generables cuando `tipo_mensura` contiene la palabra "mensura" — hoy se ofrecen siempre, sin ninguna condición (confirmado: no hay ninguna lógica de este tipo en el código actual).
+
+4. **Módulo de gestión de usuarios**: que los usuarios NO admin también puedan ver/editar TODOS los expedientes del sistema (no solo los propios) — hoy es aislamiento total por dueño (`expedientes.user_id = auth.uid()`, RLS `for all`). Implica abrir en cascada las policies de ~10 tablas dependientes (`exp_comitentes`, `inmuebles`, `poligono`, `lados`, `angulos`, `linderos`, `edificacion`, `documentos_generados`, `inmueble_inscripciones_extra`, `inmueble_partidas_extra`) y sacar los `.eq('user_id', uid)` explícitos en `expedientes/index.astro` y `expedientes/[id].astro`. **✅ Hecho** (ver entrada de abajo) — **requiere correr la migración SQL antes de probar**.
+   - 4.1. Mostrar en el listado quién creó cada expediente y quién hizo la última modificación — hoy no existe esa data (`expedientes` no tiene `created_by`/`updated_by`, solo `user_id` y `updated_at` sin registro de autor). Hace falta migración + acomodar la UI del listado. **✅ Hecho** (ver entrada de abajo).
+
+5. **Logos nuevos** (`public/images/logo-nica-circular-131C3A.png`, `logo-nica-circular-blanco.png`, `NICA-LOGO REDONDO - NEGRO SIN FONDO.png`): el azul reemplaza el logo del login; el blanco sin fondo reemplaza el del sidebar, y el logo del sidebar debe ser clickeable → redirige a `/`. **✅ Hecho** (ver entrada de abajo).
+
+**Progreso**: los 5 puntos de la tanda están completos y verificados con `astro build` (ver entradas detalladas abajo). El punto 4 necesita correr la migración SQL de la entrada correspondiente antes de probarlo en el navegador — el resto ya funciona sin pasos adicionales.
+
+---
+
+## 📋 Cambios de la sesión — 19 Septiembre 2026 (v0.28) — Acceso compartido a expedientes + "Creado por" / "Modificado por"
+
+Hasta ahora cada usuario solo veía/editaba sus propios expedientes (aislamiento total por `user_id`, tanto en las consultas de la app como en las policies RLS). Franco pidió que cualquier usuario no-admin pueda ver y editar TODOS los expedientes del sistema, y que el listado muestre quién creó cada uno y quién hizo la última modificación. Decisión tomada con Juan sobre el alcance: **ver y editar quedan compartidos; crear y eliminar quedan como antes** (cada uno gestiona sus propias altas/bajas).
+
+### Base de datos (RLS)
+- Nueva columna `expedientes.updated_by uuid` (quién hizo la última modificación — `user_id` sigue siendo "quién lo creó", no se tocó).
+- Las policies de `expedientes` y de las ~10 tablas dependientes (`exp_comitentes`, `exp_testigos`, `inmuebles`, `inmueble_inscripciones_extra`, `inmueble_partidas_extra`, `poligono`, `lados`, `angulos`, `linderos`, `edificacion`, `documentos_generados`) se dividieron en SELECT/INSERT/UPDATE/DELETE en vez del `for all` único de antes:
+  - **SELECT y UPDATE**: abiertos a cualquier usuario logueado (`auth.uid() is not null`), sin exigir que sea el dueño.
+  - **INSERT**: sigue exigiendo `auth.uid() = user_id` en `expedientes` (crear queda igual que antes).
+  - **DELETE**: sigue exigiendo `auth.uid() = user_id` en `expedientes` — aunque, importante, el borrado real de la app es un soft-delete (`update eliminado_at`), que cae bajo la policy de UPDATE (abierta). La restricción real de "solo elimina el dueño" la sigue dando el filtro `.eq('user_id', uid)` que ya tenía `expedientes/index.astro` en esa acción puntual, no se sacó.
+- `comitentes`/`testigos` (tablas de "maestro" de contactos, no dependientes de `expedientes`) recibieron el mismo criterio: SELECT y UPDATE abiertos a todos, INSERT/DELETE siguen propios — necesario para que un expediente compartido muestre y permita corregir los datos de comitentes/testigos cargados originalmente por otro usuario.
+
+### Código de la app
+- `expedientes/[id].astro`: la consulta que carga el expediente (línea ~20) ya no filtra por `user_id` — cualquier usuario logueado puede abrir cualquier expediente por URL. Los 3 `update` a `expedientes` de este archivo (guardar Tab Mensura, cambiar estado, guardar observaciones) ahora también graban `updated_by: uid`. El picker de "agregar comitente/testigo existente" (`comitentesAll`/`testigosAll`) dejó de filtrar por `user_id` — si no, un editor que no sea el dueño original no podía reutilizar los comitentes ya cargados en ese expediente.
+- `expedientes/index.astro`: el listado principal ya no filtra por `user_id` (lista TODOS los expedientes del sistema). La acción `actualizar_datos_dgc` (Nº Expediente/Área de Catastro) dejó de filtrar por `user_id` y ahora graba `updated_by`. La acción `eliminar_expediente` (soft-delete) **mantiene** el filtro `.eq('user_id', uid)` — sigue siendo solo del dueño.
+- `dashboard.astro`: las 4 métricas de expedientes (Total/En proceso/Observados/Finalizados) dejaron de filtrar por `user_id` — ahora son del sistema entero, coherente con que el listado ya muestra todos ("Docs generados" ya era una métrica global desde antes, sin cambios ahí).
+
+### "Creado por" / "Última modif. por" en el listado (4.1)
+- Se agregaron 2 columnas nuevas a la tabla de `/expedientes`: "Creado por" (de `user_id`) y "Modificado por" (de `updated_by`, con fallback a `user_id` si todavía no hay modificaciones registradas) — se integran solas al sistema de columnas arrastrables/reordenables ya existente (`th[draggable="true"]`, sin tocar el script).
+- Los nombres se resuelven con el mismo patrón ya usado en `admin.astro`: un cliente `getSupabaseAdmin()` (service role, bypassa RLS de `profiles`) cruza los `user_id`/`updated_by` de la página actual contra `profiles(nombre, apellido)`, con `listUsers()` como respaldo para mostrar el email cuando el usuario todavía no cargó su perfil (ej. recién creado desde `/admin`, sin nombre/apellido todavía).
+
+### Migración SQL a correr en Supabase (antes de probar)
+```sql
+alter table expedientes add column if not exists updated_by uuid references auth.users(id);
+update expedientes set updated_by = user_id where updated_by is null;
+
+-- Expedientes: reemplaza la policy única "Expedientes: CRUD propio"
+drop policy if exists "Expedientes: CRUD propio" on expedientes;
+create policy "Expedientes: ver todos" on expedientes for select using (auth.uid() is not null);
+create policy "Expedientes: crear propio" on expedientes for insert with check (auth.uid() = user_id);
+create policy "Expedientes: editar todos" on expedientes for update using (auth.uid() is not null) with check (auth.uid() is not null);
+create policy "Expedientes: eliminar propio" on expedientes for delete using (auth.uid() = user_id);
+
+-- Comitentes / Testigos: mismo criterio (ver/editar todos, crear/eliminar propio)
+drop policy if exists "Comitentes: CRUD propio" on comitentes;
+create policy "Comitentes: ver todos" on comitentes for select using (auth.uid() is not null);
+create policy "Comitentes: crear propio" on comitentes for insert with check (auth.uid() = user_id);
+create policy "Comitentes: editar todos" on comitentes for update using (auth.uid() is not null) with check (auth.uid() is not null);
+create policy "Comitentes: eliminar propio" on comitentes for delete using (auth.uid() = user_id);
+
+drop policy if exists "Testigos: CRUD propio" on testigos;
+create policy "Testigos: ver todos" on testigos for select using (auth.uid() is not null);
+create policy "Testigos: crear propio" on testigos for insert with check (auth.uid() = user_id);
+create policy "Testigos: editar todos" on testigos for update using (auth.uid() is not null) with check (auth.uid() is not null);
+create policy "Testigos: eliminar propio" on testigos for delete using (auth.uid() = user_id);
+
+-- Tablas dependientes de expedientes (directas o via inmuebles/poligono): sacan el chequeo de
+-- dueño, dejan solo "existe el padre" + sesión válida.
+drop policy if exists "exp_comitentes: acceso via expediente propio" on exp_comitentes;
+create policy "exp_comitentes: acceso via expediente existente" on exp_comitentes for all
+  using (auth.uid() is not null and exists (select 1 from expedientes e where e.id = exp_comitentes.expediente_id))
+  with check (auth.uid() is not null and exists (select 1 from expedientes e where e.id = exp_comitentes.expediente_id));
+
+drop policy if exists "exp_testigos: acceso via expediente propio" on exp_testigos;
+create policy "exp_testigos: acceso via expediente existente" on exp_testigos for all
+  using (auth.uid() is not null and exists (select 1 from expedientes e where e.id = exp_testigos.expediente_id))
+  with check (auth.uid() is not null and exists (select 1 from expedientes e where e.id = exp_testigos.expediente_id));
+
+drop policy if exists "Inmuebles: acceso via expediente propio" on inmuebles;
+create policy "Inmuebles: acceso via expediente existente" on inmuebles for all
+  using (auth.uid() is not null and exists (select 1 from expedientes e where e.id = inmuebles.expediente_id))
+  with check (auth.uid() is not null and exists (select 1 from expedientes e where e.id = inmuebles.expediente_id));
+
+drop policy if exists "Inscripciones extra: acceso via inmueble → expediente propio" on inmueble_inscripciones_extra;
+create policy "Inscripciones extra: acceso via inmueble existente" on inmueble_inscripciones_extra for all
+  using (auth.uid() is not null and exists (select 1 from inmuebles i where i.id = inmueble_inscripciones_extra.inmueble_id))
+  with check (auth.uid() is not null and exists (select 1 from inmuebles i where i.id = inmueble_inscripciones_extra.inmueble_id));
+
+drop policy if exists "Partidas extra: acceso via inmueble → expediente propio" on inmueble_partidas_extra;
+create policy "Partidas extra: acceso via inmueble existente" on inmueble_partidas_extra for all
+  using (auth.uid() is not null and exists (select 1 from inmuebles i where i.id = inmueble_partidas_extra.inmueble_id))
+  with check (auth.uid() is not null and exists (select 1 from inmuebles i where i.id = inmueble_partidas_extra.inmueble_id));
+
+drop policy if exists "Poligono: acceso via expediente propio" on poligono;
+create policy "Poligono: acceso via expediente existente" on poligono for all
+  using (auth.uid() is not null and exists (select 1 from expedientes e where e.id = poligono.expediente_id))
+  with check (auth.uid() is not null and exists (select 1 from expedientes e where e.id = poligono.expediente_id));
+
+drop policy if exists "Lados: acceso via poligono → expediente propio" on lados;
+create policy "Lados: acceso via poligono existente" on lados for all
+  using (auth.uid() is not null and exists (select 1 from poligono p where p.id = lados.poligono_id))
+  with check (auth.uid() is not null and exists (select 1 from poligono p where p.id = lados.poligono_id));
+
+drop policy if exists "Angulos: acceso via poligono → expediente propio" on angulos;
+create policy "Angulos: acceso via poligono existente" on angulos for all
+  using (auth.uid() is not null and exists (select 1 from poligono p where p.id = angulos.poligono_id))
+  with check (auth.uid() is not null and exists (select 1 from poligono p where p.id = angulos.poligono_id));
+
+drop policy if exists "Linderos: acceso via expediente propio" on linderos;
+create policy "Linderos: acceso via expediente existente" on linderos for all
+  using (auth.uid() is not null and exists (select 1 from expedientes e where e.id = linderos.expediente_id))
+  with check (auth.uid() is not null and exists (select 1 from expedientes e where e.id = linderos.expediente_id));
+
+drop policy if exists "Edificacion: acceso via expediente propio" on edificacion;
+create policy "Edificacion: acceso via expediente existente" on edificacion for all
+  using (auth.uid() is not null and exists (select 1 from expedientes e where e.id = edificacion.expediente_id))
+  with check (auth.uid() is not null and exists (select 1 from expedientes e where e.id = edificacion.expediente_id));
+
+drop policy if exists "Documentos: acceso via expediente propio" on documentos_generados;
+create policy "Documentos: acceso via expediente existente" on documentos_generados for all
+  using (auth.uid() is not null and exists (select 1 from expedientes e where e.id = documentos_generados.expediente_id))
+  with check (auth.uid() is not null and exists (select 1 from expedientes e where e.id = documentos_generados.expediente_id));
+```
+
+**Verificación**: `astro build` limpio en cada ronda de edición. `schema.sql` quedó sincronizado con la migración (mismas policies, para que una instalación nueva desde cero ya nazca así). Migración corrida en Supabase (19/9). **Pendiente**: probar en el navegador con 2 usuarios reales (uno abriendo un expediente creado por el otro) — no hay forma de simular 2 sesiones distintas sin datos/usuarios reales, queda para cuando Franco/Juan lo prueben en su entorno.
+
+---
+
+## 📋 Cambios de la sesión — 19 Septiembre 2026 (v0.28) — Comitentes múltiples en documentos
+
+Hasta ahora todos los documentos generados solo mostraban el primer comitente cargado (`nombreComitente`), aunque el expediente tuviera varios. Se agregó, sin sacar `nombreComitente` (sigue existiendo y se sigue usando donde antes, ~10 lugares auditados por grep para no romper nada), una nueva variable `nombresComitentesTodos` que junta apellido+nombre de TODOS los comitentes del expediente con el criterio "A, B y C" (helper `listarConY`), usada puntualmente en:
+
+- **Carátula**: el campo "Comitente:" ahora lista a todos.
+- **Nota de Elevación**: 2º párrafo lista a todos los comitentes; sector de firmas reescrito con paginación (antes un solo `dibujarCentrado` fijo) — si no entran todas las firmas en la fila/página actual, arma filas nuevas y, si hace falta, una página nueva.
+- **Acta de Mensura**: el cuerpo agrega "y otros" después del nombre cuando hay más de un comitente; sector de firmas reescrito para combinar TODOS los testigos + TODOS los comitentes en un único bloque paginado (misma lógica de fila/página que Nota de Elevación) — si no entran en la página actual, se crea una página nueva con `crearPaginaConEncabezado(...)` titulada "FIRMAS".
+- **Notificación a Linderos**: la frase "habiendo recibido comisión de..." ahora lista a todos los comitentes, cada uno con su rol real (`"NOMBRE (DNI: X) en carácter de {rol}"`).
+- **Rótulo/membrete de cada hoja** (`dibujarEncabezado`, fila "COMITENTE"): si el listado completo entra en una sola línea se muestra completo; si no entra, se corta a "PRIMERO Y OTROS" (nueva lógica de una sola línea con truncado — solo para esta fila; las demás filas del rótulo, OBJETO/UBICACIÓN/PROFESIONAL, siguen con su wrap libre de siempre sin cambios).
+- **"Titular" → "Propietario"**: helper `rolLabel(rol)` aplicado donde el rol se imprime literal (dorso de SOR, Nota de Elevación, Notificación a Linderos) — el valor interno `'titular'` en DB no se tocó, ni las comparaciones internas (`rolComitente === 'poseedor'`, etc.).
+
+Se verificó a mano, con traza algebraica (no solo visual), que con pocos firmantes la nueva lógica de paginación de firmas produce exactamente el mismo resultado que el código viejo de una sola fila — para no arriesgar el caso común (1-2 comitentes) al resolver el caso nuevo (varios).
+
+**Verificación**: `astro build` limpio en cada ronda de edición.
+
+---
+
+## 📋 Cambios de la sesión — 19 Septiembre 2026 (v0.28) — Capítulo de Extensión: pluralización de inscripciones/partidas
+
+El capítulo "ANTECEDENTES DE DOMINIO" (documento `capitulo_ubicacion`) solo contemplaba una inscripción provincial (`inmuebles`), una partida inmobiliaria y una inscripción municipal — pero la Tab Inmueble ya permite cargar inscripciones/partidas adicionales desde la sesión anterior (v0.26, tablas `inmueble_inscripciones_extra`/`inmueble_partidas_extra`), que `generar.ts` todavía no leía para este documento.
+
+- Se agregaron los `select` de ambas tablas (ordenadas por `orden`), justo después de la carga de `edificacion`.
+- Nuevo helper `describirInscripcion(insc, depFallback)` + reescritura completa de los 3 párrafos del capítulo (Registro de la Propiedad Provincial, Partida Inmobiliaria/Rentas, inscripción Municipal) con pluralización real: singular igual que antes si hay una sola inscripción/partida cargada, y si hay 2+ arma la lista completa con la fórmula "la/las siguientes inscripciones: inscripción 1, inscripción 2 y inscripción 3" (se mantiene la convención de placeholder literal "la/las" ya presente en el párrafo de Rentas original).
+
+**Verificación**: `astro build` limpio. Pendiente de prueba visual en el navegador con un expediente que tenga más de una inscripción/partida cargada (no hay forma de generar ese caso sin datos reales de Franco).
+
+---
+
+## 📋 Cambios de la sesión — 19 Septiembre 2026 (v0.28) — Citación a linderos / Acta de ausencia solo para objetos de "mensura"
+
+Franco pidió que "Notificación a Linderos" y "Acta de Ausencia de Linderos y Autoridades" solo se ofrezcan quiénes tengan un `tipo_mensura` que contenga la palabra "mensura" — antes se ofrecían siempre, para cualquier tipo de objeto (ej. "División para Someter al Régimen de Conjuntos Inmobiliarios..." es el único de los ~31 valores reales de `TIPOS_MENSURA` que no la contiene, confirmado por enumeración completa antes de aplicar la regla).
+
+- **`expedientes/[id].astro`**: nuevo campo `datosValidacion.llevaCitacionYAusencia = (exp.tipo_mensura ?? '').toLowerCase().includes('mensura')`; el checklist de documentos de la Tab 5 ahora filtra esos 2 documentos cuando el campo es `false`; el armado del bundle "Expediente completo" (`armarHandlerBundle`) también los agrega/saca condicionalmente del lado del cliente, leyendo `window.datosValidacion.llevaCitacionYAusencia`.
+- **`generar.ts`**: la misma condición decide, del lado del servidor, si `citacion_linderos`/`acta_ausencia_linderos` entran en el array `tipos` del bundle "Expediente completo" — evitando que alguien fuerce la generación vía URL directa aunque la UI ya los oculte.
+- **Fix proactivo detectado antes de que rompiera nada**: el título de sección "ACTAS" (`DIVISORIAS_BUNDLE`) estaba enganchado al tipo `citacion_linderos` — si ese documento queda afuera del bundle, el título nunca se dibujaría aunque `acta_mensura` siguiera necesitando su encabezado de sección. Se movió la construcción de `DIVISORIAS_BUNDLE` a DESPUÉS de armar `tipos`, con una key computada que engancha "ACTAS" a `citacion_linderos` si está presente, o a `acta_mensura` si no.
+
+**Verificación**: `astro build` limpio. Enumerados a mano los ~31 valores de `TIPOS_MENSURA` (`expedientes/nuevo.astro`) para confirmar que la regla por substring "mensura" es segura y no excluye ningún tipo real que debería llevar estos documentos.
+
+---
+
+## 📋 Cambios de la sesión — 19 Septiembre 2026 (v0.28) — Logos nuevos + "Titular" → "Propietario"
+
+- **Login** (`src/pages/login.astro`): logo cambiado a `logo-nica-circular-131C3A.png` (el azul).
+- **Sidebar** (`src/components/sidebar/Sidebar.astro`): logo cambiado a `logo-nica-circular-blanco.png` (blanco sin fondo) — se sacó el `background:#fff`/`box-shadow` que tenía el ícono viejo (ese fondo blanco taparía un logo blanco transparente) y se cambió `object-fit` de `cover` a `contain` para no recortar el logo nuevo, que ya viene circular. El bloque `.sidebar-logo` ahora es un `<a href="/">` en vez de un `<div>` — clickeable, redirige a `/` (que a su vez manda a `/dashboard` si hay sesión, o `/login` si no).
+- **"Titular" → "Propietario"**: los `<option>` de rol de comitente en `expedientes/[id].astro` (líneas 753 y 779) ahora muestran "Propietario" — el `value="titular"` interno no se tocó (sigue siendo el valor guardado en `exp_comitentes.rol`, sin migración necesaria). En `generar.ts` se agregó `rolLabel(rol)` (helper nuevo, cerca de `dibujarCentrado`) que mapea `'titular'` → `'propietario'` solo para lo que se IMPRIME — aplicado en los 3 lugares donde `rolComitente` se imprime literalmente en un documento (declaración del dorso de SOR, Nota de Elevación, Notificación a Linderos). La comparación interna en Acta de Mensura (`rolComitente === 'poseedor'`, decide "la posesión ejercida por" vs "la propiedad del") no se tocó — sigue comparando el valor crudo de la base, no el label.
+
+**Verificación**: `astro build` limpio.
+
+---
+
 ## 📋 Cambios de la sesión — 18 Septiembre 2026 (v0.27) — Admin: cambiar contraseña de otro usuario
 
 Franco todavía no probó los cambios subidos (v0.26). Mientras tanto pidió: poder cambiar la contraseña de un usuario (la suya propia, por ejemplo) directo desde `/admin`, sin depender del flujo de "olvidé mi contraseña" por email — solo un admin puede hacerlo.

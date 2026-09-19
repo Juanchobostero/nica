@@ -25,13 +25,13 @@ const nav = [
 const current = Astro.url.pathname
 ---
 <aside class="sidebar">
-  <div class="sidebar-logo">
-    <img src="/images/nica-logo-icono.png" alt="NICA" class="logo-badge" />
+  <a href="/" class="sidebar-logo" style="text-decoration:none;cursor:pointer">
+    <img src="/images/logo-nica-circular-blanco.png" alt="NICA" class="logo-badge" />
     <div class="logo-textwrap">
       <span class="logo-text">NICA</span>
       <span class="logo-subtitle">Estudio de Agrimensura</span>
     </div>
-  </div>
+  </a>
 
   <nav class="sidebar-nav">
     {nav.map(item => (
@@ -74,9 +74,9 @@ const current = Astro.url.pathname
   width: 46px;
   height: 46px;
   border-radius: 50%;
-  object-fit: cover;
-  background: #fff;
-  box-shadow: 0 0 0 2px rgba(255,255,255,0.14), 0 2px 6px rgba(0,0,0,0.25);
+  object-fit: contain;
+  /* El logo nuevo es blanco sin fondo, pensado para apoyarse directo sobre el sidebar oscuro —
+     el fondo blanco de antes (para el ícono viejo, que sí necesitaba contraste) lo taparía. */
   flex-shrink: 0;
 }
 .logo-textwrap {
