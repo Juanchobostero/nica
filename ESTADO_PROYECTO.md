@@ -78,6 +78,16 @@
 
 ---
 
+## 📋 Cambios de la sesión — 20 Septiembre 2026 (v0.28) — Polígonos colapsados por defecto en Tab 3 Mensura
+
+Franco: con varios polígonos cargados (screenshot con 9 cards abiertas: "Polígono General", "A1", "A2", "Parcelas 01 a 04...", etc.) la Tab 3 quedaba larguísima al entrar — pidió que arranquen minimizadas y se expandan solo al tocarlas.
+
+Cada polígono ya era un `<details class="poligono-card">` nativo (colapsa/expande con un click en el título, sin JS propio) — simplemente traía el atributo `open` fijo, así que siempre arrancaban expandidos. Se sacó ese atributo; ahora todos arrancan colapsados, mostrando solo el nombre de la parcela, igual que el screenshot de referencia. No hay ningún otro lugar del código que dependa de que arranquen abiertos (ni JS ni validaciones), así que no hizo falta tocar nada más.
+
+**Verificación**: `astro build` limpio.
+
+---
+
 ## 📋 Cambios de la sesión — 19 Septiembre 2026 (v0.28) — Linderos con wrap + "Manzana"/"Chacra" seleccionable
 
 Dos pedidos más de Franco (WhatsApp, 19/9):

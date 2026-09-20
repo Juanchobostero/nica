@@ -1180,8 +1180,11 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
             {poligonosParaUI.map((pol: any, idx: number) => {
               const desde = pol?.parcela_desde ?? (idx + 1)
               const hasta = pol?.parcela_hasta ?? desde
+              // Colapsado por defecto (pedido de Franco, 19/9) — antes arrancaban siempre
+              // abiertos, y con varios polígonos cargados la Tab 3 quedaba larguísima al entrar.
+              // Sigue siendo un <details> nativo: un click en el título lo expande.
               return (
-                <details class="poligono-card" id={`poligono_card_${idx}`} open>
+                <details class="poligono-card" id={`poligono_card_${idx}`}>
                   <summary class="poligono-card-header">
                     <span class="poligono-card-label" id={`poligono_label_${idx}`}>
                       {(pol as any)?.nombre || (desde === hasta ? `Parcela ${desde}` : `Parcelas ${desde} a ${hasta}`)}
