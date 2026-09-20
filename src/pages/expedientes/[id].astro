@@ -96,6 +96,10 @@ if (Astro.request.method === 'POST') {
       seccion: form.get('seccion') || null,
       fraccion: form.get('fraccion') || null,
       manzana: form.get('manzana') || null,
+      // "Manzana" o "Chacra" — Franco pidió poder elegir cuál corresponde para cada inmueble
+      // (algunas zonas de Corrientes numeran por "Chacra" en vez de "Manzana"), 19/9. Por
+      // defecto "manzana" (comportamiento de siempre si no se toca el selector nuevo).
+      manzana_tipo: (form.get('manzana_tipo') as string) || 'manzana',
       parcela: form.get('parcela') || null,
       matricula_catastral: form.get('matricula_catastral'),
       tipo_inscripcion_registro: tipoInscripcion,
@@ -588,11 +592,13 @@ const datosValidacion = {
   comitenteDomicilio: !!((primerComitente as any)?.domicilio_calle && (primerComitente as any)?.domicilio_localidad),
   edificacionCargada: !!edificacion,
   edificacionCaracteristicas: Object.keys((edificacion as any)?.caracteristicas ?? {}).length > 0,
-  // Solo los objetos que contienen la palabra "mensura" llevan Notificación a Linderos y Acta
-  // de Ausencia de Linderos y Autoridades como documentos generables (pedido de Franco, 19/9) —
-  // ej. "División para Someter al Régimen de Conjuntos Inmobiliarios" no la lleva, pero
-  // "Unificación en Base a Mensura Registrada" sí (contiene la palabra).
-  llevaCitacionYAusencia: (exp.tipo_mensura ?? '').toLowerCase().includes('mensura'),
+  // Solo los objetos que EMPIEZAN con la palabra "mensura" llevan Notificación a Linderos y
+  // Acta de Ausencia de Linderos y Autoridades como documentos generables (pedido de Franco,
+  // 19/9, corregido el mismo día: primero era "contiene la palabra", después aclaró que tiene
+  // que ser "comience con la palabra 'MENSURA'") — ej. "Unificación en Base a Mensura
+  // Registrada" NO la lleva (contiene la palabra pero no empieza así), pero "Mensura y
+  // Unificación" sí.
+  llevaCitacionYAusencia: (exp.tipo_mensura ?? '').trim().toLowerCase().startsWith('mensura'),
 }
 
 // Tab 3 Mensura: un expediente puede tener varios polígonos (división en parcelas).
@@ -848,9 +854,15 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
             <input class="input" name="localidad" value={inmueble?.localidad ?? ''} />
           </div>
 
-          <!-- Solo URBANO: Manzana -->
+          <!-- Solo URBANO: Manzana / Chacra (seleccionable — algunas zonas numeran por "Chacra") -->
           <div class="field campo-urbano" id="grupo_manzana" style={inmueble?.tipo_inmueble === 'rural' ? 'display:none' : ''}>
-            <label>Manzana</label>
+            <label for="select_manzana_tipo">
+              <select name="manzana_tipo" id="select_manzana_tipo" class="select-label-inline"
+                disabled={inmueble?.tipo_inmueble === 'rural'}>
+                <option value="manzana" selected={(inmueble?.manzana_tipo ?? 'manzana') === 'manzana'}>Manzana</option>
+                <option value="chacra" selected={(inmueble as any)?.manzana_tipo === 'chacra'}>Chacra</option>
+              </select>
+            </label>
             <input class="input" name="manzana" id="input_manzana" value={inmueble?.manzana ?? ''}
               disabled={inmueble?.tipo_inmueble === 'rural'} />
           </div>
@@ -2328,11 +2340,16 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     var grupoParcela = document.getElementById('grupo_parcela')
     var grupoSeccion = document.getElementById('grupo_seccion')
     var inputManzana = document.getElementById('input_manzana')
+    var selectManzanaTipo = document.getElementById('select_manzana_tipo')
     var inputParcela = document.getElementById('input_parcela')
     var inputSeccion = document.getElementById('input_seccion')
     var lblFraccion  = document.getElementById('lbl_fraccion')
 
-    if (grupoManzana) { grupoManzana.style.display = esRural ? 'none' : ''; if (inputManzana) inputManzana.disabled = esRural }
+    if (grupoManzana) {
+      grupoManzana.style.display = esRural ? 'none' : ''
+      if (inputManzana) inputManzana.disabled = esRural
+      if (selectManzanaTipo) selectManzanaTipo.disabled = esRural
+    }
     if (grupoParcela) { grupoParcela.style.display = esRural ? 'none' : ''; if (inputParcela) inputParcela.disabled = esRural }
     if (grupoSeccion) { grupoSeccion.style.display = esRural ? '' : 'none'; if (inputSeccion) inputSeccion.disabled = !esRural }
     if (lblFraccion) lblFraccion.textContent = esRural ? 'Paraje' : 'Fracción'
@@ -3259,6 +3276,14 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
 
 <style>
 .page-header { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:1.5rem; gap:1rem; flex-wrap:wrap; }
+/* Selector "Manzana"/"Chacra" que reemplaza el <label> fijo de ese campo (Tab 2 Inmueble) — se ve
+   como el resto de los labels de campo, pero es un <select> real. */
+.select-label-inline {
+  border:none; background:none; padding:0; margin-bottom:4px;
+  font-size:0.875rem; font-weight:500; color:var(--color-text);
+  font-family:var(--font-body); cursor:pointer;
+}
+.select-label-inline:disabled { cursor:default; opacity:0.6; }
 .back-link { font-size:0.875rem; color:var(--color-text-secondary); display:block; margin-bottom:0.25rem; text-decoration:none; }
 .back-link:hover { color:var(--color-primary); }
 .page-header h2 { font-size:1.5rem; display:flex; align-items:center; }

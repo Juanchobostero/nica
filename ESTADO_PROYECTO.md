@@ -78,6 +78,58 @@
 
 ---
 
+## 📋 Cambios de la sesión — 19 Septiembre 2026 (v0.28) — Linderos con wrap + "Manzana"/"Chacra" seleccionable
+
+Dos pedidos más de Franco (WhatsApp, 19/9):
+
+### Linderos: wrap a la línea siguiente si hay muchos nombres
+Screenshot de un lado SUR con varios linderos cargados ("Daniela Estefanía Balguenet, Hernán Gabriel Balguenet, José María Balguenet, Virginia Soledad B...") que se salía por el borde derecho de la hoja, cortado. Pasaba en las 4 partes del sistema que imprimen NORTE/ESTE/SUR/OESTE: Capítulo de Extensión ("Los linderos son:"), Notificación a Linderos ("Cuyos linderos son los siguientes:"), Acta de Mensura ("Sus linderos son:") y Acta de Ausencia de Linderos.
+
+- Nuevo helper `dibujarFilaLindero` (junto a `dibujarTituloWrap`) que envuelve el valor a varias líneas si no entra en el ancho disponible, con sangría colgante (las líneas siguientes se alinean debajo del valor, no debajo de la etiqueta). Soporta un prefijo opcional (el "- " que usa Notificación a Linderos antes de "NORTE:") y un sufijo opcional (la línea de puntos de Notificación a Linderos, que queda al final de la última línea del valor, no de la primera).
+- Reemplazados los 4 bloques que dibujaban NORTE/ESTE/SUR/OESTE a mano (`page.drawText` fijo, una sola línea) por llamadas a este helper. Verificado por trazado algebraico que con un valor corto (caso común) el resultado es idéntico al de antes — mismas coordenadas, mismo salto de línea entre filas.
+
+### "Manzana" o "Chacra" seleccionable en el inmueble
+"esto podemos editarlo para que nos permita seleccionar entre 'Manzana' (queda por defecto) o 'Chacra' y que después se imprima de acuerdo a lo que se seleccionó" — algunas zonas de Corrientes numeran por "Chacra" en vez de "Manzana", y hasta ahora el sistema solo conocía "Manzana".
+
+- Nueva columna `inmuebles.manzana_tipo` (`'manzana'` default, o `'chacra'`) — el campo numérico en sí (`inmuebles.manzana`) no cambia, solo se agrega esto para saber cómo mostrarlo.
+- Tab 2 Inmueble (`[id].astro`): el `<label>Manzana</label>` fijo pasa a ser un `<select>` con las dos opciones, con la misma pinta visual de un label (no de un campo de formulario) — se deshabilita junto con el resto de los campos "solo urbano" cuando el inmueble es rural, mismo criterio que ya tenían Manzana/Parcela.
+- `construirUbicacion()` (`generar.ts`, usada en casi todos los documentos narrativos: Capítulo de Extensión, Acta de Mensura, Notificación a Linderos, Acta de Ausencia, Nota de Elevación, etc.) — el punto único donde se arma la frase "Fracción X, Parcela Y, Manzana Z..." ahora imprime "Chacra Z" si corresponde.
+- Formulario U (Inc. a — Designación según Título): la plantilla real ya trae una columna "CHACRA" propia en la grilla (al lado de NUMERO/FRAC/MANZANA/LOTE/P.HORIZONT), que hasta ahora quedaba siempre vacía porque el valor de "Manzana" siempre iba a la columna MANZANA. Ahora, si el inmueble es "Chacra", el valor va en la columna CHACRA de la plantilla en vez de MANZANA — coordenada (x≈333) medida con `pdftotext -bbox` sobre la plantilla real y confirmada renderizando con `pdftocairo` (el valor cae centrado dentro del recuadro CHACRA de la grilla impresa, sin invadir las columnas vecinas).
+
+**Verificación**: `astro build` limpio en cada ronda. La columna CHACRA de Formulario U se confirmó visualmente (render con poppler, comparando "Chacra"→columna CHACRA vs "Manzana"→columna MANZANA en la misma plantilla). **Pendiente**: correr la migración SQL (`alter table inmuebles add column if not exists manzana_tipo text default 'manzana' check (manzana_tipo in ('manzana','chacra'));`) en Supabase antes de probar — ya está agregada a `schema.sql`.
+
+---
+
+## 📋 Cambios de la sesión — 19 Septiembre 2026 (v0.28) — Título del Acta de Mensura + criterio "empieza con" en vez de "contiene"
+
+Dos correcciones más de Franco por WhatsApp (19/9), sobre lo mismo del punto 3 de la tanda grande (citación/acta de ausencia solo para mensuras):
+
+### Título del Acta de Mensura = "Acta de + nombre del objeto"
+"las actas tienen que tener de titulo el nombre del objeto (Acta de ... xx)" — **aclarado con Juan: este cambio es solo para el Acta de Mensura y Amojonamiento, no para el Acta de Ausencia de Linderos y Autoridades** (esa queda con su título fijo de siempre).
+- `generar.ts`, rama `acta_mensura`: el título fijo "ACTA DE MENSURA Y AMOJONAMIENTO" pasa a ser `ACTA DE ${tipoMensuraTexto}` (el tipo de mensura real del expediente, ej. "ACTA DE MENSURA Y DIVISIÓN", "ACTA DE UNIFICACIÓN EN BASE A MENSURA REGISTRADA").
+- Nuevo helper `dibujarTituloWrap` (junto a `dibujarCentrado`) — hace falta porque varios tipos de mensura son bastante largos (hay uno de +190 caracteres) y no entrarían en una sola línea centrada como antes: envuelve el título a varias líneas y, si hace falta, encoge el tamaño (mismo criterio ya usado en otras partes del archivo), devolviendo la posición Y de después del título para que el resto del contenido de la página arranque más abajo si el título ocupó más de una línea.
+
+### Citación/Acta de ausencia: "empieza con" en vez de "contiene"
+"la NOTIFICACION A LINDEROS el ACTA DE AUSENCIA, solo deben imprimirse en los casos que el objeto comience con la palabra 'MENSURA'" — corrección sobre la regla implementada antes en la sesión (punto 3), que usaba "contiene la palabra mensura en cualquier parte". Con esto, tipos como "Unificación en Base a Mensura Registrada" o "División en Base a Mensura Registrada..." (contienen la palabra pero no empiezan así) dejan de llevar estos 2 documentos, mientras que "Mensura y División", "Mensura para Prescripción Adquisitiva", etc. (empiezan con "Mensura") sí los siguen llevando.
+- `datosValidacion.llevaCitacionYAusencia` (`[id].astro`) y `llevaCitacionYAusencia` (`generar.ts`) cambiaron de `.includes('mensura')` a `.trim().toLowerCase().startsWith('mensura')`.
+
+**Verificación**: `astro build` limpio. Revisados a mano los ~31 valores de `TIPOS_MENSURA` — con el cambio a "empieza con", 9 de esos 31 pasan a NO llevar más citación/acta de ausencia (los que dicen "División en Base a Mensura...", "Unificación en Base a Mensura...", "Proyecto de Unificación en Base a Mensura...", "Rectificación de Mensura"), coherente con lo que pidió Franco.
+
+---
+
+## 📋 Cambios de la sesión — 19 Septiembre 2026 (v0.28) — Fix: Acta de Mensura no listaba todos los comitentes en el cuerpo
+
+Franco probó lo de comitentes múltiples (WhatsApp, 19/9): "re bien quedo los doble propietarios... en el ACTA DE MENSURA no se aplica el comando... en el resto de las fojas sí" — faltó listar los comitentes correctamente en ese documento, que se acortaba con "y otros" en vez de nombrarlos a todos.
+
+Causa: el párrafo principal del Acta de Mensura (`dibujarFormularioActa`/rama `acta_mensura` en `generar.ts`, ~línea 2029) fue el único lugar donde el pedido original de Franco decía explícitamente "y otros" para el comitente (ver v0.28 — "Comitentes múltiples", cuerpo del Acta) — pero al verlo impreso, Franco prefiere el mismo criterio que ya usan Carátula/Nota de Elevación/Notificación a Linderos: listar a TODOS con su DNI, no abreviar.
+
+- Nuevo bloque `nombresConDniActa`/`fraseTitularActa` que arma la lista completa ("APELLIDO, Nombre (DNI: X)" por cada comitente, unidos con "y"/comas vía `listarConY`) y elige el artículo singular/plural correcto ("el Sr." / "los Sres.", "la propiedad del" / "la propiedad de los", "la posesión ejercida por el" / "la posesión ejercida por los" — se arma así para que contraiga bien la gramática en los dos casos, no solo agregar una "s"). Reemplaza el viejo `Sr. ${nombreComitente} (DNI...) y otros`.
+- El sector de firmas del Acta (todos los comitentes + testigos, paginado si hace falta) ya estaba bien desde la implementación original — no se tocó, Franco confirmó que esa parte "quedó re bien".
+
+**Verificación**: `astro build` limpio.
+
+---
+
 ## 📋 Cambios de la sesión — 19 Septiembre 2026 (v0.28) — Tanda grande de pedidos de Franco (en curso)
 
 Lista completa de lo pedido por Franco (vía Juan, 19/9), para ir tildando a medida que se completa cada uno. Ninguno tocado todavía salvo lo marcado ✅.

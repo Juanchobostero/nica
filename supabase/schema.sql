@@ -236,7 +236,11 @@ create table if not exists inmuebles (
   cloacas                        boolean,
   personas_habitan               int,
   ultimo_anio_pago_impuesto      text,
-  receptoria                     text
+  receptoria                     text,
+  -- "Manzana" (default) o "Chacra" — algunas zonas de Corrientes numeran por "Chacra" en vez de
+  -- "Manzana"; el valor de `manzana` es el mismo campo de siempre, esto solo dice cómo se
+  -- imprime la etiqueta (pedido de Franco, 19/9).
+  manzana_tipo                   text default 'manzana' check (manzana_tipo in ('manzana','chacra'))
 );
 
 alter table inmuebles enable row level security;

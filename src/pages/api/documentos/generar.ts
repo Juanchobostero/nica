@@ -29,6 +29,58 @@ function dibujarCentrado(page: PDFPage, texto: string, y: number, size: number, 
   page.drawText(texto, { x: (pageWidth - w) / 2, y, size, font, color })
 }
 
+// Título centrado que envuelve a varias líneas (y encoge el tamaño si hace falta) — para títulos
+// de acta que ahora incluyen el nombre completo del objeto (pedido de Franco, 19/9: "las actas
+// tienen que tener de título el nombre del objeto"), que puede ser bastante largo. Devuelve la
+// posición Y debajo de la última línea dibujada, para que el resto del contenido siga desde ahí
+// en vez de asumir siempre una sola línea.
+function dibujarTituloWrap(page: PDFPage, texto: string, yTop: number, sizeMax: number, font: PDFFont, color: any, pageWidth: number, maxWidth: number, lineHeight = 16): number {
+  let size = sizeMax
+  let lineas = partirEnLineas(texto, maxWidth, size, font)
+  while (lineas.length > 3 && size > 9) {
+    size -= 0.5
+    lineas = partirEnLineas(texto, maxWidth, size, font)
+  }
+  let y = yTop
+  for (const linea of lineas) {
+    dibujarCentrado(page, linea, y, size, font, color, pageWidth)
+    y -= lineHeight
+  }
+  return y
+}
+
+// Dibuja una fila "ETIQUETA: valor" que envuelve a más de una línea si el valor es largo (pedido
+// de Franco, 19/9: linderos con muchos nombres se salían por el borde de la hoja) — usada en
+// "Los/Sus linderos son" de capitulo_ubicacion, citacion_linderos, acta_mensura y
+// acta_ausencia_linderos. Soporta un prefijo opcional (el "- " que usa citacion_linderos antes
+// de la etiqueta) y un sufijo opcional (la línea de puntos de citacion_linderos, que se agrega
+// después del valor así queda al final de la última línea, envuelva o no). Devuelve la posición Y
+// para la fila siguiente (ya con el espaciado entre filas aplicado).
+function dibujarFilaLindero(
+  page: PDFPage, label: string, valor: string,
+  xLabel: number, y: number, anchoDisponible: number,
+  size: number, font: PDFFont, boldFont: PDFFont, color: any,
+  opts: { lineHeight?: number; gapEntreFilas?: number; prefijo?: string; sufijo?: string } = {},
+): number {
+  const { lineHeight = 16, gapEntreFilas = 16, prefijo = '', sufijo = '' } = opts
+  let xActual = xLabel
+  if (prefijo) {
+    page.drawText(prefijo, { x: xActual, y, size, font: boldFont, color })
+    xActual += boldFont.widthOfTextAtSize(prefijo, size)
+  }
+  page.drawText(label, { x: xActual, y, size, font: boldFont, color })
+  const wLabel = boldFont.widthOfTextAtSize(label, size)
+  const xValor = xActual + wLabel
+  const anchoValor = (xLabel + anchoDisponible) - xValor
+  const lineas = partirEnLineas(`${valor}${sufijo}`, anchoValor, size, font)
+  let yLinea = y
+  lineas.forEach((linea, idx) => {
+    page.drawText(linea, { x: xValor, y: yLinea, size, font, color })
+    if (idx < lineas.length - 1) yLinea -= lineHeight
+  })
+  return yLinea - gapEntreFilas
+}
+
 // "titular" y "propietario" son sinónimos, pero Catastro es exigente con la terminología y pide
 // literalmente "propietario" en los documentos (pedido de Franco, 19/9). El valor interno
 // guardado en `exp_comitentes.rol` sigue siendo 'titular' (no se toca el default/check de la
@@ -449,7 +501,10 @@ function construirUbicacion(inmueble: any): string {
   const partes: string[] = []
   if (inmueble.fraccion)        partes.push(`Fracción ${inmueble.fraccion}`)
   if (inmueble.parcela)         partes.push(`Parcela ${inmueble.parcela}`)
-  if (inmueble.manzana)         partes.push(`Manzana ${inmueble.manzana}`)
+  // "Manzana" o "Chacra" según lo que el usuario eligió al cargar el inmueble (pedido de
+  // Franco, 19/9 — algunas zonas de Corrientes numeran por "Chacra" en vez de "Manzana").
+  // Default "manzana" si el expediente es de antes de este cambio (columna sin valor todavía).
+  if (inmueble.manzana)         partes.push(`${inmueble.manzana_tipo === 'chacra' ? 'Chacra' : 'Manzana'} ${inmueble.manzana}`)
   if (inmueble.subparcela)      partes.push(`Subparcela ${inmueble.subparcela}`)
   if (inmueble.circunscripcion) partes.push(`Circunscripción ${inmueble.circunscripcion}`)
   if (inmueble.seccion)         partes.push(`Sección ${inmueble.seccion}`)
@@ -1084,9 +1139,10 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const tipoDDJJPrincipal = (inmueble as any)?.tipo_inmueble === 'rural' ? 'formulario_sor' : 'formulario_u'
   const incluirE1 = !!edificacion
   // "Notificación a Linderos" y "Acta de Ausencia de Linderos y Autoridades" solo van si el
-  // objeto contiene la palabra "mensura" (pedido de Franco, 19/9) — mismo flag que ya filtra el
-  // checklist y la validación del lado del cliente en [id].astro (datosValidacion.llevaCitacionYAusencia).
-  const llevaCitacionYAusencia = (exp?.tipo_mensura ?? '').toLowerCase().includes('mensura')
+  // objeto EMPIEZA con la palabra "mensura" (pedido de Franco, 19/9, corregido el mismo día de
+  // "contiene" a "comience con") — mismo flag que ya filtra el checklist y la validación del
+  // lado del cliente en [id].astro (datosValidacion.llevaCitacionYAusencia).
+  const llevaCitacionYAusencia = (exp?.tipo_mensura ?? '').trim().toLowerCase().startsWith('mensura')
   if (esBundle) {
     tipos = [
       'caratula', 'nota_elevacion', 'documento_identidad',
@@ -1244,7 +1300,15 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         // en la fila de abajo, dentro del recuadro.
         campo(inmueble?.calle_frente ?? '', 158, 764)
         campo(inmueble?.fraccion ?? '', 366, 764)
-        campo(inmueble?.manzana ?? '', 396, 764)
+        // El valor de "Manzana" va en la columna CHACRA (x≈333, medido con pdftotext -bbox
+        // sobre la plantilla real) o MANZANA (x=396) según lo que el usuario eligió al cargar
+        // el inmueble (pedido de Franco, 19/9) — antes siempre iba en MANZANA, la columna
+        // CHACRA de la plantilla quedaba sin usar.
+        if ((inmueble as any)?.manzana_tipo === 'chacra') {
+          campo(inmueble?.manzana ?? '', 333, 764)
+        } else {
+          campo(inmueble?.manzana ?? '', 396, 764)
+        }
         campo(inmueble?.parcela ?? '', 443, 764)
 
         // Inc. c) Registro de la Propiedad
@@ -1837,10 +1901,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         ['OESTE: ', linderos?.oeste_mensura ?? '—'],
       ]
       lindLista.forEach(([label, valor]) => {
-        page.drawText(label, { x: margenX + 30, y, size: 11, font: bold, color: negro })
-        const wLabel = bold.widthOfTextAtSize(label, 11)
-        page.drawText(valor, { x: margenX + 30 + wLabel, y, size: 11, font, color: negro })
-        y -= 16
+        y = dibujarFilaLindero(page, label, valor, margenX + 30, y, anchoTexto - 30, 11, font, bold, negro)
       })
       y -= 14
 
@@ -1960,12 +2021,9 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         ['OESTE: ', valorLindero(linderos, 'oeste')],
       ]
       lindLista.forEach(([label, valor]) => {
-        page.drawText('- ', { x: margenX, y, size: 11, font: bold, color: negro })
-        page.drawText(label, { x: margenX + 10, y, size: 11, font: bold, color: negro })
-        const wLabel = bold.widthOfTextAtSize(label, 11)
-        const textoValor = `${valor} ......................................`
-        page.drawText(textoValor, { x: margenX + 10 + wLabel, y, size: 11, font, color: negro })
-        y -= 18
+        y = dibujarFilaLindero(page, label, valor, margenX + 10, y, anchoTexto - 10, 11, font, bold, negro, {
+          lineHeight: 18, gapEntreFilas: 18, prefijo: '- ', sufijo: ' ......................................',
+        })
       })
       y -= 12
 
@@ -2005,14 +2063,40 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
       const margenX = 55
       const anchoTexto = width - margenX * 2
 
-      dibujarCentrado(page, 'ACTA DE MENSURA Y AMOJONAMIENTO', yEncabezadoFin - 30, 13, bold, azul, width)
+      // Título = "ACTA DE " + nombre completo del objeto (pedido de Franco, 19/9) — antes era
+      // un texto fijo ("ACTA DE MENSURA Y AMOJONAMIENTO") sin importar el tipo de mensura real
+      // del expediente. Envuelve a varias líneas si el objeto es largo (hay varios que superan
+      // los 100 caracteres).
+      const yTrasTitulo = dibujarTituloWrap(page, `ACTA DE ${tipoMensuraTexto}`, yEncabezadoFin - 30, 13, bold, azul, width, anchoTexto)
 
-      let y = yEncabezadoFin - 60
+      let y = yTrasTitulo - 30
 
       const profesionalDni       = (profile as any)?.dni
       const profesionalMatricula = profile?.matricula
       const profesionalCatastro  = (profile as any)?.matricula_catastro
       const horaTexto = (exp as any)?.hora_mensura ?? '—'
+
+      // Franco (19/9): en este documento el "y otros" no alcanza — hay que listar a TODOS los
+      // comitentes con su DNI, igual que ya se hace en Nota de Elevación/Notificación a
+      // Linderos (el resto de las fojas ya lo hacía bien, solo faltaba acá).
+      const nombresConDniActa = listaComitentesConDatos.length > 0
+        ? listaComitentesConDatos.map((ec: any) => {
+            const c = ec.comitentes
+            const nombreC = `${c?.apellido ?? ''}, ${c?.nombre ?? ''}`.toUpperCase()
+            const dniC = c?.dni ? ` (DNI: ${c.dni})` : ''
+            return `${nombreC}${dniC}`
+          })
+        : [`${nombreComitente.toUpperCase()} (DNI: ${comitentePrincipal?.dni ?? '—'})`]
+      const esPluralComitentesActa = nombresConDniActa.length > 1
+      const listaNombresActa = listarConY(nombresConDniActa)
+      // "Posesión ejercida por" sólo aplica al caso de prescripción adquisitiva (rol
+      // "poseedor"); para el resto de los roles (titular, apoderado, heredero) va "la
+      // propiedad del/de los" — corrección de Franco sobre el Acta de Mensura. El artículo
+      // singular/plural ("del Sr." vs "de los Sres.") se arma acá para que contraiga bien en
+      // los dos casos.
+      const fraseTitularActa = rolComitente === 'poseedor'
+        ? (esPluralComitentesActa ? `la posesión ejercida por los Sres. ${listaNombresActa}` : `la posesión ejercida por el Sr. ${listaNombresActa}`)
+        : (esPluralComitentesActa ? `la propiedad de los Sres. ${listaNombresActa}` : `la propiedad del Sr. ${listaNombresActa}`)
 
       const parrafoActa =
         `En el Departamento de ${inmueble?.departamento ?? '—'}, Localidad de ${inmueble?.localidad ?? '—'} – ` +
@@ -2022,11 +2106,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         `${profesionalMatricula ? ` - MATRICULA PROFESIONAL DEL CONSEJO: ${profesionalMatricula}.` : ''}` +
         `${profesionalCatastro ? ` MATRICULA PROFESIONAL DE CATASTRO: ${profesionalCatastro};` : ''}` +
         ` - siendo ${horaTexto} hs. (${horaALetras(horaTexto)}) del día ${formatearFechaLarga(exp?.fecha_inicio)}, ` +
-        // "Posesión ejercida por" sólo aplica al caso de prescripción adquisitiva (rol
-        // "poseedor"); para el resto de los roles (titular, apoderado, heredero) va "la
-        // propiedad del" — corrección de Franco sobre el Acta de Mensura.
-        `se deja constancia mediante la presente, que se han medido los límites de ${rolComitente === 'poseedor' ? 'la posesión ejercida por el' : 'la propiedad del'} ` +
-        `Sr. ${nombreComitente.toUpperCase()} (DNI: ${comitentePrincipal?.dni ?? '—'})${listaComitentesConDatos.length > 1 ? ' y otros' : ''}. Habiendo materializado todos ` +
+        `se deja constancia mediante la presente, que se han medido los límites de ${fraseTitularActa}. Habiendo materializado todos ` +
         `los vértices con mojones de madera dura, determinando una superficie TOTAL de ${poligono?.superficie_m2 != null ? Number(poligono.superficie_m2).toFixed(2) : '—'} ` +
         `metros cuadrados${poligono?.superficie_letras ? ` (${poligono.superficie_letras.toUpperCase()})` : ''}.`
       y = dibujarParrafo(page, parrafoActa, margenX, y, anchoTexto, 11, font, negro)
@@ -2042,10 +2122,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         ['OESTE: ', linderos?.oeste_mensura ?? '—'],
       ]
       lindActa.forEach(([label, valor]) => {
-        page.drawText(label, { x: margenX, y, size: 11, font: bold, color: negro })
-        const wLabel = bold.widthOfTextAtSize(label, 11)
-        page.drawText(valor, { x: margenX + wLabel, y, size: 11, font, color: negro })
-        y -= 16
+        y = dibujarFilaLindero(page, label, valor, margenX, y, anchoTexto, 11, font, bold, negro)
       })
       y -= 14
 
@@ -2150,10 +2227,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         ['OESTE: ', valorLindero(linderos, 'oeste')],
       ]
       lindAusencia.forEach(([label, valor]) => {
-        page.drawText(label, { x: margenX, y, size: 11, font: bold, color: negro })
-        const wLabel = bold.widthOfTextAtSize(label, 11)
-        page.drawText(valor, { x: margenX + wLabel, y, size: 11, font, color: negro })
-        y -= 16
+        y = dibujarFilaLindero(page, label, valor, margenX, y, anchoTexto, 11, font, bold, negro)
       })
 
       // Firmas: solo testigos, en columnas iguales
