@@ -78,6 +78,59 @@
 
 ---
 
+## 📋 Cambios de la sesión — 9 Octubre 2026 (v0.29) — Fix Planilla (designación de ángulo), verificación de cierre lineal, y rendimiento de Tab Mensura
+
+Tres pedidos de Franco (vía Juan, 9/10): un bug en la Planilla de Cálculos, una verificación nueva, y un problema de lentitud reportado por WhatsApp el 8/10 que pidió investigar y documentar sin tocar nada a ciegas.
+
+### 1. Planilla de Cálculos: la designación manual del ÁNGULO no se reflejaba
+Franco: "quedó por defecto el tema de los lados consecutivos, pero en los casos donde se fuercen los lados (nombres) no se impacta en la planilla, lo cual si ya hace en la memoria de las operaciones."
+
+Investigación: la columna "N°" de la Planilla (`generar.ts`, rama `planilla_calculos`) ya tenía en cuenta la designación manual del **lado** (`ladosPol[i]?.etiqueta`) desde una sesión anterior — ese camino funciona igual que en la Memoria, código y datos verificados línea por línea, sin diferencia encontrada. La causa real: en Tab Mensura, lado y ángulo tienen cada uno su PROPIA designación manual, independiente (inputs separados "L1"/"A1"). La Memoria los lista por separado (sección LADOS y sección ÁNGULOS, cada una con su propia etiqueta) — pero la Planilla combina lado+ángulo en una sola fila con una sola columna "N°", y esa columna solo miraba la etiqueta del lado, nunca la del ángulo. Si Franco fuerza el nombre en el ángulo en vez del lado, la Planilla lo seguía ignorando.
+- Fix: la columna "N°" ahora revisa lado → ángulo → automática, en ese orden (`ladosPol[i]?.etiqueta || ang.etiqueta || etiquetas[i]`), sin tocar el resto de la tabla (ÁNGULO/LADO/coordenadas siguen igual).
+
+**Verificación**: `astro build` limpio. No se pudo reproducir el bug exacto con datos de prueba (no hay forma de saber si Franco forzaba el lado o el ángulo sin su expediente real) — si después de este fix sigue sin verse bien, hace falta el caso puntual (qué expediente/polígono) para seguir investigando.
+
+### 2. Verificación de cierre lineal en Tab Mensura
+Franco: "la verificación angular ya funciona bien, faltaría la lineal" — al cargar lados/ángulos de un polígono, ya se avisa si la suma angular no cierra (en grados/minutos/segundos). Faltaba el equivalente para el error de cierre LINEAL (qué tan lejos queda el punto de llegada del punto de partida de la poligonal) contra la tolerancia admitida por Catastro.
+- La fórmula de error de cierre (`√(ΣDX²+ΣDY²)`) y de tolerancia (Urbano: `0,00025·L+0,03` — Rural: `0,00046·L+0,20`, condición favorable) ya existían en `src/lib/poligonal.ts` (`calcularPoligonal`/`calcularTolerancia`), usadas para imprimir "ERROR TOTAL"/"TOLERANCIA" al pie de la Planilla de Cálculos — solo faltaba mostrarlas también en vivo durante la carga.
+- Se agregó `calcularCierreLinealVanilla` (puerto a JS plano, junto a `calcularSuperficieVanilla` que ya existía con el mismo criterio) y un cartel nuevo debajo del resumen de ángulos de cada polígono, que se recalcula solo al tocar cualquier lado o ángulo: "Cierre lineal: X,XXX m · Tolerancia admitida: Y,YYY m" — en verde si entra en tolerancia, en rojo con el aviso "FUERA DE TOLERANCIA" si no.
+- A diferencia de la verificación angular (que SÍ bloquea el guardado — un desfasaje angular es siempre un error de carga), esta es solo informativa y no bloquea: un poco de error lineal es normal en agrimensura real, la tolerancia es una referencia de Catastro, no una regla matemática exacta.
+
+**Verificación**: `astro build` limpio. Fórmulas iguales a las ya usadas (y confirmadas por Franco en su momento) para el pie de la Planilla de Cálculos — no son cálculos nuevos, es la misma matemática ya validada, mostrada ahora también en la carga.
+
+### 3. Rendimiento de Tab Mensura con muchos polígonos — investigado y corregida la causa principal
+Franco (WhatsApp, 8/10): "cuando voy cargando varias parcelas... el tiempo de carga del refresh al finalizar cada polígono va aumentando... como que va sobreescribiendo una por una."
+
+**Análisis** (antes de tocar código, como pidió): Tab 3 Mensura es UN solo `<form>` grande que contiene TODOS los polígonos del expediente, cada uno en su propio `<details>` — "Guardar mensura" reenvía y regraba TODOS los polígonos en cada submit, no solo el que se está completando (confirmado leyendo `guardar_mensura` en `[id].astro`: `for (let p = 0; p < cantPoligonos; p++) { ... }` recorre todos). Eso ya explica el "va sobreescribiendo una por una" que notó Franco — es exactamente lo que pasa, aunque no debería corromper nada (cada polígono se graba con sus propios datos del form, no con datos de otro).
+
+El causante real de la LENTITUD creciente: por cada polígono, los lados y ángulos se borraban y volvían a insertar **uno por uno** (`for` con un `await db.from('lados').insert(...)` por cada lado, ídem ángulos) en vez de mandarlos todos juntos en una sola llamada. Con polígonos de hasta 15-32 lados, eso son hasta ~30-65 round-trips secuenciales a la base SOLO para un polígono — multiplicado por la cantidad total de polígonos del expediente en cada guardado. Con 9 polígonos cargados (como el caso real que mandó Franco), esto fácilmente supera las 200-300 llamadas secuenciales a Supabase en un solo click de "Guardar mensura" — coincide exactamente con el síntoma de ir empeorando a medida que se cargan más parcelas.
+
+**Fix aplicado** (bajo riesgo, no cambia el comportamiento ni el resultado final, solo cómo se escribe): los `for` que insertaban lados/ángulos uno por uno ahora arman un array y lo mandan con una sola llamada `.insert([...])` por polígono — de hasta ~65 round-trips por polígono a 5 (1 por el polígono en sí, 1 delete + 1 insert de lados, 1 delete + 1 insert de ángulos). Mismo borrado-y-reinserción de siempre, misma validación, mismos datos guardados — solo se empaquetan en menos viajes a la base.
+
+**Pendiente / plan a futuro si esto no alcanza**: si con la carga real de Franco el guardado sigue sintiéndose lento, el próximo paso (más grande, no se hizo ahora para no arriesgar nada sin necesidad) sería que cada polígono tenga su propio mini-formulario independiente (mismo patrón ya usado para comitentes/testigos — alta/baja con su propio POST), para que guardar un polígono no vuelva a tocar los demás en absoluto. Es un cambio de arquitectura más grande (afecta la validación de sumatoria angular que hoy revisa todos los polígonos juntos al enviar, el flujo de "+ Agregar polígono", y "Eliminar" por polígono) — se documenta acá como plan, no se implementa hasta confirmar que hace falta.
+
+**Verificación**: `astro build` limpio. No se pudo medir la mejora real en tiempo (necesita un expediente con muchos polígonos reales en el entorno de Franco) — pedirle que lo prueba y confirme si mejoró.
+
+---
+
+## 📋 Cambios de la sesión — 20 Septiembre 2026 (v0.28) — Corregir los datos iniciales del expediente (Tipo de Inmueble y Tipo de mensura)
+
+Juan pidió (por Franco) poder corregir los campos del formulario "Nuevo expediente" (Tipo de Inmueble, Nº Expediente, Fecha de inicio, Tipo de mensura, Observaciones) si hubo un error de carga, con la condición explícita de analizar primero el impacto en los datos ya guardados antes de tocar nada.
+
+### Análisis previo (hecho antes de escribir código)
+De los 5 campos, **3 ya eran corregibles** desde otro lugar del sistema, sin tocar nada: Nº Expediente (listado de Expedientes/Dashboard, modal "Nº Exp. / Catastro"), Fecha de inicio (Tab 3 Mensura, como "Fecha de mensura" — es la misma columna) y Observaciones (Tab 1 Comitente). Los otros 2 estaban deliberadamente bloqueados con la leyenda "se define al crear el expediente":
+- **Tipo de mensura** (`expedientes.tipo_mensura`, texto libre sin constraint): se usa en la regla de citación/acta de ausencia, es el título del Acta de Mensura, y aparece como "OBJETO" en el membrete y en varios párrafos narrativos de casi todos los documentos. Cambiarlo no puede romper la base (no tiene FK ni constraint) — el único efecto real es que los documentos YA generados quedan con el texto viejo hasta que se regeneran.
+- **Tipo de Inmueble** (`inmuebles.tipo_inmueble`): decide qué Formulario de DDJJ se ofrece (Urbano→U, Rural→SOR) y qué campos se muestran en Tab 2 (Manzana/Parcela vs Sección Rural). Cambiarlo no borra datos por sí solo, pero **se detectó un riesgo real antes de shipearlo**: el toggle Urbano/Rural deshabilita (`disabled`) el grupo de campos que no corresponde, y un input `disabled` no viaja en el `FormData` al guardar — sin corregir esto, cambiar el tipo y guardar hubiera pisado con `null` los datos de Manzana/Parcela o Sección Rural ya cargados, contradiciendo la promesa de "quedan guardados pero ocultos". Se corrigió usando `form.has(campo)` para distinguir "no vino porque estaba deshabilitado" de "vino vacío a propósito", conservando el valor existente en el primer caso.
+
+### Implementado
+- Nueva lista compartida `src/lib/tiposMensura.ts` (antes vivía duplicable solo en `nuevo.astro`) — usada ahora tanto por "Nuevo expediente" como por la corrección en Tab 3, para que no se desincronicen.
+- **Tab 3 Mensura**: el bloque fijo "Tipo de mensura: X (se define al crear)" pasa a ser un `<select>` editable (mismas opciones que al crear) + se agregan también Nº Expediente y Área de Catastro como campos editables ahí mismo (antes solo se cargaban desde el Dashboard) — los 3 se guardan junto con Fecha/Hora de mensura en la misma acción `guardar_mensura` de siempre. Nota visible: "si corregís el Tipo de mensura y ya generaste documentos, recordá volver a generarlos".
+- **Tab 2 Inmueble**: el badge fijo "Urbano — Se define al crear" pasa a ser el mismo par de radios Urbano/Rural que usa "Nuevo expediente", reutilizando el toggle JS `aplicarTipoInmueble` que ya existía (antes solo corría una vez al cargar la página; ahora también corre al cambiar de radio, mostrando/ocultando Manzana/Parcela vs Sección Rural en vivo). Nota visible: avisa que los datos del tipo anterior quedan guardados pero ocultos, y que cambia qué Formulario de DDJJ se ofrece.
+
+**Verificación**: `astro build` limpio en cada ronda. El riesgo de pérdida de datos al cambiar Tipo de Inmueble se encontró y corrigió ANTES de dar por terminado el cambio (no llegó a shipearse roto). **Pendiente**: probar en el navegador el caso real (cargar Manzana/Parcela, cambiar a Rural, guardar, volver a Urbano y confirmar que el dato sigue ahí) — no hay forma de simularlo sin datos reales de un expediente.
+
+---
+
 ## 📋 Cambios de la sesión — 20 Septiembre 2026 (v0.28) — Polígonos colapsados por defecto en Tab 3 Mensura
 
 Franco: con varios polígonos cargados (screenshot con 9 cards abiertas: "Polígono General", "A1", "A2", "Parcelas 01 a 04...", etc.) la Tab 3 quedaba larguísima al entrar — pidió que arranquen minimizadas y se expandan solo al tocarlas.

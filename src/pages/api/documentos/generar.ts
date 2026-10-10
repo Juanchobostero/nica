@@ -2426,8 +2426,14 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
           const azRad = azimuts[i]
           const azGrados = Math.floor(azRad)
           const azMinutos = Math.round((azRad - azGrados) * 60)
+          // La columna "N°" combina en una sola fila lado+ángulo, así que antes solo miraba la
+          // designación del LADO — si Franco forzaba el nombre del ÁNGULO en vez del lado (son
+          // designaciones independientes en Tab Mensura), la Planilla lo ignoraba y mostraba la
+          // numeración automática igual, aunque la Memoria de Mensura sí lo mostraba (porque esa
+          // lista lados y ángulos por separado, cada uno con su propia designación). Reportado
+          // por Franco, 8/10. Ahora revisa las dos antes de caer en la automática.
           filas.push([
-            ladosPol[i]?.etiqueta || etiquetas[i], ag, am, as_,
+            ladosPol[i]?.etiqueta || ang.etiqueta || etiquetas[i], ag, am, as_,
             fmt(Number(ladosPol[i]?.valor_m ?? 0)),
             String(azGrados), String(azMinutos), '0',
             fmt(dx[i]), fmt(dy[i]), fmt(x[i]), fmt(yCoord[i]),

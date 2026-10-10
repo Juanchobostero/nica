@@ -3,6 +3,8 @@ import AppLayout from '../../layouts/AppLayout.astro'
 import { getSupabaseAnon, getSupabase } from '../../lib/supabase'
 import { calcularPoligonal, calcularSuperficie } from '../../lib/poligonal'
 import { CATEGORIAS_E1, INCISOS_E1, DESTINOS_E1 } from '../../lib/edificacionE1'
+import { TIPOS_MENSURA } from '../../lib/tiposMensura'
+import { AREAS_CATASTRO } from '../../lib/areaCatastro'
 
 const token = Astro.cookies.get('sb-access-token')?.value ?? ''
 const { data: { user } } = await getSupabaseAnon().auth.getUser(token)
@@ -93,14 +95,21 @@ if (Astro.request.method === 'POST') {
       tipo_inmueble: form.get('tipo_inmueble'),
       departamento: form.get('departamento'),
       localidad: form.get('localidad'),
-      seccion: form.get('seccion') || null,
+      // Sección (rural) y Manzana/Parcela (urbano) se deshabilitan en el HTML cuando no
+      // corresponden al tipo de inmueble actual — un input `disabled` no viaja en el FormData,
+      // así que si tocás el toggle Urbano/Rural (ahora editable, 20/9) y guardás sin haber vuelto
+      // al tipo anterior, `form.get(...)` daría null para el grupo oculto. `form.has(...)`
+      // distingue "el campo no vino porque estaba deshabilitado" de "vino vacío a propósito", y
+      // en el primer caso se conserva el valor ya guardado en vez de pisarlo con null — así el
+      // dato del tipo anterior queda guardado pero oculto, como se le avisa a Franco en la UI.
+      seccion: form.has('seccion') ? (form.get('seccion') || null) : (inmueble?.seccion ?? null),
       fraccion: form.get('fraccion') || null,
-      manzana: form.get('manzana') || null,
+      manzana: form.has('manzana') ? (form.get('manzana') || null) : (inmueble?.manzana ?? null),
       // "Manzana" o "Chacra" — Franco pidió poder elegir cuál corresponde para cada inmueble
       // (algunas zonas de Corrientes numeran por "Chacra" en vez de "Manzana"), 19/9. Por
       // defecto "manzana" (comportamiento de siempre si no se toca el selector nuevo).
-      manzana_tipo: (form.get('manzana_tipo') as string) || 'manzana',
-      parcela: form.get('parcela') || null,
+      manzana_tipo: form.has('manzana_tipo') ? ((form.get('manzana_tipo') as string) || 'manzana') : ((inmueble as any)?.manzana_tipo ?? 'manzana'),
+      parcela: form.has('parcela') ? (form.get('parcela') || null) : (inmueble?.parcela ?? null),
       matricula_catastral: form.get('matricula_catastral'),
       tipo_inscripcion_registro: tipoInscripcion,
       matricula_registro: tipoInscripcion === 'matricula' ? (form.get('matricula_registro') || null) : null,
@@ -219,10 +228,14 @@ if (Astro.request.method === 'POST') {
     }
 
     if (!errorMsg) {
-      // Nº Expediente y Área de Catastro ya no se cargan desde esta pestaña (se mueven al
-      // Dashboard) — OJO: no incluirlos acá es a propósito, si el form ya no los manda
-      // `form.get(...)` daría null y pisaría el valor cargado desde el Dashboard.
+      // Tipo de mensura, Nº Expediente y Área de Catastro ahora también se corrigen desde acá
+      // (pedido de Franco, 20/9 — antes eran "de solo lectura, se definen al crear") — el form
+      // de esta Tab ya los manda siempre con su valor actual (precargados desde `exp`), así que
+      // no hay riesgo de pisarlos con null por no incluirlos.
       await db.from('expedientes').update({
+        tipo_mensura: form.get('tipo_mensura') || null,
+        numero_expediente: form.get('numero_expediente') || null,
+        area_catastro: form.get('area_catastro') || null,
         fecha_inicio: form.get('fecha_mensura') || null,
         hora_mensura: form.get('hora_mensura') || null,
         updated_by: uid,
@@ -299,15 +312,19 @@ if (Astro.request.method === 'POST') {
           polId = newPol?.id ?? null
         }
 
-        // Guardar lados si se enviaron
+        // Guardar lados si se enviaron — insert en 1 sola llamada batcheada en vez de 1 await
+        // por lado (eran hasta 32 round-trips secuenciales por polígono, uno de los motivos del
+        // guardado cada vez más lento con muchas parcelas reportado por Franco el 8/10 — ver
+        // "Rendimiento Tab Mensura" en ESTADO_PROYECTO.md).
         if (polId && cantLados > 0) {
           await db.from('lados').delete().eq('poligono_id', polId)
+          const ladosRows: Record<string, unknown>[] = []
           for (let i = 1; i <= cantLados; i++) {
             const vm = form.get(`pol_${p}_lado_${i}_valor_m`) as string
             const vl = form.get(`pol_${p}_lado_${i}_valor_letras`) as string
             const vet = (form.get(`pol_${p}_lado_${i}_etiqueta`) as string) || ''
             if (vm || vl || vet) {
-              await db.from('lados').insert({
+              ladosRows.push({
                 poligono_id: polId,
                 orden: i,
                 valor_m:      parseFloat(vm) || null,
@@ -316,11 +333,13 @@ if (Astro.request.method === 'POST') {
               })
             }
           }
+          if (ladosRows.length) await db.from('lados').insert(ladosRows)
         }
 
-        // Guardar ángulos si se enviaron
+        // Guardar ángulos si se enviaron — mismo criterio de batcheo que lados, arriba.
         if (polId && cantAngulos > 0) {
           await db.from('angulos').delete().eq('poligono_id', polId)
+          const angulosRows: Record<string, unknown>[] = []
           for (let i = 1; i <= cantAngulos; i++) {
             const va = form.get(`pol_${p}_angulo_${i}_valor`) as string
             const vl = form.get(`pol_${p}_angulo_${i}_valor_letras`) as string
@@ -328,7 +347,7 @@ if (Astro.request.method === 'POST') {
             if (va || vl || vet) {
               const [gradosPart, decimalPart = ''] = (va || '').split('.')
               const decStr = decimalPart.padEnd(4, '0')
-              await db.from('angulos').insert({
+              angulosRows.push({
                 poligono_id:  polId,
                 orden:        i,
                 grados:       parseInt(gradosPart) || null,
@@ -339,6 +358,7 @@ if (Astro.request.method === 'POST') {
               })
             }
           }
+          if (angulosRows.length) await db.from('angulos').insert(angulosRows)
         }
       }
 
@@ -827,15 +847,23 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
         <input type="hidden" name="_action" value="guardar_inmueble" />
         <input type="hidden" name="_tab" value="inmueble" />
 
-        <!-- Tipo de inmueble (solo informativo, se define al crear) -->
-        <input type="hidden" name="tipo_inmueble" value={inmueble?.tipo_inmueble ?? 'urbano'} />
+        <!-- Tipo de inmueble: antes era de solo lectura ("se define al crear") — Franco pidió
+             poder corregirlo por si hubo un error al crear el expediente (20/9). Mismo par de
+             radios que "Nuevo expediente", con el mismo toggle JS (aplicarTipoInmueble) que ya
+             mostraba/ocultaba Manzana/Parcela vs Sección Rural — antes solo corría una vez al
+             cargar la página, ahora también corre al cambiar de opción acá. -->
         <div class="section-label">Tipo de inmueble</div>
-        <div style="margin-bottom:1.5rem;margin-top:0.25rem">
-          <span style="display:inline-block;padding:3px 12px;border-radius:99px;font-size:0.82rem;font-weight:600;background:var(--color-primary);color:#fff">
-            {inmueble?.tipo_inmueble === 'rural' ? 'Rural' : 'Urbano'}
-          </span>
-          <span style="font-size:0.78rem;color:var(--color-text-secondary);margin-left:0.5rem">Se define al crear el expediente</span>
+        <div style="display:flex;gap:2rem;margin-bottom:0.5rem;margin-top:0.25rem">
+          <label style="display:flex;align-items:center;gap:7px;font-weight:400;cursor:pointer">
+            <input type="radio" name="tipo_inmueble" id="radio_tipo_urbano" value="urbano" checked={(inmueble?.tipo_inmueble ?? 'urbano') !== 'rural'} /> Urbano
+          </label>
+          <label style="display:flex;align-items:center;gap:7px;font-weight:400;cursor:pointer">
+            <input type="radio" name="tipo_inmueble" id="radio_tipo_rural" value="rural" checked={inmueble?.tipo_inmueble === 'rural'} /> Rural
+          </label>
         </div>
+        <p style="font-size:0.78rem;color:var(--color-text-secondary);margin-bottom:1.5rem">
+          Si lo cambiás, los datos que ya cargaste para el tipo anterior (Manzana/Parcela o Sección Rural) no se pierden — quedan guardados pero ocultos hasta que vuelvas a esa opción. También cambia qué formulario de Declaración Jurada se ofrece (Urbano → Formulario U, Rural → Formulario SOR); si ya generaste uno, recordá revisarlo.
+        </p>
 
         <!-- Identificación Catastral -->
         <div class="section-label">Identificación Catastral</div>
@@ -1154,14 +1182,35 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
           <input type="hidden" name="_tab" value="mensura" />
 
           <div class="section-label">Datos generales</div>
-          {exp.tipo_mensura && (
-            <div style="background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:0.5rem 0.75rem;margin-bottom:1rem;font-size:0.85rem;color:var(--color-text-secondary)">
-              <span style="font-weight:600;color:var(--color-text)">Tipo de mensura:</span> {exp.tipo_mensura}
-              <span style="font-size:0.75rem;margin-left:0.5rem">(se define al crear el expediente)</span>
+
+          <!-- Tipo de mensura, Nº Expediente y Área de Catastro: antes eran de solo lectura
+               ("se define al crear el expediente") — Franco pidió poder corregirlos por si hubo
+               un error de carga (20/9). Mismas opciones que "Nuevo expediente" (TIPOS_MENSURA/
+               AREAS_CATASTRO compartidos) para no desincronizar las listas. -->
+          <div class="form-grid form-grid-2" style="margin-bottom:0.75rem">
+            <div class="field">
+              <label>Tipo de mensura</label>
+              <select class="input" name="tipo_mensura">
+                <option value="">Seleccionar...</option>
+                {TIPOS_MENSURA.map(t => <option value={t} selected={exp.tipo_mensura === t}>{t}</option>)}
+              </select>
             </div>
-          )}
-          <!-- Nº Expediente y Área de Catastro se cargan desde el Dashboard (no acá): al
-               iniciar la mensura todavía no existe el expediente en la Dirección de Catastro. -->
+            <div class="field">
+              <label>Nº Expediente</label>
+              <input class="input" name="numero_expediente" value={exp.numero_expediente ?? ''} placeholder="Ej: 2024-001" />
+            </div>
+          </div>
+          <div class="field" style="margin-bottom:0.5rem">
+            <label>Área de Catastro</label>
+            <select class="input" name="area_catastro">
+              <option value="">Seleccionar...</option>
+              {AREAS_CATASTRO.map(a => <option value={a.value} selected={(exp as any).area_catastro === a.value}>{a.label}</option>)}
+            </select>
+          </div>
+          <p style="font-size:0.78rem;color:var(--color-text-secondary);margin-bottom:1.25rem">
+            Si corregís el Tipo de mensura y ya generaste documentos para este expediente, recordá volver a generarlos — los que ya se descargaron no se actualizan solos.
+          </p>
+
           <div class="form-grid form-grid-2" style="margin-bottom:1.25rem">
             <div class="field">
               <label>Fecha de mensura</label>
@@ -1302,6 +1351,14 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
                     </div>
                     <div id={`angulos_rows_${idx}`}></div>
                     <div id={`angulos_visor_${idx}`} style="display:none;margin-top:0.75rem"></div>
+                    <!-- Cierre lineal (pedido de Franco, 8/10): la verificación angular ya
+                         avisaba si la suma de ángulos no cierra — faltaba el equivalente para el
+                         error de cierre lineal (distancia entre el punto de partida y el punto
+                         de llegada de la poligonal) contra la tolerancia admitida. A diferencia
+                         de la angular (que es un error de carga siempre que no da exacto), acá
+                         un poco de error es normal en agrimensura real — por eso es un aviso
+                         informativo que se recalcula solo, no bloquea el guardado. -->
+                    <div id={`cierre_lineal_${idx}`} style="display:none;margin-top:0.75rem"></div>
                   </div>
                 </details>
               )
@@ -2106,6 +2163,42 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     return Math.abs(area) / 2
   }
 
+  // Error de cierre lineal (pedido de Franco, 8/10) — mismo cálculo de azimuts/DX/DY que
+  // `calcularSuperficieVanilla` de arriba (duplicado a propósito en vez de reusarlo, para no
+  // arriesgar la función que ya anda bien calculando la superficie en vivo), pero en vez de
+  // quedarse con el área, usa la distancia de cierre (hipotenusa de ΣDX/ΣDY) — mismo criterio
+  // que `calcularPoligonal`/`error` en src/lib/poligonal.ts (usado en el PDF de la Planilla de
+  // Cálculos) y que `calcularTolerancia` del mismo archivo (fórmulas de Catastro confirmadas por
+  // Franco: Urbano T=0,00025·L+0,03 — Rural T=0,00046·L+0,20, condición favorable).
+  function calcularCierreLinealVanilla(ladosVals, angulosVals, esRural) {
+    const n = Math.max(ladosVals.length, angulosVals.length)
+    if (n < 3) return null
+
+    const azimuts = []
+    for (let i = 0; i < n; i++) {
+      const ang = angulosVals[i] || { grados: 0, minutos: 0, segundos: 0 }
+      const angDecimal = ang.grados + ang.minutos / 60 + ang.segundos / 3600
+      if (i === 0) azimuts.push(90)
+      else {
+        const az = azimuts[i - 1] - (180 - angDecimal)
+        azimuts.push(((az % 360) + 360) % 360)
+      }
+    }
+
+    let sumDX = 0, sumDY = 0, totalLength = 0
+    for (let i = 0; i < n; i++) {
+      const L = ladosVals[i] || 0
+      const rad = (azimuts[i] * Math.PI) / 180
+      sumDX += L * Math.cos(rad)
+      sumDY += L * Math.sin(rad)
+      totalLength += L
+    }
+
+    const error = Math.sqrt(sumDX * sumDX + sumDY * sumDY)
+    const tolerancia = esRural ? 0.00046 * totalLength + 0.20 : 0.00025 * totalLength + 0.03
+    return { error, tolerancia }
+  }
+
   function initPoligonoCard(idx, datos) {
     const ladosExistentes    = datos.lados
     const cantLadosInicial   = datos.cantLados
@@ -2285,10 +2378,35 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
       if (!manual) recalcularSuperficie()
     }
 
+    // ── Cierre lineal (pedido de Franco, 8/10) ───────────────────────────
+    // A diferencia de la superficie, corre siempre (incluso con "Corregir superficie
+    // manualmente" tildado) — el cierre lineal es una propiedad de los lados/ángulos cargados,
+    // no de cómo se calcula la superficie.
+    const cierreLinealEl = document.getElementById(`cierre_lineal_${idx}`)
+    function actualizarCierreLineal() {
+      if (!cierreLinealEl || !ladosRows || !angulosRows) return
+      const ladosVals = Array.from(ladosRows.querySelectorAll('[data-lado-m]')).map(inp => parseFloat(inp.value) || 0)
+      const angulosVals = Array.from(angulosRows.querySelectorAll('[data-angulo-valor]'))
+        .map(inp => parsearAngulo(inp.value) || { grados: 0, minutos: 0, segundos: 0 })
+      const resultado = calcularCierreLinealVanilla(ladosVals, angulosVals, esRural)
+      if (!resultado) { cierreLinealEl.style.display = 'none'; return }
+
+      const { error, tolerancia } = resultado
+      const fueraDeTolerancia = error > tolerancia
+      cierreLinealEl.style.cssText = `display:block;font-size:0.82rem;font-weight:500;border-radius:6px;padding:0.5rem 0.75rem;` +
+        (fueraDeTolerancia
+          ? 'color:#EF4444;background:#FEF2F2;border:1px solid #FECACA'
+          : 'color:#065F46;background:#D1FAE5;border:1px solid #A7F3D0')
+      cierreLinealEl.textContent =
+        `Cierre lineal: ${error.toFixed(3)} m  ·  Tolerancia admitida: ${tolerancia.toFixed(3)} m` +
+        (fueraDeTolerancia ? '  ·  FUERA DE TOLERANCIA — revisá las medidas cargadas' : '  ·  dentro de tolerancia')
+    }
+
     if (chkSupManual) chkSupManual.addEventListener('change', () => aplicarModoSuperficie(chkSupManual.checked))
-    if (ladosRows)    ladosRows.addEventListener('input', recalcularSuperficie)
-    if (angulosRows)  angulosRows.addEventListener('input', recalcularSuperficie)
+    if (ladosRows)    ladosRows.addEventListener('input', () => { recalcularSuperficie(); actualizarCierreLineal() })
+    if (angulosRows)  angulosRows.addEventListener('input', () => { recalcularSuperficie(); actualizarCierreLineal() })
     recalcularSuperficie()
+    actualizarCierreLineal()
 
     // ── Numeración de parcela (label live) ───────────────────────────────
     const desdeInput = document.querySelector(`[data-pol-desde="${idx}"]`)
@@ -2358,8 +2476,15 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     if (lblFraccion) lblFraccion.textContent = esRural ? 'Paraje' : 'Fracción'
   }
 
-  // Aplicar estado inicial (tipo inmueble es solo lectura, no tiene listeners de cambio)
+  // Aplicar estado inicial
   aplicarTipoInmueble(tipoInmuebleInicial === 'rural')
+
+  // Tipo de inmueble ahora se puede corregir (20/9, antes era de solo lectura) — al cambiar de
+  // radio, togglear en vivo Manzana/Parcela vs Sección Rural sin esperar a guardar el form.
+  var radioTipoUrbano = document.getElementById('radio_tipo_urbano')
+  var radioTipoRural  = document.getElementById('radio_tipo_rural')
+  if (radioTipoUrbano) radioTipoUrbano.addEventListener('change', function() { if (this.checked) aplicarTipoInmueble(false) })
+  if (radioTipoRural)  radioTipoRural.addEventListener('change', function() { if (this.checked) aplicarTipoInmueble(true) })
 
   // ── Toggle inscripción Registro de la Propiedad ───────────────────────
   function aplicarTipoInscripcion(tipo) {

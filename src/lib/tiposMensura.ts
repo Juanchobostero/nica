@@ -1,0 +1,37 @@
+// Lista única de tipos de mensura — usada tanto al crear el expediente (expedientes/nuevo.astro)
+// como para corregirlo después (expedientes/[id].astro, Tab 3 Mensura). Extraída a un archivo
+// compartido (20/9) para que las dos pantallas ofrezcan exactamente las mismas opciones y no se
+// desincronicen si se agrega/edita un tipo en el futuro.
+export const TIPOS_MENSURA = [
+  'Mensura',
+  'Mensura y División',
+  'Mensura y Deslinde',
+  'Mensura y Unificación',
+  'Mensura, Unificación y Redistribución Parcelaria',
+  'Mensura para Prescripción Adquisitiva',
+  'Mensura para Prescripción Adquisitiva y División',
+  'División en Base a Mensura Registrada para Prescripción Adquisitiva',
+  'Mensura y Proyecto de Unificación',
+  'Mensura, Proyecto de Unificación y Redistribución Parcelaria',
+  'Mensura de División de la Edificación Existente para Someter al Régimen de Propiedad Horizontal (Según Titulo V, Libro IV del Código Civil y Comercial) en base a Mensura Registrada.',
+  'Mensura de División de la Edificación Existente y a construir para Someter al Régimen de Propiedad Horizontal (Según Titulo V, Libro IV del Código Civil y Comercial) en base a Mensura Registrada.',
+  'Mensura de División de la Edificación a Construir para Someter al Régimen de Propiedad Horizontal (Según Titulo V, Libro IV del Código Civil y Comercial) en base a Mensura Registrada.',
+  'Mensura de Modificación de la División de la Edificación Existente para Someter al Régimen de Propiedad Horizontal (Según Titulo V, Libro IV del Código Civil y Comercial) en base a Mensura Registrada.',
+  'División en base a Mensura Registrada',
+  'Unificación en Base a Mensura Registrada',
+  'Unificación en Base a Mensura Registrada y Redistribución Parcelaria',
+  'Proyecto de Unificación en Base a Mensura Registrada',
+  'Proyecto de Unificacion en Base a Mensura Registrada y Redistribución Parcelaria',
+  'Modificación del Estado Parcelario en Base a Mensura Registrada',
+  'División en Base a Mensura Registrada para Someter al Régimen de Conjuntos Inmobiliarios (Según Titulo VI, Libro IV del Código Civil y Comercial)',
+  'Mensura y División para Someter al Régimen de Conjuntos Inmobiliarios (Según Titulo VI, Libro IV del Código Civil y Comercial)',
+  'División para Someter al Régimen de Conjuntos Inmobiliarios (Según Titulo VI, Libro IV del Código Civil y Comercial)',
+  'Mensura de una Parcela con Mensura Registrada.',
+  'Rectificación de Mensura',
+  'Mensura para Plan de Regularización Dominial según Ley 5.836/2008 y modificatoria Ley 6.211/2013',
+  'Mensura para constituir Derecho Real de Superficie (Según Titulo VII, Libro IV del Código Civil y Comercial)',
+  'Mensura y División para Someter al Régimen de Conjunto Inmobiliario - Cementerio Privado',
+  'División en Base a Mensura Registrada para Someter al Régimen de Conjunto Inmobiliario - Cementerio Privado',
+  'Mensura para Reputación de Dominio (Disp. 1G/2024)',
+  'Mensura para Reputación de Dominio y División. (Disp. 1G/2024)',
+]
