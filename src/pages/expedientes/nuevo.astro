@@ -16,11 +16,20 @@ let errorMsg = ''
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData()
   const tipoInmueble = (form.get('tipo_inmueble') as string) || 'urbano'
+  // Carga manual de objeto (pedido de Franco, 27/10): el <select> de Tipo de mensura tiene una
+  // opción "Otro / ingreso manual..." con valor sentinela "__MANUAL__" — cuando se elige, se usa
+  // el texto libre cargado en `tipo_mensura_manual` en vez del valor del select. `tipo_mensura`
+  // en la base sigue siendo el mismo texto libre de siempre (sin constraint), esto solo agrega
+  // una segunda forma de completarlo además de elegir de la lista.
+  const tipoMensuraSeleccionado = (form.get('tipo_mensura') as string) || ''
+  const tipoMensuraFinal = tipoMensuraSeleccionado === '__MANUAL__'
+    ? (form.get('tipo_mensura_manual') as string) || ''
+    : tipoMensuraSeleccionado
 
   const { data, error } = await db.from('expedientes').insert({
     user_id: uid,
     numero_expediente: form.get('numero_expediente') || null,
-    tipo_mensura: form.get('tipo_mensura') || null,
+    tipo_mensura: tipoMensuraFinal || null,
     estado: 'borrador',
     fecha_inicio: form.get('fecha_inicio') || null,
     observaciones: form.get('observaciones') || null,
@@ -77,7 +86,10 @@ if (Astro.request.method === 'POST') {
         <select class="input" id="tipo_mensura" name="tipo_mensura">
           <option value="">Seleccionar...</option>
           {TIPOS_MENSURA.map(t => <option value={t}>{t}</option>)}
+          <option value="__MANUAL__">Otro / ingreso manual...</option>
         </select>
+        <input class="input" id="tipo_mensura_manual" name="tipo_mensura_manual" placeholder="Escribí el objeto tal como tiene que imprimirse"
+          style="display:none;margin-top:0.5rem" />
       </div>
 
       <div class="field" style="margin-bottom:1.5rem">
@@ -92,6 +104,18 @@ if (Astro.request.method === 'POST') {
     </form>
   </div>
 </AppLayout>
+
+<script>
+  // Carga manual de objeto (27/10) — muestra/oculta el campo de texto libre según si el select
+  // tiene elegida la opción "Otro / ingreso manual...".
+  const selectTipoMensura = document.getElementById('tipo_mensura')
+  const inputTipoMensuraManual = document.getElementById('tipo_mensura_manual')
+  if (selectTipoMensura && inputTipoMensuraManual) {
+    selectTipoMensura.addEventListener('change', function () {
+      inputTipoMensuraManual.style.display = this.value === '__MANUAL__' ? 'block' : 'none'
+    })
+  }
+</script>
 
 <style>
 .page-header { margin-bottom:1.5rem; }

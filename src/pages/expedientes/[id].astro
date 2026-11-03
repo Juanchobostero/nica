@@ -110,6 +110,12 @@ if (Astro.request.method === 'POST') {
       // defecto "manzana" (comportamiento de siempre si no se toca el selector nuevo).
       manzana_tipo: form.has('manzana_tipo') ? ((form.get('manzana_tipo') as string) || 'manzana') : ((inmueble as any)?.manzana_tipo ?? 'manzana'),
       parcela: form.has('parcela') ? (form.get('parcela') || null) : (inmueble?.parcela ?? null),
+      // Ingreso manual de ubicación (27/10-2/11): a diferencia de manzana/parcela/sección, acá
+      // SÍ se lee directo del form (sin el `form.has(...)` de arriba) — el campo de texto nunca
+      // se deshabilita por sí mismo salvo por su propio tilde "Ingreso manual de ubicación", que
+      // al destildarse borra el valor en el navegador antes de enviar (mismo criterio que
+      // Fracción/Inscripción Municipal) — siempre viaja en el form con su valor real.
+      ubicacion_manual: form.get('ubicacion_manual') || null,
       matricula_catastral: form.get('matricula_catastral'),
       tipo_inscripcion_registro: tipoInscripcion,
       matricula_registro: tipoInscripcion === 'matricula' ? (form.get('matricula_registro') || null) : null,
@@ -232,8 +238,14 @@ if (Astro.request.method === 'POST') {
       // (pedido de Franco, 20/9 — antes eran "de solo lectura, se definen al crear") — el form
       // de esta Tab ya los manda siempre con su valor actual (precargados desde `exp`), así que
       // no hay riesgo de pisarlos con null por no incluirlos.
+      // Carga manual de objeto (27/10): mismo sentinela "__MANUAL__" que "Nuevo expediente" — si
+      // el select tiene esa opción elegida, se guarda el texto libre en vez del sentinela.
+      const tipoMensuraSeleccionado = (form.get('tipo_mensura') as string) || ''
+      const tipoMensuraFinal = tipoMensuraSeleccionado === '__MANUAL__'
+        ? (form.get('tipo_mensura_manual') as string) || ''
+        : tipoMensuraSeleccionado
       await db.from('expedientes').update({
-        tipo_mensura: form.get('tipo_mensura') || null,
+        tipo_mensura: tipoMensuraFinal || null,
         numero_expediente: form.get('numero_expediente') || null,
         area_catastro: form.get('area_catastro') || null,
         fecha_inicio: form.get('fecha_mensura') || null,
@@ -302,6 +314,7 @@ if (Astro.request.method === 'POST') {
           cantidad_lados: cantLados,
           cantidad_angulos: cantAngulos,
           nombre: form.get(`pol_${p}_nombre`) || null,
+          sin_designacion: form.get(`pol_${p}_sin_designacion`) === 'on',
         }
 
         let polId: string | null = existingId || null
@@ -933,6 +946,35 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
           </div>
         </div>
 
+        <!-- Ingreso manual de ubicación (pedido de Franco, 27/10-2/11): para casos donde la
+             identificación catastral de arriba no describe bien el lugar — al tildarlo, Manzana/
+             Parcela (urbano) o Sección (rural) quedan deshabilitados (sin perderse — ver nota
+             del toggle Urbano/Rural más arriba, mismo criterio) y el texto libre cargado acá
+             reemplaza por completo esa parte en todos los documentos. Fracción/Paraje tiene su
+             propio tilde "Habilitar" (que si lo destildás, SÍ borra el valor) — no se cruza con
+             este toggle a propósito, para no arriesgar esa lógica ya existente; de todos modos
+             su valor deja de usarse en los documentos mientras el ingreso manual esté activo,
+             esté o no deshabilitado en pantalla. -->
+        <div class="section-label" style="margin-top:0.5rem">Ubicación</div>
+        <div style="margin-bottom:1.25rem">
+          <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;font-size:0.9rem">
+            <input type="checkbox" id="chk_ubicacion_manual"
+              style="width:15px;height:15px;accent-color:var(--color-primary)"
+              checked={!!((inmueble as any)?.ubicacion_manual)} />
+            Ingreso manual de ubicación
+          </label>
+          <p style="font-size:0.78rem;color:var(--color-text-secondary);margin:0.2rem 0 0.6rem 24px">
+            Para casos donde Manzana/Parcela/Fracción (o Sección/Paraje) no describen bien el lugar. El texto que cargues acá reemplaza por completo esa identificación en todos los documentos — ej. "en lo de mi tía" imprime "UBICADO EN LO DE MI TÍA" en vez de "Manzana 19, Parcela 22". Los casilleros de arriba no se borran al activar esto, solo dejan de usarse en los documentos.
+          </p>
+          <div id="campo_ubicacion_manual" class="field" style="margin-bottom:0">
+            <label>Texto a imprimir</label>
+            <input class="input" id="input_ubicacion_manual" name="ubicacion_manual"
+              value={(inmueble as any)?.ubicacion_manual ?? ''}
+              disabled={!((inmueble as any)?.ubicacion_manual)}
+              placeholder='Ej: en lo de mi tía' />
+          </div>
+        </div>
+
         <!-- Inscripción Municipal (excepcional) -->
         <div class="section-label" style="margin-top:0.5rem">Inscripción Municipal</div>
         <div style="margin-bottom:1.25rem">
@@ -1190,10 +1232,28 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
           <div class="form-grid form-grid-2" style="margin-bottom:0.75rem">
             <div class="field">
               <label>Tipo de mensura</label>
-              <select class="input" name="tipo_mensura">
-                <option value="">Seleccionar...</option>
-                {TIPOS_MENSURA.map(t => <option value={t} selected={exp.tipo_mensura === t}>{t}</option>)}
-              </select>
+              {(() => {
+                // Carga manual de objeto (27/10): además de elegir de la lista, se puede escribir
+                // un texto libre — mismo sentinela "__MANUAL__" que "Nuevo expediente". Si el
+                // valor guardado no está en TIPOS_MENSURA (se cargó manual antes, o es un valor
+                // viejo que ya no está en la lista), el select arranca en "Otro..." con el texto
+                // precargado en el campo manual, para no perderlo al tocar "Guardar".
+                const esPreset = TIPOS_MENSURA.includes(exp.tipo_mensura ?? '')
+                const esManual = !!exp.tipo_mensura && !esPreset
+                return (
+                  <>
+                    <select class="input" id="select_tipo_mensura" name="tipo_mensura">
+                      <option value="">Seleccionar...</option>
+                      {TIPOS_MENSURA.map(t => <option value={t} selected={exp.tipo_mensura === t}>{t}</option>)}
+                      <option value="__MANUAL__" selected={esManual}>Otro / ingreso manual...</option>
+                    </select>
+                    <input class="input" id="input_tipo_mensura_manual" name="tipo_mensura_manual"
+                      placeholder="Escribí el objeto tal como tiene que imprimirse"
+                      value={esManual ? exp.tipo_mensura : ''}
+                      style={`margin-top:0.5rem${esManual ? '' : ';display:none'}`} />
+                  </>
+                )
+              })()}
             </div>
             <div class="field">
               <label>Nº Expediente</label>
@@ -1332,6 +1392,17 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
                       <input class="input" type="number" name={`pol_${idx}_cantidad_angulos`} id={`cant_angulos_${idx}`} value={pol?.cantidad_angulos ?? ''} min="0" />
                     </div>
                   </div>
+
+                  <!-- Sin designación de lados y ángulos (pedido de Franco, 27/10): en Planilla
+                       de Cálculos y Memoria de Mensura, no imprimir NINGUNA designación para
+                       este polígono (ni la automática "1-2"/"en vértice 1" ni una manual que se
+                       haya cargado) — queda vacío en vez de mostrar un número que no corresponde. -->
+                  <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;font-size:0.85rem;margin-top:0.75rem">
+                    <input type="checkbox" name={`pol_${idx}_sin_designacion`}
+                      checked={!!(pol as any)?.sin_designacion}
+                      style="width:15px;height:15px;accent-color:var(--color-primary)" />
+                    Sin designación de lados y ángulos (no imprimir "Lado 1-2", "Ángulo en vértice 1", etc. en Planilla/Memoria)
+                  </label>
 
                   <div id={`lados_section_${idx}`} style="margin-top:1rem;display:none">
                     <div class="section-label">Lados del polígono</div>
@@ -1940,6 +2011,7 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
   fraccionTieneValor:         !!(inmueble?.fraccion),
   inscripcionMunTieneValor:   !!(inmueble?.matricula_municipal),
   esRuralInicial:             inmueble?.tipo_inmueble === 'rural',
+  ubicacionManualInicial:     !!((inmueble as any)?.ubicacion_manual),
   datosValidacion: datosValidacion,
 }}>
   // Expuesto en window: este script es inline (define:vars), pero el de "generar documentos"
@@ -2514,6 +2586,15 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
   if (radioTomo)      radioTomo.addEventListener('change',      function() { if (radioTomo.checked)      aplicarTipoInscripcion('tomo') })
   aplicarTipoInscripcion(tipoInscripcionInicial)
 
+  // ── Carga manual de objeto (Tab Mensura, 27/10) ────────────────────────
+  var selectTipoMensura = document.getElementById('select_tipo_mensura')
+  var inputTipoMensuraManual = document.getElementById('input_tipo_mensura_manual')
+  if (selectTipoMensura && inputTipoMensuraManual) {
+    selectTipoMensura.addEventListener('change', function () {
+      inputTipoMensuraManual.style.display = this.value === '__MANUAL__' ? 'block' : 'none'
+    })
+  }
+
   // ── Toggle fracción / paraje ───────────────────────────────────────────
   var chkFraccion   = document.getElementById('chk_fraccion')
   var inputFraccion = document.getElementById('input_fraccion')
@@ -2523,6 +2604,42 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
       inputFraccion.disabled = !chkFraccion.checked
       if (!chkFraccion.checked) inputFraccion.value = ''
     })
+  }
+
+  // ── Toggle ingreso manual de ubicación (27/10-2/11) ─────────────────────
+  // Deshabilita Manzana/Parcela/Sección (que ya conservan su valor al deshabilitarse — mismo
+  // `form.has(...)` del lado del servidor que ya protege el toggle Urbano/Rural) sin tocar
+  // Fracción/Paraje, que tiene su propio tilde "Habilitar" con lógica de borrado propia (ver
+  // comentario en el HTML) — su valor deja de imprimirse igual mientras esto esté activo, aunque
+  // el campo en pantalla no se deshabilite.
+  var chkUbicacionManual   = document.getElementById('chk_ubicacion_manual')
+  var inputUbicacionManual = document.getElementById('input_ubicacion_manual')
+  function aplicarUbicacionManual(manual) {
+    if (manual) {
+      var camposCatastro = [
+        document.getElementById('input_manzana'),
+        document.getElementById('select_manzana_tipo'),
+        document.getElementById('input_parcela'),
+        document.getElementById('input_seccion'),
+      ]
+      camposCatastro.forEach(function(el) { if (el) el.disabled = true })
+    } else {
+      // Al desactivar, se recalcula el estado "normal" (según Urbano/Rural) en vez de
+      // simplemente habilitar todo — así no reaparece, por ejemplo, Sección en un inmueble
+      // Urbano solo porque se destildó el ingreso manual.
+      aplicarTipoInmueble(!!(radioTipoRural && radioTipoRural.checked))
+    }
+    if (inputUbicacionManual) inputUbicacionManual.disabled = !manual
+  }
+  if (chkUbicacionManual && inputUbicacionManual) {
+    chkUbicacionManual.addEventListener('change', function() {
+      aplicarUbicacionManual(chkUbicacionManual.checked)
+      // Mismo criterio que Fracción/Inscripción Municipal: al destildar, se borra el texto para
+      // que el tilde y el dato guardado no queden desincronizados (si quedara texto cargado pero
+      // el tilde apagado, `construirUbicacion()` no tiene forma de saber que hay que ignorarlo).
+      if (!chkUbicacionManual.checked) inputUbicacionManual.value = ''
+    })
+    aplicarUbicacionManual(ubicacionManualInicial)
   }
 
   // ── Toggle inscripción municipal ───────────────────────────────────────

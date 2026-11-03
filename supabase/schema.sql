@@ -240,7 +240,15 @@ create table if not exists inmuebles (
   -- "Manzana" (default) o "Chacra" — algunas zonas de Corrientes numeran por "Chacra" en vez de
   -- "Manzana"; el valor de `manzana` es el mismo campo de siempre, esto solo dice cómo se
   -- imprime la etiqueta (pedido de Franco, 19/9).
-  manzana_tipo                   text default 'manzana' check (manzana_tipo in ('manzana','chacra'))
+  manzana_tipo                   text default 'manzana' check (manzana_tipo in ('manzana','chacra')),
+  -- Ingreso manual de ubicación (pedido de Franco, 27/10-2/11): texto libre que, si está
+  -- cargado, REEMPLAZA por completo lo que arma `construirUbicacion()` (Fracción/Parcela/
+  -- Manzana/Subparcela/Circunscripción/Sección) en todos los documentos — para casos donde la
+  -- identificación catastral no aplica tal cual y Franco prefiere describirlo con sus palabras
+  -- (ej. "en lo de mi tía"). Los casilleros de Manzana/Parcela/Fracción o Sección/Paraje NO se
+  -- borran al activarlo — quedan deshabilitados pero guardados, mismo criterio que Tipo de
+  -- Inmueble (19/9).
+  ubicacion_manual                text
 );
 
 alter table inmuebles enable row level security;
@@ -333,7 +341,12 @@ create table if not exists poligono (
   superficie_manual   boolean default false,
   -- Nombre custom de la parcela (ej. "Unidad funcional 3" en edificios) — si está vacío se
   -- sigue mostrando la designación automática ("Parcela N"/"Parcelas N a M").
-  nombre              text
+  nombre              text,
+  -- "Sin designación de lados y ángulos" (pedido de Franco, 27/10): si está activo, la Planilla
+  -- de Cálculos y la Memoria de Mensura NO imprimen ninguna designación de lado/ángulo para este
+  -- polígono (ni la automática "1-2"/"en vértice 1" ni una manual que se haya cargado) — la fila
+  -- queda sin ese dato en vez de mostrar un número que no corresponde al caso real.
+  sin_designacion     boolean default false
 );
 
 alter table poligono enable row level security;

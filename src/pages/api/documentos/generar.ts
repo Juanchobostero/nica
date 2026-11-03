@@ -498,6 +498,11 @@ function restarHora(horaStr: string | null | undefined, horas: number): string |
 
 function construirUbicacion(inmueble: any): string {
   if (!inmueble) return '—'
+  // Ingreso manual de ubicación (pedido de Franco, 27/10-2/11): si está cargado, reemplaza por
+  // completo la identificación catastral de abajo (Fracción/Parcela/Manzana/Subparcela/
+  // Circunscripción/Sección) en todos los documentos que llaman a esta función — ej. "en lo de
+  // mi tía" imprime "EN LO DE MI TÍA" en vez de "Manzana 19, Parcela 22".
+  if (inmueble.ubicacion_manual) return String(inmueble.ubicacion_manual).toUpperCase()
   const partes: string[] = []
   if (inmueble.fraccion)        partes.push(`Fracción ${inmueble.fraccion}`)
   if (inmueble.parcela)         partes.push(`Parcela ${inmueble.parcela}`)
@@ -1055,7 +1060,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   // Mensura (bug reportado por Franco).
   const { data: poligonosRaw } = await db
     .from('poligono')
-    .select('nombre, parcela_desde, parcela_hasta, superficie_m2, superficie_letras, lados(orden, valor_m, valor_letras, etiqueta), angulos(orden, grados, minutos, segundos, etiqueta)')
+    .select('nombre, parcela_desde, parcela_hasta, superficie_m2, superficie_letras, sin_designacion, lados(orden, valor_m, valor_letras, etiqueta), angulos(orden, grados, minutos, segundos, etiqueta)')
     .eq('expediente_id', expedienteId)
     .order('parcela_desde', { ascending: true, nullsFirst: true })
 
@@ -2316,7 +2321,10 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
         const etiquetasLadosMemoria = generarEtiquetasLados(ladosPol.length)
         ladosPol.forEach((lado: any, i: number) => {
           const valorM = lado.valor_m != null ? Number(lado.valor_m).toFixed(2).replace('.', ',') : '—'
-          const texto = `Lado ${lado.etiqueta || etiquetasLadosMemoria[i] || i + 1}: ${valorM} m = ${lado.valor_letras ?? '—'}`
+          // "Sin designación de lados y ángulos" (27/10): tilde por polígono que deja la
+          // designación vacía en vez de la manual o la automática (ver también Planilla).
+          const designacionLado = pol?.sin_designacion ? '' : ` ${lado.etiqueta || etiquetasLadosMemoria[i] || i + 1}`
+          const texto = `Lado${designacionLado}: ${valorM} m = ${lado.valor_letras ?? '—'}`
           asegurarEspacioMemoria(texto, 'LADOS (continuación):')
           y = dibujarParrafo(pag.page, texto, margenX, y, anchoTexto, 11, font, negro, undefined, 0)
           y -= 4
@@ -2335,7 +2343,8 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
           // ángulos con nombres largos (ej. "TREINTA Y CINCO GRADOS, CINCUENTA Y NUEVE MINUTOS Y
           // CINCUENTA Y NUEVE SEGUNDOS") — se pasa a `dibujarParrafo` (con wrap) en vez de
           // `drawText` plano, mismo criterio ya usado para LADOS más arriba.
-          const texto = `Ángulo ${ang.etiqueta || `en vértice ${i + 1}`}: ${formatearDMS(g, m, s)} (${anguloALetrasConComa(g, m, s)}).`
+          const designacionAngulo = pol?.sin_designacion ? '' : ` ${ang.etiqueta || `en vértice ${i + 1}`}`
+          const texto = `Ángulo${designacionAngulo}: ${formatearDMS(g, m, s)} (${anguloALetrasConComa(g, m, s)}).`
           asegurarEspacioMemoria(texto, 'ANGULOS (continuación):')
           y = dibujarParrafo(pag.page, texto, margenX, y, anchoTexto, 11, font, negro, undefined, 0)
           y -= 4
@@ -2432,8 +2441,12 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
           // numeración automática igual, aunque la Memoria de Mensura sí lo mostraba (porque esa
           // lista lados y ángulos por separado, cada uno con su propia designación). Reportado
           // por Franco, 8/10. Ahora revisa las dos antes de caer en la automática.
+          // "Sin designación de lados y ángulos" (pedido de Franco, 27/10): tilde por polígono
+          // que fuerza la columna "N°" vacía, ignorando tanto la designación manual (lado o
+          // ángulo) como la automática — para casos donde ninguna numeración corresponde.
+          const nFila = pol?.sin_designacion ? '' : (ladosPol[i]?.etiqueta || ang.etiqueta || etiquetas[i])
           filas.push([
-            ladosPol[i]?.etiqueta || ang.etiqueta || etiquetas[i], ag, am, as_,
+            nFila, ag, am, as_,
             fmt(Number(ladosPol[i]?.valor_m ?? 0)),
             String(azGrados), String(azMinutos), '0',
             fmt(dx[i]), fmt(dy[i]), fmt(x[i]), fmt(yCoord[i]),

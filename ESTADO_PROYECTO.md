@@ -78,6 +78,41 @@
 
 ---
 
+## 📋 Cambios de la sesión — 3 Noviembre 2026 (v0.30) — Carga manual de objeto, "sin designación" por polígono, e ingreso manual de ubicación
+
+Tres pedidos de Franco (vía Juan, chats del 27/10 y 2/11, relayados con capturas el 3/11). **Requiere correr la migración SQL de abajo antes de probar.**
+
+### 1. Carga manual del "objeto" (Tipo de mensura)
+Franco: "¿Le podemos agregar una opción que sea carga manual de objeto? Y que después se imprima en todos los sectores que consigna el nombre: Carátula, nota de elevación..." — el `<select>` de Tipo de mensura (31 opciones fijas) no alcanza para todos los casos reales.
+
+- Nueva opción al final del `<select>` de "Nuevo expediente" y de la corrección en Tab 3 Mensura: **"Otro / ingreso manual..."** (valor sentinela `__MANUAL__`) — al elegirla aparece un campo de texto libre debajo. Al guardar, si el select tiene ese valor, se usa el texto libre como `tipo_mensura` real (la columna sigue siendo texto plano sin constraint, como ya se había confirmado en la sesión del 20/9 — no hizo falta ninguna migración para esta parte).
+- En Tab 3, si el expediente ya tenía un `tipo_mensura` que no está en la lista de 31 (cargado manual antes, o un valor viejo que ya no figura), el select arranca directamente en "Otro..." con el texto precargado — para no perderlo la primera vez que se guarda después de este cambio.
+- Como `tipo_mensura` ya se usaba como fuente única en `tipoMensuraTexto` (`generar.ts`) para el membrete "OBJETO" de TODAS las páginas, el título del Acta de Mensura, y los párrafos narrativos de Carátula/Nota de Elevación/Capítulo de Extensión/Notificación a Linderos/Acta de Ausencia, no hizo falta tocar nada más — el valor manual se propaga solo a todos esos lugares igual que cualquier valor de la lista.
+
+### 2. "Sin designación de lados y ángulos" por polígono
+Franco: "¿Se puede habilitar un botón que diga 'sin designación de lados y ángulos'? Para que en la planilla y en la memoria no me genere la leyenda 'lado 1-2'... que quede vacío nomás si tildo la opción."
+
+- Nueva columna `poligono.sin_designacion` (boolean) + checkbox nuevo en cada card de polígono (Tab 3 Mensura, debajo de "Cantidad de lados"/"Cantidad de ángulos"): **"Sin designación de lados y ángulos"**.
+- Al tildarlo, tanto la Planilla de Cálculos (columna "N°") como la Memoria de Mensura ("Lado X:"/"Ángulo en vértice Y:") dejan esa parte completamente vacía para ese polígono — ni la designación automática ("1-2", "en vértice 1") ni una manual que ya estuviera cargada en algún lado/ángulo particular. Es por-polígono, no afecta a los demás.
+
+### 3. Ingreso manual de ubicación (Tab Inmueble)
+Franco: "...agregar un casillero opcional con identificación proporcionada por el usuario... que suplante a lo anterior en caso que no tenga definida la manzana y la parcela... en vez de 'ubicado en la mz 19 parcela 22' que salga 'UBICADO EN LO DE MI TÍA'."
+
+- Nueva columna `inmuebles.ubicacion_manual` (texto) + checkbox "Ingreso manual de ubicación" en Tab 2 Inmueble (debajo de Identificación Catastral), con un campo de texto libre que aparece al tildarlo.
+- Al tildarlo, Manzana/Parcela (urbano) o Sección (rural) quedan deshabilitados en pantalla — mismo criterio de "no se pierde, solo se oculta" ya usado para el toggle Urbano/Rural (20/9): los `form.has(...)` que ya protegían esos campos cubren este caso nuevo sin tocarlos, porque no distinguen POR QUÉ un campo llegó deshabilitado. Fracción/Paraje queda aparte a propósito — tiene su propio tilde "Habilitar" con lógica de borrado ya existente, cruzarlo arriesgaba esa lógica sin necesidad; de todos modos su valor deja de usarse en los documentos mientras el ingreso manual esté activo, esté o no visualmente deshabilitado.
+- `construirUbicacion()` (`generar.ts`) — la función única que arma "Fracción X, Parcela Y, Manzana Z..." para TODOS los documentos (Carátula, Nota de Elevación, Capítulo de Extensión, Acta de Mensura, Notificación a Linderos, Acta de Ausencia, membrete "UBICACIÓN" de cada página) — ahora revisa primero si hay `ubicacion_manual` cargado y, si lo hay, devuelve ESE texto en mayúsculas en vez de armar la identificación catastral. Como todos los documentos ya llamaban a esta única función, no hizo falta tocar cada uno por separado.
+- Al destildar el checkbox, el texto se borra automáticamente (mismo criterio que "Habilitar Fracción"/"Habilitar inscripción municipal") — así el tilde y el dato guardado no quedan desincronizados; si quedara texto cargado con el tilde apagado, `construirUbicacion()` no tendría forma de saber que hay que ignorarlo.
+
+### Migración SQL a correr en Supabase (antes de probar)
+```sql
+alter table poligono add column if not exists sin_designacion boolean default false;
+alter table inmuebles add column if not exists ubicacion_manual text;
+```
+
+**Verificación**: `astro build` limpio en cada ronda de edición. `schema.sql` quedó sincronizado con la migración. **Pendiente**: probar los 3 casos en el navegador con datos reales — en particular confirmar que destildar "Ingreso manual de ubicación" y volver a Urbano/Rural normal restaura bien Manzana/Parcela/Sección (no se pudo simular sin un expediente real).
+
+---
+
 ## 📋 Cambios de la sesión — 9 Octubre 2026 (v0.29) — Fix Planilla (designación de ángulo), verificación de cierre lineal, y rendimiento de Tab Mensura
 
 Tres pedidos de Franco (vía Juan, 9/10): un bug en la Planilla de Cálculos, una verificación nueva, y un problema de lentitud reportado por WhatsApp el 8/10 que pidió investigar y documentar sin tocar nada a ciegas.
