@@ -78,6 +78,34 @@
 
 ---
 
+## 📋 Cambios de la sesión — 4 Noviembre 2026 (v0.31) — Fix check verde de Inmueble, texto de ubicación manual más corto, y rol de comitente a texto libre
+
+Franco probó lo del 3/11 y anduvo bien. Tres ajustes más (vía Juan, 4/11). **Requiere correr la migración SQL de abajo antes de probar.**
+
+### 1. Texto de "Ingreso manual de ubicación" — más corto, sin el ejemplo de "la tía"
+Juan: "deberías sacar todo ese texto, o dejar una explicación menos específica con eso de la tía." Se acortó el párrafo de ayuda (sin el ejemplo "en lo de mi tía" → "UBICADO EN LO DE MI TÍA") y el placeholder del campo, que ahora dice solo "Opcional". El comportamiento no cambió, solo el texto visible.
+
+### 2. Fix: la pestaña Inmueble se marcaba "✓ hecha" (verde) sin haber cargado nada
+Franco: "al terminar de cargar la pestaña comitente, pasa automáticamente a la tercera (MENSURA), y tilda en verde la pestaña de INMUEBLE." Causa real: el indicador "✓ hecho" del wizard (`[id].astro`, lista de pasos del costado) usaba `done: !!inmueble` para la pestaña Inmueble — pero la fila de `inmuebles` se crea automáticamente VACÍA en el mismo momento en que se crea el expediente (`expedientes/nuevo.astro` inserta `{ expediente_id, tipo_inmueble }` apenas se confirma el alta), así que esa fila existe desde el primer instante, mucho antes de cargar ningún dato real en la Tab 2. El "✓" aparecía en verde desde el principio sin que Franco hubiera tocado nada ahí — lo que probablemente también explica el otro síntoma descripto (saltar a Mensura con la sensación de que Inmueble ya estaba resuelto).
+- Se cambió la condición a `done: !!(inmueble?.departamento && inmueble?.localidad)` — recién se marca hecha cuando hay datos reales cargados (los 2 campos que siempre se completan al usar la pestaña), no solo porque la fila técnica existe.
+- No se tocó la lógica de redirección en sí (`_tab` ya viaja correctamente como "comitente" en los 3 formularios de esa pestaña) — el salto a Mensura no tenía una causa de código separada encontrada; si después de este fix se lo sigue viendo, hace falta un paso a paso más detallado de cuándo pasa.
+
+### 3. Tipo de comitente (rol) — ingreso manual, igual que se hizo con Tipo de mensura
+Franco: "Agregar opción de carga manual para TIPO COMITENTE, sin romper el demás funcionamiento" + "que lo del tipo comitente se aplique en los documentos correspondientes también."
+
+- La columna `exp_comitentes.rol` tenía una restricción en la base (`check (rol in ('titular','apoderado','heredero','poseedor','intendente'))`) — a diferencia de `tipo_mensura` (que ya era texto libre desde antes), acá hubo que sacar esa restricción para poder guardar un rol que no esté en la lista fija.
+- Los 2 selects de Rol (Tab Comitente: "Buscar comitente existente" y "Crear nuevo comitente") ahora tienen una opción "Otro / escribir..." (mismo sentinela `__MANUAL__` que Tipo de mensura) que revela un campo de texto libre.
+- **Se aplica solo a los documentos correspondientes sin tocar `generar.ts`**: se verificó que TODOS los lugares que imprimen el rol (Nota de Elevación, Notificación a Linderos, Acta de Mensura, declaración jurada de Formulario SOR) ya pasan por una única función `rolLabel(rol)`, que solo mapea el caso especial `'titular'` → "propietario" y deja pasar cualquier otro texto tal cual — un rol escrito a mano se imprime automáticamente donde corresponde, sin necesitar ningún cambio adicional. La única comparación exacta que existe (`rolComitente === 'poseedor'`, en Acta de Mensura, decide "posesión ejercida por" vs "propiedad de") cae al caso por defecto ("propiedad de") con un rol personalizado — comportamiento razonable, no se encontró otro lugar que necesitara ajuste.
+
+### Migración SQL a correr en Supabase (antes de probar)
+```sql
+alter table exp_comitentes drop constraint if exists exp_comitentes_rol_check;
+```
+
+**Verificación**: `astro build` limpio en cada ronda. `schema.sql` quedó sincronizado. **Pendiente**: confirmar con Franco si el salto a Mensura (punto 2) desaparece junto con el check verde, o si seguía pasando por una causa aparte que no se pudo reproducir desde el código.
+
+---
+
 ## 📋 Cambios de la sesión — 3 Noviembre 2026 (v0.30) — Carga manual de objeto, "sin designación" por polígono, e ingreso manual de ubicación
 
 Tres pedidos de Franco (vía Juan, chats del 27/10 y 2/11, relayados con capturas el 3/11). **Requiere correr la migración SQL de abajo antes de probar.**

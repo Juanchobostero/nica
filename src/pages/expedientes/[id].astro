@@ -496,7 +496,12 @@ if (Astro.request.method === 'POST') {
 
   if (action === 'agregar_comitente') {
     const comitenteId = form.get('comitente_id') as string
-    const rol = form.get('rol') as string
+    // Carga manual de rol (4/11): mismo sentinela "__MANUAL__" que Tipo de mensura (20/9-27/10)
+    // — la columna `exp_comitentes.rol` ya no tiene constraint (se sacó en esta misma sesión)
+    // así que puede guardar cualquier texto; `rolLabel()` en generar.ts ya imprime cualquier rol
+    // tal cual salvo 'titular' (que mapea a "propietario"), no hizo falta tocar la impresión.
+    const rolSeleccionado = (form.get('rol') as string) || 'titular'
+    const rol = rolSeleccionado === '__MANUAL__' ? ((form.get('rol_manual') as string) || 'titular') : rolSeleccionado
     if (comitenteId) {
       await db.from('exp_comitentes').insert({
         expediente_id: id, comitente_id: comitenteId, rol, orden: (expComitentes?.length ?? 0) + 1
@@ -506,6 +511,8 @@ if (Astro.request.method === 'POST') {
   }
 
   if (action === 'crear_comitente') {
+    const cRolSeleccionado = (form.get('c_rol') as string) || 'titular'
+    const cRol = cRolSeleccionado === '__MANUAL__' ? ((form.get('c_rol_manual') as string) || 'titular') : cRolSeleccionado
     const { data: newC } = await db.from('comitentes').insert({
       user_id: uid,
       nombre: form.get('c_nombre'),
@@ -517,7 +524,7 @@ if (Astro.request.method === 'POST') {
     }).select('id').single()
     if (newC) {
       await db.from('exp_comitentes').insert({
-        expediente_id: id, comitente_id: newC.id, rol: form.get('c_rol'), orden: (expComitentes?.length ?? 0) + 1
+        expediente_id: id, comitente_id: newC.id, rol: cRol, orden: (expComitentes?.length ?? 0) + 1
       })
       successMsg = 'Comitente creado y agregado.'
     }
@@ -680,7 +687,12 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
       <div class="wizard-steps">
         {[
           { key: 'comitente',  label: 'Comitente',  sub: 'Quién es',            done: (expComitentes ?? []).length > 0 },
-          { key: 'inmueble',   label: 'Inmueble',    sub: 'El predio',           done: !!inmueble },
+          // `inmueble` existe desde el momento en que se crea el expediente (fila vacía, se
+          // inserta en expedientes/nuevo.astro con solo el tipo elegido) — usar `!!inmueble`
+          // marcaba la pestaña como "hecha" en verde desde el primer instante, aunque no se
+          // hubiera cargado ningún dato real todavía (reportado por Franco, 4/11). Se pide en
+          // cambio que estén cargados los 2 campos que siempre se completan al usar la pestaña.
+          { key: 'inmueble',   label: 'Inmueble',    sub: 'El predio',           done: !!(inmueble?.departamento && inmueble?.localidad) },
           { key: 'mensura',    label: 'Mensura',     sub: 'Polígono y medidas',  done: datosValidacion.cantLados > 0 },
           { key: 'testigos',   label: 'Testigos',    sub: 'Quién confirma',      done: (expTestigos ?? []).length > 0 },
           { key: 'ddjj',       label: 'DDJJ',         sub: 'Declaración jurada',  done: (inmueble as any)?.personas_habitan != null || datosValidacion.edificacionCargada },
@@ -800,13 +812,16 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
               </div>
               <div class="field">
                 <label>Rol</label>
-                <select class="input" name="rol">
+                <select class="input" id="select_rol" name="rol">
                   <option value="titular">Propietario</option>
                   <option value="apoderado">Apoderado</option>
                   <option value="heredero">Heredero</option>
                   <option value="poseedor">Poseedor</option>
                   <option value="intendente">Intendente</option>
+                  <option value="__MANUAL__">Otro / escribir...</option>
                 </select>
+                <input class="input" id="input_rol_manual" name="rol_manual" placeholder="Escribí el rol"
+                  style="display:none;margin-top:0.5rem" />
               </div>
             </div>
             <button type="submit" class="btn btn-primary" style="margin-top:0.75rem">Agregar comitente</button>
@@ -826,13 +841,16 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
               <div class="field"><label>Email</label><input class="input" name="c_email" type="email" /></div>
               <div class="field">
                 <label>Rol</label>
-                <select class="input" name="c_rol">
+                <select class="input" id="select_c_rol" name="c_rol">
                   <option value="titular">Propietario</option>
                   <option value="apoderado">Apoderado</option>
                   <option value="heredero">Heredero</option>
                   <option value="poseedor">Poseedor</option>
                   <option value="intendente">Intendente</option>
+                  <option value="__MANUAL__">Otro / escribir...</option>
                 </select>
+                <input class="input" id="input_c_rol_manual" name="c_rol_manual" placeholder="Escribí el rol"
+                  style="display:none;margin-top:0.5rem" />
               </div>
             </div>
             <div class="field" style="margin-top:0.75rem"><label>Domicilio</label><input class="input" name="c_domicilio" /></div>
@@ -964,14 +982,14 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
             Ingreso manual de ubicación
           </label>
           <p style="font-size:0.78rem;color:var(--color-text-secondary);margin:0.2rem 0 0.6rem 24px">
-            Para casos donde Manzana/Parcela/Fracción (o Sección/Paraje) no describen bien el lugar. El texto que cargues acá reemplaza por completo esa identificación en todos los documentos — ej. "en lo de mi tía" imprime "UBICADO EN LO DE MI TÍA" en vez de "Manzana 19, Parcela 22". Los casilleros de arriba no se borran al activar esto, solo dejan de usarse en los documentos.
+            Reemplaza la identificación catastral (Manzana/Parcela/Fracción o Sección/Paraje) en todos los documentos. Los casilleros de arriba no se borran, solo dejan de usarse.
           </p>
           <div id="campo_ubicacion_manual" class="field" style="margin-bottom:0">
             <label>Texto a imprimir</label>
             <input class="input" id="input_ubicacion_manual" name="ubicacion_manual"
               value={(inmueble as any)?.ubicacion_manual ?? ''}
               disabled={!((inmueble as any)?.ubicacion_manual)}
-              placeholder='Ej: en lo de mi tía' />
+              placeholder="Opcional" />
           </div>
         </div>
 
@@ -2594,6 +2612,21 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
       inputTipoMensuraManual.style.display = this.value === '__MANUAL__' ? 'block' : 'none'
     })
   }
+
+  // ── Carga manual de rol/Tipo de comitente (Tab Comitente, 4/11) ─────────
+  // Mismo patrón de sentinela "__MANUAL__" que el de arriba — se repite para los 2 selects de
+  // rol (agregar comitente existente / crear comitente nuevo) en vez de generalizar en una sola
+  // función, porque son 2 pares de elementos con ids distintos y no hay ganancia real en
+  // abstraerlo para solo 2 casos.
+  ;[['select_rol', 'input_rol_manual'], ['select_c_rol', 'input_c_rol_manual']].forEach(function(par) {
+    var select = document.getElementById(par[0])
+    var inputManual = document.getElementById(par[1])
+    if (select && inputManual) {
+      select.addEventListener('change', function () {
+        inputManual.style.display = this.value === '__MANUAL__' ? 'block' : 'none'
+      })
+    }
+  })
 
   // ── Toggle fracción / paraje ───────────────────────────────────────────
   var chkFraccion   = document.getElementById('chk_fraccion')

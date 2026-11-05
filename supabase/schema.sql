@@ -158,7 +158,10 @@ create table if not exists exp_comitentes (
   id              uuid primary key default gen_random_uuid(),
   expediente_id   uuid references expedientes(id) on delete cascade not null,
   comitente_id    uuid references comitentes(id) on delete cascade not null,
-  rol             text default 'titular' check (rol in ('titular','apoderado','heredero','poseedor','intendente')),
+  -- Sin constraint (4/11): Franco pidió poder escribir un rol que no esté en la lista fija de
+  -- siempre (titular/apoderado/heredero/poseedor/intendente) — queda como texto libre, el
+  -- <select> de la UI sigue ofreciendo esos 5 + una opción "Otro / escribir...".
+  rol             text default 'titular',
   orden           int default 1,
   -- Para Declaraciones Juradas: propios de esta relación expediente↔comitente,
   -- no de la persona en general (el mismo comitente puede tener % distinto en otro expediente).
