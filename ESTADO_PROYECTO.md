@@ -78,6 +78,18 @@
 
 ---
 
+## 📋 Cambios de la sesión — 7 Noviembre 2026 (v0.32) — Subir archivo de medición (CSV) para lados y ángulos
+
+Franco (vía Juan, 7/11): al cargar un polígono con muchos lados, escribir cada lado/ángulo a mano en la Tab Mensura es tedioso — pidió poder subir un archivo (él arma un CSV con su propia planilla de cálculo externa) que complete todo junto.
+
+- Nuevo campo "O subí un archivo de medición (.csv)" en cada card de polígono (Tab 3), justo debajo de Cantidad de lados/ángulos.
+- Formato esperado (confirmado con un archivo real de ejemplo que pasó Franco, 11 lados): una fila por lado/ángulo, **sin encabezado**, 4 columnas separadas por coma en este orden: longitud del lado, designación del lado, ángulo (mismo formato GG.MMSS que ya usa la página, ej. "150.3718"), designación del ángulo. La cantidad de lados/ángulos no hace falta escribirla aparte — se toma de la cantidad de filas del archivo (lados y ángulos siempre coinciden en cantidad, confirmado por Franco). Si la primera fila no empieza con un número, se asume que es un encabezado y se descarta sola (por si en algún momento arma el archivo con una fila de títulos).
+- **Sin ningún procesamiento nuevo del lado del servidor** — el archivo se lee en el navegador (`FileReader`) y el script completa los mismos campos de "Cantidad de lados/ángulos" y cada fila que ya existían, disparando los mismos eventos que generaría escribir a mano. Por eso "En letras", el cálculo de superficie y la verificación de cierre lineal (agregada el 9/10) siguen funcionando exactamente igual sin haber tocado esa lógica — el archivo es solo un atajo para no tipear, no un camino nuevo de guardado.
+
+**Verificación**: `astro build` limpio. Se trazó a mano con los datos de ejemplo reales que mandó Franco (11 filas) para confirmar que la cantidad de filas, el orden de columnas y el disparo de eventos quedan bien encadenados — no se pudo probar en un navegador real dentro de esta sesión. **Pendiente**: que Franco pruebe con su archivo real y confirme que los datos quedan en los lados/ángulos correctos y que "En letras"/superficie se completan solos como siempre.
+
+---
+
 ## 📋 Cambios de la sesión — 4 Noviembre 2026 (v0.31) — Fix check verde de Inmueble, texto de ubicación manual más corto, y rol de comitente a texto libre
 
 Franco probó lo del 3/11 y anduvo bien. Tres ajustes más (vía Juan, 4/11). **Requiere correr la migración SQL de abajo antes de probar.**

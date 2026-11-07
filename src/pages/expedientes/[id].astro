@@ -1411,6 +1411,22 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
                     </div>
                   </div>
 
+                  <!-- Subir archivo de medición (pedido de Franco, 7/11): completa Cantidad de
+                       lados/ángulos y todas las filas de abajo en un solo paso, a partir de un
+                       CSV que arma con su propia planilla de cálculo externa. No hay ningún
+                       procesamiento nuevo del lado del servidor — el JS solo completa estos
+                       mismos campos y dispara los mismos eventos "input" que ya disparaba
+                       escribir a mano, así que "En letras", la superficie y el cierre lineal
+                       siguen funcionando exactamente igual que siempre. -->
+                  <div class="field" style="margin-bottom:1rem">
+                    <label>O subí un archivo de medición (.csv)</label>
+                    <input type="file" accept=".csv,text/csv" class="input" id={`csv_medicion_${idx}`} />
+                    <p style="font-size:0.76rem;color:var(--color-text-secondary);margin-top:0.35rem">
+                      Una fila por lado (sin encabezado): longitud del lado, designación del lado, ángulo (formato GG.MMSS, igual que en esta página), designación del ángulo — en ese orden, separado por comas. La cantidad de lados y ángulos se completa sola según la cantidad de filas.
+                    </p>
+                    <p id={`csv_medicion_error_${idx}`} class="alert alert-error" style="display:none;margin-top:0.5rem;font-size:0.8rem"></p>
+                  </div>
+
                   <!-- Sin designación de lados y ángulos (pedido de Franco, 27/10): en Planilla
                        de Cálculos y Memoria de Mensura, no imprimir NINGUNA designación para
                        este polígono (ni la automática "1-2"/"en vértice 1" ni una manual que se
@@ -2422,6 +2438,60 @@ const poligonosVarsForScript = poligonosParaUI.map((pol: any) => ({
     if (cantAngulosInput) {
       cantAngulosInput.addEventListener('input', () => generarFilasAngulos(parseInt(cantAngulosInput.value) || 0))
       if (cantAngulosInicial > 0) generarFilasAngulos(cantAngulosInicial)
+    }
+
+    // ── Subir archivo de medición (pedido de Franco, 7/11) ───────────────
+    // Completa Cantidad de lados/ángulos + cada fila a partir de un CSV sin encabezado: lado,
+    // designación de lado, ángulo (GG.MMSS), designación de ángulo — una fila por lado/ángulo
+    // (siempre coinciden en cantidad). No hay parseo nuevo del lado del servidor: esto solo
+    // completa los mismos inputs que ya existen y dispara los mismos eventos "input" que
+    // generarían escribiéndolos a mano, así que "En letras"/superficie/cierre lineal siguen
+    // andando exactamente igual que siempre.
+    const inputCsvMedicion = document.getElementById(`csv_medicion_${idx}`)
+    const errorCsvMedicion = document.getElementById(`csv_medicion_error_${idx}`)
+    function mostrarErrorCsv(msg) {
+      if (!errorCsvMedicion) return
+      errorCsvMedicion.textContent = msg
+      errorCsvMedicion.style.display = 'block'
+    }
+    function dispararInput(el) { if (el) el.dispatchEvent(new Event('input', { bubbles: true })) }
+    function aplicarCsvMedicion(texto) {
+      if (errorCsvMedicion) errorCsvMedicion.style.display = 'none'
+      let filas = texto.split(/\r\n|\r|\n/).map(l => l.trim()).filter(Boolean).map(l => l.split(',').map(p => p.trim()))
+      // Si la primera fila no arranca con un número, se asume que es un encabezado (ej. "lado,
+      // designación,ángulo,designación") y se descarta — el resto del archivo siempre son datos.
+      if (filas.length && filas[0][0] && isNaN(parseFloat(filas[0][0]))) filas = filas.slice(1)
+      if (!filas.length) { mostrarErrorCsv('El archivo está vacío.'); return }
+
+      const n = filas.length
+      if (cantInput) { cantInput.value = String(n); dispararInput(cantInput) }
+      if (cantAngulosInput) { cantAngulosInput.value = String(n); dispararInput(cantAngulosInput) }
+
+      filas.forEach((fila, i) => {
+        const num = i + 1
+        const [valorLado, designacionLado, valorAngulo, designacionAngulo] = fila
+        const inputValorLado   = ladosRows   && ladosRows.querySelector(`[name="pol_${idx}_lado_${num}_valor_m"]`)
+        const inputDesigLado   = ladosRows   && ladosRows.querySelector(`[name="pol_${idx}_lado_${num}_etiqueta"]`)
+        const inputValorAngulo = angulosRows && angulosRows.querySelector(`[name="pol_${idx}_angulo_${num}_valor"]`)
+        const inputDesigAngulo = angulosRows && angulosRows.querySelector(`[name="pol_${idx}_angulo_${num}_etiqueta"]`)
+        if (inputValorLado)   { inputValorLado.value = valorLado ?? '';     dispararInput(inputValorLado) }
+        if (inputDesigLado)   inputDesigLado.value = designacionLado ?? ''
+        if (inputValorAngulo) { inputValorAngulo.value = valorAngulo ?? ''; dispararInput(inputValorAngulo) }
+        if (inputDesigAngulo) inputDesigAngulo.value = designacionAngulo ?? ''
+      })
+    }
+    if (inputCsvMedicion) {
+      inputCsvMedicion.addEventListener('change', function () {
+        const archivo = this.files && this.files[0]
+        if (!archivo) return
+        const lector = new FileReader()
+        lector.onload = e => {
+          try { aplicarCsvMedicion(String(e.target.result)) }
+          catch (err) { mostrarErrorCsv('No se pudo leer el archivo: formato inválido.') }
+        }
+        lector.onerror = () => mostrarErrorCsv('No se pudo leer el archivo.')
+        lector.readAsText(archivo)
+      })
     }
 
     camposSumatoria.push({ idx, cantAngulosInput, angulosRows })
